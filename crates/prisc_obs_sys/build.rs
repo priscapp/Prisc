@@ -35,7 +35,7 @@ fn main() {
 /// env var if the submodule is bumped or a custom stamp is desired.
 fn obs_version_override() -> String {
     println!("cargo:rerun-if-env-changed=OBS_VERSION_OVERRIDE");
-    env::var("OBS_VERSION_OVERRIDE").unwrap_or_else(|_| "32.2.2".to_string())
+    env::var("OBS_VERSION_OVERRIDE").unwrap_or_else(|_| "33.0.1".to_string())
 }
 
 /// Rust's target arch (`CARGO_CFG_TARGET_ARCH`) drives the native OBS build's
