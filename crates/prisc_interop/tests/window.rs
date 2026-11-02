@@ -34,7 +34,6 @@ fn zero_handles_are_invalid_arg_and_say_so() {
 
 #[test]
 fn the_one_os_exports_answer_unsupported_elsewhere() {
-    let mut result = 0isize;
     let mut watch: *mut PriscForegroundWatch = std::ptr::dangling_mut();
     let traffic = unsafe { prisc_window_set_traffic_light_position_macos(1, 14.0, 14.0) };
     if cfg!(windows) {
@@ -43,14 +42,10 @@ fn the_one_os_exports_answer_unsupported_elsewhere() {
         return;
     }
     assert_eq!(
-        unsafe { prisc_window_default_proc_windows(1, 0, 0, 0, &mut result) },
-        S::Unsupported as i32
-    );
-    assert!(last_message().contains("Windows only"), "{}", last_message());
-    assert_eq!(
         unsafe { prisc_window_foreground_watch_create_windows(Some(ignore), std::ptr::null_mut(), &mut watch) },
         S::Unsupported as i32
     );
+    assert!(last_message().contains("Windows only"), "{}", last_message());
     assert!(watch.is_null(), "a failed create must leave a null watch");
     assert_eq!(
         unsafe { prisc_window_foreground_watch_destroy_windows(std::ptr::dangling_mut()) },
@@ -100,8 +95,8 @@ mod windows_chrome {
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, DispatchMessageW, GetLayeredWindowAttributes, GetWindowDisplayAffinity, GetWindowLongPtrW,
         GetWindowRect, PeekMessageW, CHILDID_SELF, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE, LAYERED_WINDOW_ATTRIBUTES_FLAGS, MSG,
-        OBJID_WINDOW, PM_REMOVE, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WINDOW_EX_STYLE, WM_NULL, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-        WS_EX_TRANSPARENT, WS_POPUP,
+        OBJID_WINDOW, PM_REMOVE, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WINDOW_EX_STYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+        WS_POPUP,
     };
 
     /// A real top-level popup of the predefined STATIC class (no class to register), never shown.
@@ -250,12 +245,6 @@ mod windows_chrome {
         let mut flag = 7u8;
         assert_eq!(unsafe { prisc_window_is_foreground(window.handle(), &mut flag) }, 0);
         assert_eq!(flag, 0, "a hidden window is never the foreground window");
-        let mut result = 7isize;
-        assert_eq!(
-            unsafe { prisc_window_default_proc_windows(window.handle(), WM_NULL, 0, 0, &mut result) },
-            0
-        );
-        assert_eq!(result, 0, "DefWindowProc answers 0 for WM_NULL");
     }
 
     #[test]

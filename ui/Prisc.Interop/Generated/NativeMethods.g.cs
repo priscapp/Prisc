@@ -1260,18 +1260,6 @@ namespace Prisc.Interop
         internal static extern int prisc_window_set_bounds(nint handle, PriscRect* rect);
 
         /// <summary>
-        ///  Windows: `DefWindowProcW` for a message a window procedure hook hands on (the Alt+Space system
-        ///  menu that Avalonia's own procedure would swallow); its `LRESULT` goes to `out_result`.
-        ///
-        ///  Status: `PRISC_OK`; `PRISC_E_INVALID_ARG` for a zero `hwnd` or a null `out_result`;
-        ///  `PRISC_E_UNSUPPORTED` off Windows.
-        ///
-        ///  Thread: the thread that owns the window (inside its window procedure).
-        /// </summary>
-        [DllImport(__DllName, EntryPoint = "prisc_window_default_proc_windows", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
-        internal static extern int prisc_window_default_proc_windows(nint hwnd, uint msg, nuint wparam, nint lparam, nint* out_result);
-
-        /// <summary>
         ///  Windows: calls `callback(user)` whenever the system's foreground window changes, to any window
         ///  of any process, until destroyed (`SetWinEventHook(EVENT_SYSTEM_FOREGROUND)`, out of context, so
         ///  the events arrive through the creating thread's message loop and the callback runs there,

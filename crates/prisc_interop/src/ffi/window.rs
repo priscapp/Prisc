@@ -266,37 +266,6 @@ pub unsafe extern "C" fn prisc_window_set_bounds(handle: isize, rect: *const Pri
     })
 }
 
-/// Windows: `DefWindowProcW` for a message a window procedure hook hands on (the Alt+Space system
-/// menu that Avalonia's own procedure would swallow); its `LRESULT` goes to `out_result`.
-///
-/// Status: `PRISC_OK`; `PRISC_E_INVALID_ARG` for a zero `hwnd` or a null `out_result`;
-/// `PRISC_E_UNSUPPORTED` off Windows.
-///
-/// Thread: the thread that owns the window (inside its window procedure).
-#[no_mangle]
-pub unsafe extern "C" fn prisc_window_default_proc_windows(
-    hwnd: isize,
-    msg: u32,
-    wparam: usize,
-    lparam: isize,
-    out_result: *mut isize,
-) -> i32 {
-    panic::guard("prisc_window_default_proc_windows", || {
-        #[cfg(windows)]
-        {
-            window_handle(hwnd)?;
-            let out_result = util::out(out_result, "out_result")?;
-            *out_result = imp::default_proc(hwnd, msg, wparam, lparam);
-            Ok(PRISC_OK)
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = (hwnd, msg, wparam, lparam, out_result);
-            Err(windows_only("prisc_window_default_proc_windows"))
-        }
-    })
-}
-
 /// Windows: calls `callback(user)` whenever the system's foreground window changes, to any window
 /// of any process, until destroyed (`SetWinEventHook(EVENT_SYSTEM_FOREGROUND)`, out of context, so
 /// the events arrive through the creating thread's message loop and the callback runs there,

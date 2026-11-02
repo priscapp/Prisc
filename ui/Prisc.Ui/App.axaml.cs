@@ -91,9 +91,6 @@ namespace Prisc
             // for every dialog in the app — see ModalDim for why no call site has to opt in.
             ModalDim.Install();
 
-            // Alt+Space opens the window's system menu, which Avalonia otherwise swallows (#108).
-            Window.WindowOpenedEvent.AddClassHandler<Window>((window, _) => WindowNativeExtensions.AddSystemMenuKeyHook(window));
-
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
                 // tray-resident lifetime: the tray Exit menu item is the only shutdown path (§6).

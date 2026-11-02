@@ -238,10 +238,5 @@ mod mac {
             height: 10,
         };
         assert_eq!(unsafe { prisc_window_set_bounds(w.handle(), &rect) }, S::Unsupported as i32);
-        let mut result = 0isize;
-        assert_eq!(
-            unsafe { prisc_window_default_proc_windows(w.handle(), 0, 0, 0, &mut result) },
-            S::Unsupported as i32
-        );
     }
 }
