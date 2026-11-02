@@ -1180,14 +1180,18 @@ namespace Prisc.UI
             }
         }
 
-        /// <summary>True when the output mp4 exists with any content — a crash or forced stop
-        /// after minutes of recording should keep the partial file rather than delete it.</summary>
+        /// <summary>True when the output file holds some recording — a crash or forced stop
+        /// after minutes of recording should keep the partial file rather than delete it. An mp4
+        /// must hold media (<see cref="Mp4Probe.HasMedia"/>): a recorder killed before its first
+        /// fragment leaves just the ftyp header, which no player can open.</summary>
         private bool HasPartialVideo()
         {
             try
             {
-                var mp4 = new FileInfo(_outputFile);
-                return mp4.Exists && mp4.Length > 0;
+                var file = new FileInfo(_outputFile);
+                if (!file.Exists || file.Length == 0)
+                    return false;
+                return _appliedContainer != VideoContainer.Mp4 || Mp4Probe.HasMedia(_outputFile);
             }
             catch
             {
