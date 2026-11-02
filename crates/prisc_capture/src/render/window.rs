@@ -207,11 +207,14 @@ impl WindowHandle {
     }
 
     pub fn focus(&self) {
+        #[cfg(not(windows))]
         self.window.focus_window();
+        // Windows: not winit's focus_window, whose foreground-lock hack taps a bare Alt into the
+        // app that is still in front, leaving it in menu mode (its next key is eaten, and a
+        // scrolling capture's wheel bursts with it). prisc_hotkeys' raise masks that Alt.
         #[cfg(windows)]
         {
-            let fg = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
-            if win32_hwnd(&self.window) == Some(fg) {
+            if win32_hwnd(&self.window).is_some_and(prisc_hotkeys::take_foreground) {
                 info!("overlay window took foreground focus");
             } else {
                 warn!("overlay window was denied foreground focus; keyboard input may go to the previous app until the overlay is clicked");
@@ -410,21 +413,17 @@ fn apply_capture_window_tweaks(window: &Window) {
     };
 
     unsafe {
-        use objc2_app_kit::{NSColor, NSView, NSWindowAnimationBehavior, NSWindowCollectionBehavior};
+        use objc2_app_kit::{NSColor, NSView, NSWindowAnimationBehavior};
+        use prisc_rust_core::desktop::overlay::{self, OverlayFlags};
 
         let ns_view: &NSView = &*(h.ns_view.as_ptr() as *const NSView);
         let Some(ns_window) = ns_view.window() else {
             return;
         };
 
-        ns_window.setLevel(25);
+        // the overlay level and collection behaviour every Prisc overlay window shares
+        overlay::apply(&ns_window, OverlayFlags::OVERLAY);
         ns_window.setAnimationBehavior(NSWindowAnimationBehavior::None);
-        ns_window.setCollectionBehavior(
-            NSWindowCollectionBehavior::Stationary
-                | NSWindowCollectionBehavior::CanJoinAllSpaces
-                | NSWindowCollectionBehavior::FullScreenAuxiliary
-                | NSWindowCollectionBehavior::IgnoresCycle,
-        );
 
         let black = NSColor::blackColor();
         ns_window.setBackgroundColor(Some(&black));

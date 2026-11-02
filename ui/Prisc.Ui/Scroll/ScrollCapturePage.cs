@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.Threading.Tasks;
+using Avalonia.Controls;
 using Avalonia.Threading;
 using Prisc.Config;
 using Prisc.PlatformUtil;
@@ -71,12 +72,12 @@ namespace Prisc.UI
                     return;
                 }
 
-                var binary = Prisc.Ipc.HelperLocator.Find("prisc_scroll_driver");
+                var binary = Prisc.Ipc.HelperLocator.Find(HelperNames.ScrollDriver);
                 if (binary == null)
                 {
                     await NiceDialog.ShowNoticeAsync(null, NiceDialogIcon.Error,
-                        $"The scrolling capture binary ({Prisc.Ipc.Platform.ExeName("prisc_scroll_driver")}) could not be found. " +
-                        $"Run 'cargo build' in the Prisc repository, or set the {Prisc.Ipc.HelperLocator.EnvVarName} " +
+                        $"The scrolling capture binary ({Prisc.Interop.NativeProbe.ExeName(HelperNames.ScrollDriver)}) could not be found. " +
+                        $"Run 'cargo build' in the Prisc repository, or set the {Prisc.Interop.EnvVars.HelpersDir} " +
                         "environment variable to the folder holding it.",
                         "Scrolling capture unavailable");
                     CaptureSessionDispatcher.DeleteSessionDir(_sessionDir);
@@ -143,7 +144,7 @@ namespace Prisc.UI
                     {
                         result.Session.Name = "Scrolling Capture";
                         EditorWindow.ShowSession(result.Session);
-                        ShowOutcomeToast(outcome.Result.Value);
+                        ShowOutcomeToast(outcome.Result.Value, EditorWindow.FindWindowForSession(result.Session));
                         Close();
                         return;
                     }
@@ -175,7 +176,7 @@ namespace Prisc.UI
         /// </summary>
         private static async Task<bool> EnsureAccessibilityPermissionAsync()
         {
-            if (MacPermissions.HasAccessibility || MacPermissions.Request(MacPermission.Accessibility))
+            if (MacPermissions.Request(MacPermission.Accessibility))
                 return true;
 
             var openSettings = await NiceDialog.ShowDialogAsync(null, NiceDialogIcon.Warning,
@@ -369,7 +370,7 @@ namespace Prisc.UI
         /// <summary>Explains an outcome that is not simply "here is your image". Only the two
         /// surprising ones get a toast: a capture that stopped because it hit a limit, and one
         /// that produced a single screen because nothing scrolled.</summary>
-        private static void ShowOutcomeToast(ScrollResult result)
+        private static void ShowOutcomeToast(ScrollResult result, Window editor)
         {
             var message = result switch
             {
@@ -384,9 +385,9 @@ namespace Prisc.UI
             if (message == null)
                 return;
 
-            // null-owner tolerant: with no window open there is simply nowhere to host a toast,
-            // and the editor this capture just opened is normally the host.
-            var host = Toast.GetActiveOrMainWindow();
+            // hosted on the editor this capture just opened; null-owner tolerant, since with no
+            // window open there is simply nowhere to host a toast.
+            var host = editor ?? Toast.GetActiveOrMainWindow();
             if (host != null)
                 Toast.Show(host, message);
         }

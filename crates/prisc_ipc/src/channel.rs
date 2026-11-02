@@ -23,7 +23,7 @@ pub fn open<E: Event>(helper: &'static str) -> Channel<E> {
         Err(e) => {
             // No usable stdout at all (a GUI-subsystem binary started without one). There is
             // nobody to talk to, which is not a reason to quit: emits are simply dropped.
-            eprintln!("prisc_ipc: stdout is unusable ({e}); protocol lines are dropped");
+            crate::log!("prisc_ipc: stdout is unusable ({e}); protocol lines are dropped");
             let channel = Channel::new(Box::new(std::io::sink()), &lifetime::GLOBAL);
             channel
                 .inner
@@ -102,7 +102,7 @@ impl<E: Event> Channel<E> {
     /// error ends the process: exit 2 for [`ErrorCode::Usage`], 1 for every other code.
     pub fn error(&self, code: ErrorCode, message: impl Display, fatal: bool) {
         let message = crate::single_line(&message.to_string());
-        eprintln!("{} {}: {message}", if fatal { "Fatal" } else { "Error" }, code.as_str());
+        crate::log!("{} {}: {message}", if fatal { "Fatal" } else { "Error" }, code.as_str());
         self.emit(&E::error(code, message, fatal));
         if fatal {
             let status = if code == ErrorCode::Usage { exit::USAGE } else { exit::FAILED };
@@ -129,7 +129,7 @@ impl<E: Event> Channel<E> {
         let mut line = match serde_json::to_vec(message) {
             Ok(line) => line,
             Err(e) => {
-                eprintln!("prisc_ipc: could not serialize a protocol line: {e}");
+                crate::log!("prisc_ipc: could not serialize a protocol line: {e}");
                 return false;
             }
         };
@@ -165,7 +165,7 @@ impl<E: Event> Channel<E> {
         // The lock is released here: the quit callback may run on this thread and must never
         // find it held.
         if let Some(e) = failed {
-            eprintln!("prisc_ipc: stdout is gone ({e})");
+            crate::log!("prisc_ipc: stdout is gone ({e})");
             self.inner
                 .lifetime
                 .trigger(QuitReason::StdoutClosed);

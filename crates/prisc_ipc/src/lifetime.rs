@@ -98,9 +98,11 @@ impl Lifetime {
         }
     }
 
+    /// Runs once, after `trigger` has latched the reason: nothing here may panic, or the quit is
+    /// lost for good. The timer comes first, so not even a stalled log write can keep an orphan.
     fn fire(&'static self, on_quit: &OnQuit, reason: QuitReason, grace: Duration) {
-        eprintln!("prisc_ipc: quitting ({reason:?})");
         self.arm_timer(grace);
+        crate::log!("prisc_ipc: quitting ({reason:?})");
         on_quit(reason);
     }
 
@@ -109,11 +111,11 @@ impl Lifetime {
             .name("ipc-quit-timer".into())
             .spawn(move || {
                 std::thread::sleep(grace);
-                eprintln!("prisc_ipc: still alive {grace:?} after quit; exiting");
+                crate::log!("prisc_ipc: still alive {grace:?} after quit; exiting");
                 self.exit(exit::QUIT_TIMEOUT)
             });
         if let Err(e) = spawned {
-            eprintln!("prisc_ipc: could not start the quit timer: {e}");
+            crate::log!("prisc_ipc: could not start the quit timer: {e}");
         }
     }
 
@@ -231,7 +233,7 @@ mod signals {
             }
         });
         if let Err(e) = installed {
-            eprintln!("prisc_ipc: could not install the signal handler: {e}");
+            crate::log!("prisc_ipc: could not install the signal handler: {e}");
         }
     }
 }
@@ -260,7 +262,7 @@ mod signals {
 
     pub(super) fn install() {
         if unsafe { SetConsoleCtrlHandler(Some(handler), true) }.is_err() {
-            eprintln!("prisc_ipc: could not install the console control handler");
+            crate::log!("prisc_ipc: could not install the console control handler");
         }
     }
 }

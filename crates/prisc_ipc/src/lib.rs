@@ -4,7 +4,7 @@
 //!
 //! The message catalogs in [`catalog`] are the single source of truth: the C# records, codecs
 //! and golden samples in `ui/Prisc.Ipc/Generated/HelperMessages.g.cs` are generated from them
-//! (`src/csharp.rs`).
+//! by `crates/prisc_codegen` (`cargo codegen`), as is the environment variable table in [`env`].
 //!
 //! A helper's `main` starts like this (§3.1):
 //!
@@ -16,24 +16,43 @@
 
 use std::time::Duration;
 
+/// `eprintln!` that ignores a failed write. Everything prisc_ipc logs, and every helper
+/// diagnostic on a quit, stop or finalize path, goes through it: those paths run after the parent
+/// may have died, taking its read end of the stderr pipe with it, and `eprintln!` panics on the
+/// broken pipe ("failed printing to stderr"), unwinding the very thread that was about to stop
+/// the helper. The stdout guard points fd 1 at stderr too, so `println!` is no safer.
+#[macro_export]
+macro_rules! log {
+    ($($arg:tt)*) => {
+        $crate::log_line(format_args!($($arg)*))
+    };
+}
+
+/// The function behind [`log!`].
+#[doc(hidden)]
+pub fn log_line(args: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr().lock(), "{args}");
+}
+
 /// The envelope version (framing, `hello`, `error`, `quit`), sent in every `hello`. Bumped by
 /// hand and should almost never change; catalog changes are caught by `catalog_hash` instead.
 pub const PROTOCOL: u32 = 1;
 
 /// Added to a catalog's `QUIT_GRACE` for the helper's own hard-exit timer (§3.3), so a living
-/// parent's kill always fires first and the timer only matters for orphans.
+/// parent's kill always fires first and the timer only matters for orphans. The C# side reads it
+/// from the generated `IpcProtocol.SelfExitMarginMs`.
 pub const SELF_EXIT_MARGIN: Duration = Duration::from_secs(5);
 
 pub mod catalog;
 mod channel;
+pub mod env;
 pub mod exit;
-mod guard;
+pub mod framing;
+pub mod guard;
 pub mod lifetime;
 pub mod locate;
 mod stdin;
-
-#[cfg(test)]
-mod csharp;
 
 pub use channel::{open, Channel};
 pub use guard::claim_stdout;

@@ -135,23 +135,45 @@ namespace Prisc
                 String.Equals(a, UI.VideoEditor.VideoSpikeWindow.ArgName, StringComparison.OrdinalIgnoreCase)
                 || String.Equals(a, UI.VideoEditor.VideoEditorWindow.ArgName, StringComparison.OrdinalIgnoreCase)
                 || String.Equals(a, UI.TraySpike.ArgName, StringComparison.OrdinalIgnoreCase)
-                || String.Equals(a, UI.Dialogs.ColorPicker.ColorDialogSnapshot.ArgName, StringComparison.OrdinalIgnoreCase));
+                || String.Equals(a, UI.Dialogs.ColorPicker.ColorDialogSnapshot.ArgName, StringComparison.OrdinalIgnoreCase)
+                || String.Equals(a, UI.Harness.InteropProbe.ArgName, StringComparison.OrdinalIgnoreCase));
 
         private async void Startup(string[] args)
         {
             try
             {
+                // prisc_interop: found, loaded and ABI-checked now, before the first real caller (the
+                // foreground hand-off right after a helper starts runs inside the Windows
+                // foreground-lock window and must not pay for a directory walk and a dlopen).
+                Prisc.Interop.InteropLibrary.Warm();
+
                 // Each harness below builds a real window, and a real window reads settings: the
                 // editor chrome, the toolbar order, the theme. None of that is loaded this early
                 // (settings wait on the mutex, which a harness deliberately runs ahead of), so a
                 // harness launch reached those constructors with SettingsRoot.Current still null
                 // and died there. Loading is a pure parse, and only a harness launch does it this
-                // early, so production startup keeps the order it had.
-                if (IsHarnessLaunch(args))
+                // early, so production startup keeps the order it had. Parsing the gestures needs
+                // prisc_interop, so without it the probe below reports the library and every other
+                // harness gets RequireInterop's notice, not a settings error offering a reset.
+                if (IsHarnessLaunch(args) && Prisc.Interop.InteropLibrary.IsAvailable)
                 {
                     await SetupSettings();
                     ApplyTheme();
                 }
+
+                // hidden interop harness (`--interop-probe out.json`): exercises the native boundary
+                // in this real process and writes one JSON result per item (InteropProbe). It reports
+                // a missing library itself, so it runs before the requirement below.
+                if (UI.Harness.InteropProbe.TryHandleArgs(args))
+                    return;
+
+                // prisc_interop is a hard requirement: gesture parsing, colour maths and the native
+                // surfaces all live there, so there is no degraded mode to fall back to.
+                if (!await RequireInterop())
+                    return;
+
+                // the library's callback panics and teardown failures reach the app only here
+                InteropLogReporter.Install();
 
                 // hidden spike harness (`--video-spike file.mp4`): a bare playback window used to
                 // measure the video engine. Must run BEFORE single-instance forwarding — a spike
@@ -337,6 +359,38 @@ namespace Prisc
                 await NiceDialog.ShowNoticeAsync(null, NiceDialogIcon.Error, ex.ToString(),
                     "Error starting Prisc. The program will now exit.");
                 ExitApp();
+            }
+        }
+
+        /// <summary>Stops the app with one dialog and one Sentry event (<c>interop.load</c>) when
+        /// prisc_interop is not available; true when it is.</summary>
+        private async Task<bool> RequireInterop()
+        {
+            try
+            {
+                Prisc.Interop.InteropLibrary.Require();
+                return true;
+            }
+            catch (Prisc.Interop.InteropUnavailableException ex)
+            {
+                Debug.WriteLine("prisc_interop is not available: " + ex.Reason);
+                SentryConfig.CaptureHandled(ex, "interop.load");
+                try
+                {
+                    await NiceDialog.ShowNoticeAsync(null, NiceDialogIcon.Error, ex.Reason,
+                        "Prisc cannot start: its native library (prisc_interop) is missing or does not match this build. Reinstalling Prisc fixes this.");
+                }
+                catch (Exception dialogEx)
+                {
+                    // the exit below must happen whatever the dialog does
+                    Debug.WriteLine("The missing-library dialog failed: " + dialogEx);
+                }
+                finally
+                {
+                    // nothing has started yet (no mutex, settings or helpers), so there is nothing to wind down
+                    Environment.Exit(1);
+                }
+                return false;
             }
         }
 

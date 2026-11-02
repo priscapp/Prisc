@@ -12,7 +12,9 @@ using Avalonia.Styling;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media;
 using Prisc.Drawing.Graphics;
+using Prisc.Drawing.History;
 using Prisc.Drawing.Rendering;
+using Prisc.Interop.Testing;
 using Xunit;
 
 namespace Prisc.Drawing.Tests
@@ -186,21 +188,48 @@ namespace Prisc.Drawing.Tests
             window.Close();
         }
 
-        [Theory]
-        [InlineData(0xFF, 0xF1, 0xB8)] // butter
-        [InlineData(0xFB, 0xD5, 0xE2)] // rose
-        [InlineData(0xCD, 0xEF, 0xDF)] // mint
-        [InlineData(0xD3, 0xE6, 0xFD)] // sky
-        [InlineData(0x30, 0x20, 0x60)] // a dark paper gets pale ink
-        public void Ink_IsTheShadeOfThePaper_AtStrongContrast(byte r, byte g, byte b)
+        [AvaloniaFact]
+        public void Ink_IsOneNativeCall_AndFollowsThePaper()
         {
-            var paper = Color.FromRgb(r, g, b);
-            var ink = GraphicStickyNote.GetInk(paper);
-            Assert.True(RenderResources.GetContrastRatio(ink, paper) >= GraphicStickyNote.InkContrast, $"{ink} on {paper}");
-            Assert.True(Math.Abs(HslHue(ink) - HslHue(paper)) < 12, $"hue {HslHue(ink)} vs {HslHue(paper)}");
+            // the ink rule and its vectors live in prisc_rust_core::color::ink; this checks the
+            // paper reaches it with its alpha and the note's cached ink follows a paper change
+            InteropTestGate.Require();
+            Assert.Equal(Color.FromRgb(0x59, 0x4A, 0x0D), GraphicStickyNote.GetInk(Color.FromUInt32(0xFFFFF1B8)));
+            Assert.Equal(Color.FromRgb(0x62, 0x52, 0x0E), GraphicStickyNote.GetInk(Color.FromUInt32(0x80FFF1B8)));
+
+            var note = Make("x");
+            note.ObjectColor = Color.FromUInt32(0xFFFFF1B8);
+            Assert.Equal(Color.FromRgb(0x59, 0x4A, 0x0D), note.TextColor);
+            note.ObjectColor = Color.FromUInt32(0xFF302060);
+            Assert.Equal(Color.FromRgb(0xD2, 0xC9, 0xED), note.TextColor);
         }
 
-        private static double HslHue(Color c) => new HslColor(c).H;
+        [AvaloniaFact]
+        public void InkCache_IsNotSaved_AndASavedOneIsIgnored()
+        {
+            // the ink is a cache of the rule, not part of the note: it stays out of the document,
+            // the history and the clipboard, and one written by an earlier build is not trusted
+            InteropTestGate.Require();
+            var paper = Color.FromUInt32(0xFFFFF1B8);
+            var note = Make("x");
+            note.ObjectColor = paper;
+
+            // a repaint fills the cache; that is no change to the note
+            var map = GraphicFieldMap.For(typeof(GraphicStickyNote));
+            var before = map.Capture(note);
+            _ = note.TextColor;
+            Assert.Equal(before, map.Capture(note));
+            Assert.DoesNotContain(map.Slots, s => s.JsonName == "ink");
+
+            var json = JsonNode.Parse(GraphicsSerializer.SerializeToUtf8Bytes(new GraphicBase[] { note }))!.AsArray();
+            var obj = json[0]!.AsObject();
+            Assert.False(obj.ContainsKey("ink"));
+
+            obj["ink"] = new JsonObject { ["Paper"] = "#FFFFF1B8", ["Ink"] = "#FFFF0000" };
+            var r = Assert.IsType<GraphicStickyNote>(Assert.Single(GraphicsSerializer.DeserializeFromUtf8Bytes(Encoding.UTF8.GetBytes(json.ToJsonString()))));
+            Assert.Equal(paper, r.ObjectColor);
+            Assert.Equal(GraphicStickyNote.GetInk(paper), r.TextColor);
+        }
 
         [AvaloniaFact]
         public void NewNotes_AreTiltedVerySlightly_EachDifferently()
