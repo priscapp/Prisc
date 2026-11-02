@@ -54,5 +54,14 @@ namespace Prisc.Drawing.Tests
             BrushCursor.Rasterize(BrushCursor.Quantize(diameter), out int size);
             Assert.True(size <= BrushCursor.MaxSize);
         }
+
+        [Theory]
+        [InlineData(2.0, 2.0, false, 2.0)] // Windows: device pixels
+        [InlineData(2.0, 2.0, true, 1.0)]  // macOS Retina: points, the OS doubles them
+        [InlineData(3.0, 2.0, true, 1.5)]  // macOS, zoomed 150% in the editor
+        public void PixelsPerUnit_IsLogicalOnMacOS(double contentScale, double renderScaling, bool isMacOS, double expected)
+        {
+            Assert.Equal(expected, BrushCursor.PixelsPerUnit(contentScale, renderScaling, isMacOS));
+        }
     }
 }

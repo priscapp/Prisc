@@ -9,8 +9,8 @@ using Avalonia.Platform;
 namespace Prisc.Drawing.Tools
 {
     /// <summary>
-    /// The brush's cursor: a ring the width of an ordinary stroke (see ToolBrush.CursorPressure; in device
-    /// pixels at the current zoom), drawn as a 1px white ring inside a 1px black ring so it reads on
+    /// The brush's cursor: a ring the width of an ordinary stroke (see ToolBrush.CursorPressure; in cursor
+    /// pixels at the current zoom, see <see cref="PixelsPerUnit(DrawingCanvas)"/>), drawn as a 1px white ring inside a 1px black ring so it reads on
     /// any artwork. Rasterised by hand with analytic coverage rather than through a DrawingContext,
     /// so the result is exact and needs no render pass. Ring cursors are cached per diameter and never
     /// disposed: several canvases (one per monitor, each at its own scaling) hold rings of different
@@ -33,6 +33,18 @@ namespace Prisc.Drawing.Tools
 
         private static PixelSize _cachedRectSize;
         private static Cursor _cachedRect;
+
+        /// <summary>
+        /// Cursor-bitmap pixels per canvas unit. Windows HCURSORs are sized in device pixels, so that
+        /// is ContentScale. Avalonia's macOS backend re-encodes the bitmap to PNG without DPI metadata
+        /// and NSImage assumes 72 DPI, so an N px bitmap displays at N points (see CursorResources):
+        /// there the ring is drawn in logical pixels and the OS scales it up on Retina.
+        /// </summary>
+        public static double PixelsPerUnit(DrawingCanvas canvas) =>
+            PixelsPerUnit(canvas.ContentScale, canvas.DpiZoom, OperatingSystem.IsMacOS());
+
+        internal static double PixelsPerUnit(double contentScale, double renderScaling, bool isMacOS) =>
+            isMacOS ? contentScale / renderScaling : contentScale;
 
         /// <summary>The cursor for a brush <paramref name="diameterPx"/> device pixels across.</summary>
         public static Cursor Get(double diameterPx)

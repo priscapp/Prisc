@@ -37,11 +37,11 @@ namespace Prisc.Drawing.Tools
         internal const double CursorPressure = 0.75;
 
         // a ring the width of an ordinary stroke; DrawingCanvas re-applies it when the stroke
-        // width or the zoom changes (one canvas unit is ContentScale device pixels)
+        // width or the zoom changes (one canvas unit is BrushCursor.PixelsPerUnit cursor pixels)
         public override void SetCursor(DrawingCanvas canvas)
         {
             double size = Math.Max(1, GraphicBrush.SizePerLineWidth * canvas.LineWidth);
-            canvas.Cursor = BrushCursor.Get(2 * Ink.FreehandStroke.Radius(size, CursorPressure) * canvas.ContentScale);
+            canvas.Cursor = BrushCursor.Get(2 * Ink.FreehandStroke.Radius(size, CursorPressure) * BrushCursor.PixelsPerUnit(canvas));
         }
 
         /// <summary>The stroke a press starts, at <paramref name="origin"/>.</summary>
