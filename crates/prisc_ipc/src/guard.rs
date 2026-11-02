@@ -81,7 +81,7 @@ fn redirect_stdout_to_stderr() -> bool {
     // SAFETY: a plain descriptor-table edit. dup2 closes the old fd 1, the pipe, but the
     // duplicate above already holds it open, so nothing the parent reads from is released.
     if unsafe { libc::dup2(2, 1) } < 0 {
-        eprintln!(
+        crate::log!(
             "prisc_ipc: could not point stdout at stderr ({}); a native library printing to stdout would corrupt the \
              protocol",
             io::Error::last_os_error()
@@ -123,13 +123,13 @@ fn redirect_stdout_to_stderr() -> bool {
     let uninherited =
         unsafe { GetStdHandle(STD_OUTPUT_HANDLE).and_then(|stdout| SetHandleInformation(stdout, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0))) };
     if let Err(e) = uninherited {
-        eprintln!("prisc_ipc: could not make the original stdout handle non-inheritable ({e})");
+        crate::log!("prisc_ipc: could not make the original stdout handle non-inheritable ({e})");
     }
 
     // SAFETY: handle-table edits on this process's own standard handles.
     let redirected = unsafe { GetStdHandle(STD_ERROR_HANDLE).and_then(|stderr| SetStdHandle(STD_OUTPUT_HANDLE, stderr)) };
     if let Err(e) = &redirected {
-        eprintln!("prisc_ipc: could not point STD_OUTPUT_HANDLE at stderr ({e})");
+        crate::log!("prisc_ipc: could not point STD_OUTPUT_HANDLE at stderr ({e})");
     }
     let std_handle_moved = redirected.is_ok();
 
@@ -147,7 +147,7 @@ fn redirect_stdout_to_stderr() -> bool {
         let dup2: unsafe extern "C" fn(i32, i32) -> i32 = std::mem::transmute(dup2);
         let moved = dup2(2, 1) == 0;
         if !moved {
-            eprintln!("prisc_ipc: the UCRT's _dup2(2, 1) failed; native stdout output is not redirected");
+            crate::log!("prisc_ipc: the UCRT's _dup2(2, 1) failed; native stdout output is not redirected");
         }
         moved
     };

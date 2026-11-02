@@ -276,7 +276,7 @@ fn forward_keys(events: Events) {
         match event {
             Event::Key(key) => on_key(key),
             Event::Stopped(reason) => {
-                eprintln!("Warning: the keyboard hook stopped ({reason}); keys are no longer recorded");
+                prisc_ipc::log!("Warning: the keyboard hook stopped ({reason}); keys are no longer recorded");
             }
             // No gesture is registered and no recording armed: nothing else arrives.
             _ => {}

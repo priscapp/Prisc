@@ -1089,7 +1089,7 @@ impl Recorder {
                             // stopped before it started: `done` says cancelled.
                             Ok(other) => answer_while_stopping(other),
                             Err(mpsc::RecvTimeoutError::Timeout) => {
-                                eprintln!("Warning: still waiting for the recording to stop...");
+                                prisc_ipc::log!("Warning: still waiting for the recording to stop...");
                             }
                             Err(mpsc::RecvTimeoutError::Disconnected) => {
                                 self.finish(
@@ -1590,7 +1590,7 @@ impl Recorder {
             wc.on_output_started(self.settings.fps);
         }
         if let Err(e) = self.output.start() {
-            eprintln!("Failed to start recording: {e}");
+            prisc_ipc::log!("Failed to start recording: {e}");
             status_stop.store(true, Ordering::Relaxed);
             if let Some(handle) = levels_handle.take() {
                 let _ = handle.join();
@@ -1620,7 +1620,7 @@ impl Recorder {
     fn set_muted(&self, sources: &[ObsSource], kind: &str, idx: usize, muted: bool) {
         match sources.get(idx) {
             Some(source) => source.set_muted(muted),
-            None => eprintln!("Ignoring mute command: no {kind} at index {idx}"),
+            None => prisc_ipc::log!("Ignoring mute command: no {kind} at index {idx}"),
         }
     }
 
@@ -1695,7 +1695,7 @@ impl Recorder {
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                eprintln!(
+                prisc_ipc::log!(
                     "Warning: the output did not deactivate within {FLUSH_DEADLINE:?}; \
                      the recording file may be incomplete"
                 );
@@ -1705,7 +1705,7 @@ impl Recorder {
                 Ok(Command::OutputDeactivated) => return,
                 Ok(other) => answer_while_stopping(other),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    eprintln!("Warning: still waiting for the recording file to be finalized...");
+                    prisc_ipc::log!("Warning: still waiting for the recording file to be finalized...");
                 }
                 // Unreachable in practice (self holds a sender).
                 Err(mpsc::RecvTimeoutError::Disconnected) => return,

@@ -112,7 +112,7 @@ impl FrameClock {
         self.base_offset.store(base, Ordering::Relaxed);
         self.t0_ns.store(candidate, Ordering::Release);
         if fallback {
-            eprintln!(
+            prisc_ipc::log!(
                 "Warning: sidecar timing used a fallback origin; packet timing was unavailable or startup buffering reached its limit"
             );
         }

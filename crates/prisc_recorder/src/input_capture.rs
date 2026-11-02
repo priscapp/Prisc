@@ -306,7 +306,7 @@ impl SpriteCache {
         if sprite.w > MAX_SPRITE_DIM || sprite.h > MAX_SPRITE_DIM {
             if !self.warned_oversize {
                 self.warned_oversize = true;
-                eprintln!(
+                prisc_ipc::log!(
                     "Warning: skipping an oversized {}x{} cursor sprite (limit {MAX_SPRITE_DIM} px)",
                     sprite.w, sprite.h
                 );
@@ -323,7 +323,7 @@ impl SpriteCache {
         {
             if !self.warned_cap {
                 self.warned_cap = true;
-                eprintln!(
+                prisc_ipc::log!(
                     "Warning: the cursor sprite cache is full; new cursor shapes will not be \
                      recorded for the rest of this session"
                 );
@@ -477,7 +477,7 @@ fn handle_msg(
 ) {
     let mut write_line = |line: &str| {
         if let Err(e) = writeln!(w, "{line}") {
-            eprintln!("Warning: input-capture write failed: {e}");
+            prisc_ipc::log!("Warning: input-capture write failed: {e}");
         }
     };
     let row = match msg {
@@ -506,7 +506,7 @@ fn handle_msg(
         WriterMsg::Flush(ack) => {
             drain_pending(pending, clock, sprites, canvas_scale, true, &mut write_line);
             if let Err(e) = w.flush() {
-                eprintln!("Warning: input-capture flush failed: {e}");
+                prisc_ipc::log!("Warning: input-capture flush failed: {e}");
             }
             let _ = ack.send(());
             return;
@@ -733,7 +733,7 @@ impl InputCapture {
             return; // writer already gone; nothing more to make durable
         }
         if ack_rx.recv_timeout(FLUSH_ACK_TIMEOUT).is_err() {
-            eprintln!(
+            prisc_ipc::log!(
                 "Warning: the input-capture file did not flush within {FLUSH_ACK_TIMEOUT:?}; \
                  it may be incomplete"
             );

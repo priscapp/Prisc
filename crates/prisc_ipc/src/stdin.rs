@@ -55,7 +55,7 @@ pub(crate) fn pump<C: DeserializeOwned>(
         let inbound = match next_line(&mut reader, &mut buf) {
             Ok(Line::Eof) => break,
             Err(e) => {
-                eprintln!("prisc_ipc: stdin read failed ({e}); treating it as closed");
+                crate::log!("prisc_ipc: stdin read failed ({e}); treating it as closed");
                 break;
             }
             Ok(Line::TooLong) => Inbound::Malformed {
@@ -74,7 +74,7 @@ pub(crate) fn pump<C: DeserializeOwned>(
             reason,
         } = &inbound
         {
-            eprintln!("prisc_ipc: bad command: {reason}");
+            crate::log!("prisc_ipc: bad command: {reason}");
         }
         if sink(inbound).is_break() {
             return;

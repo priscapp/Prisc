@@ -153,7 +153,10 @@ that is defensive decoding, not a versioning mechanism.
 
 `crates/prisc_ipc`, workspace member and default-member. Dependencies: `serde`, `serde_json`,
 `ctrlc` (posix signals), `libc` (unix), `windows` (Console, Foundation). No `log`: its own
-diagnostics are `eprintln!` (the recorder and share_region do not use `log`).
+diagnostics go through `prisc_ipc::log!` (the recorder and share_region do not use `log`), an
+`eprintln!` that ignores a failed write. A dead parent closes the read end of the stderr pipe, and
+`eprintln!` panics on the broken pipe, so the quit path and every helper diagnostic that can run
+after the parent is gone (stop, finalize, background writers) use `log!`.
 
 ```rust
 pub const PROTOCOL: u32 = 1;

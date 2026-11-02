@@ -251,7 +251,7 @@ impl Tracker {
         if self.ids.len() >= MAX_WINDOW_IDS {
             if !self.warned_cap {
                 self.warned_cap = true;
-                eprintln!(
+                prisc_ipc::log!(
                     "Warning: the window-capture identity map is full ({MAX_WINDOW_IDS} \
                      windows); further new windows will not be tracked this session"
                 );
@@ -443,7 +443,7 @@ fn write_snapshot(
         let mut write_line = |line: &str| {
             wrote = true;
             if let Err(e) = writeln!(file, "{line}") {
-                eprintln!("Warning: window-capture write failed: {e}");
+                prisc_ipc::log!("Warning: window-capture write failed: {e}");
                 failed = true;
             }
         };
@@ -574,7 +574,7 @@ fn worker_loop(
         if closing {
             if let Ok(mut file) = shared.file.lock() {
                 if let Err(e) = file.flush() {
-                    eprintln!("Warning: window-capture flush failed: {e}");
+                    prisc_ipc::log!("Warning: window-capture flush failed: {e}");
                 }
             }
             if let Some(ack) = close_ack {
@@ -687,7 +687,7 @@ impl WindowCapture {
         if let Ok(mut file) = self.shared.file.lock() {
             if let Ok(line) = serde_json::to_string(&header) {
                 if let Err(e) = writeln!(file, "{line}") {
-                    eprintln!("Warning: window-capture write failed: {e}");
+                    prisc_ipc::log!("Warning: window-capture write failed: {e}");
                 }
             }
             let _ = file.flush();
@@ -714,7 +714,7 @@ impl WindowCapture {
             return;
         }
         if ack_rx.recv_timeout(FLUSH_ACK_TIMEOUT).is_err() {
-            eprintln!(
+            prisc_ipc::log!(
                 "Warning: the window-capture file did not flush within {FLUSH_ACK_TIMEOUT:?}; it may be incomplete"
             );
         }
