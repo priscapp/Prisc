@@ -21,7 +21,6 @@
 //! private heap in a process that spends most of its life warm and idle, and
 //! they are shared by every host's context rather than copied per context.
 
-use std::borrow::Cow;
 use std::sync::{Arc, LazyLock, Once, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -41,7 +40,7 @@ pub const UI_SEMIBOLD_NAME: &str = "InterSemiBold";
 pub static SEMIBOLD: LazyLock<FontFamily> = LazyLock::new(|| FontFamily::Name(Arc::from(UI_SEMIBOLD_NAME)));
 
 /// One curated system face: the key it gets in egui's font table, and its
-/// bytes. The bytes are a leaked memory map, so the `Arc<FontData>` is shared
+/// bytes. The bytes are one shared memory map, so the `Arc<FontData>` is shared
 /// by every monitor's context instead of each deep-copying the file.
 pub struct SystemFace {
     pub name: String,
@@ -145,22 +144,16 @@ fn scan() -> SystemFaces {
         let Some((shared, index)) = (unsafe { db.make_shared_face_data(id) }) else {
             continue;
         };
-        // The map outlives the process on purpose: egui's `FontData` borrows
-        // `&'static [u8]`, and there is exactly one of these per curated
-        // family per process.
-        let leaked: &'static Arc<dyn AsRef<[u8]> + Send + Sync> = Box::leak(Box::new(shared));
-        let bytes: &'static [u8] = (**leaked).as_ref();
-        if skrifa::FontRef::from_index(bytes, index).is_err() {
+        // egui shares the bytes through a `Blob` (an `Arc`), so this one
+        // memory map is held by every monitor's context without a copy.
+        let parses = skrifa::FontRef::from_index((*shared).as_ref(), index).is_ok();
+        if !parses {
             log::warn!("skipping system font {family} (face {index}): skrifa cannot parse it");
             continue;
         }
         faces.push(SystemFace {
             name: format!("sys:{family}"),
-            data: Arc::new(egui::FontData {
-                font: Cow::Borrowed(bytes),
-                index,
-                tweak: Default::default(),
-            }),
+            data: Arc::new(egui::FontData::from_blob(shared, index)),
         });
     }
     log::info!(

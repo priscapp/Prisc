@@ -44,7 +44,7 @@ const FALLBACK_BUDGET_MS: f32 = 16.67;
 /// tick; the host's floor is what keeps that at frame rate rather than as
 /// fast as the app thread can run.
 pub fn show(ctx: &egui::Context, d: &DebugInputs) {
-    egui::Area::new(egui::Id::new("prisc-debug-monitor"))
+    egui::Area::new(egui::Id::unique("prisc-debug-monitor"))
         .order(egui::Order::Middle)
         .interactable(false)
         .fade_in(false)
@@ -52,7 +52,7 @@ pub fn show(ctx: &egui::Context, d: &DebugInputs) {
         .show(ctx, |ui| body(ui, &d.monitor.lines, Some(&d.monitor)));
 
     if let Some(p) = &d.primary {
-        egui::Area::new(egui::Id::new("prisc-debug-primary"))
+        egui::Area::new(egui::Id::unique("prisc-debug-primary"))
             .order(egui::Order::Middle)
             .interactable(false)
             .fade_in(false)
@@ -264,7 +264,7 @@ mod tests {
         assert!(ctx.interactive_rects_last_pass().is_empty());
 
         let monitor = ctx
-            .memory(|m| m.area_rect(egui::Id::new("prisc-debug-monitor")))
+            .memory(|m| m.area_rect(egui::Id::unique("prisc-debug-monitor")))
             .expect("the monitor panel has an area rect after a run");
         assert!((monitor.left() - tokens::DEBUG_MARGIN).abs() < 0.01, "{monitor:?}");
         assert!((monitor.top() - tokens::DEBUG_MARGIN).abs() < 0.01, "{monitor:?}");
@@ -273,7 +273,7 @@ mod tests {
         // size it recorded last pass, so the right edge can sit a fraction
         // of a point off the exact margin.
         let primary = ctx
-            .memory(|m| m.area_rect(egui::Id::new("prisc-debug-primary")))
+            .memory(|m| m.area_rect(egui::Id::unique("prisc-debug-primary")))
             .expect("the primary panel has an area rect after a run");
         assert!(
             (primary.right() - (screen.right() - tokens::DEBUG_MARGIN)).abs() < 0.5,
@@ -333,7 +333,7 @@ mod tests {
                 ..Default::default()
             };
             let full = ctx.run_ui(raw, |ui| {
-                egui::Area::new(egui::Id::new("plot-probe"))
+                egui::Area::new(egui::Id::unique("plot-probe"))
                     .interactable(false)
                     .fade_in(false)
                     .show(ui.ctx(), |ui| body(ui, &d.monitor.lines, Some(&d.monitor)));
@@ -366,7 +366,7 @@ mod tests {
                     ..Default::default()
                 };
                 let full = ctx.run_ui(raw, |ui| {
-                    let area = egui::Area::new(egui::Id::new("blank-row-probe"))
+                    let area = egui::Area::new(egui::Id::unique("blank-row-probe"))
                         .fade_in(false)
                         .show(ui.ctx(), |ui| body(ui, &rows, None));
                     height = area.response.rect.height();

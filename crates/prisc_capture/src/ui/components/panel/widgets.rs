@@ -10,8 +10,8 @@
 
 use egui::text::{LayoutJob, TextFormat};
 use egui::{
-    Align2, AtomExt as _, AtomLayout, Color32, Direction, Frame, Id, Image, ImageSource, Margin, Response, RichText, Sense, TextStyle, Ui,
-    Vec2, WidgetText,
+    Align2, AtomExt as _, Color32, Direction, Frame, Id, Image, ImageSource, Margin, Response, RichText, Sense, TextStyle, Ui, Vec2,
+    WidgetAtom, WidgetText,
 };
 
 use super::assets;
@@ -51,7 +51,7 @@ impl StackedButton {
             .fit_to_exact_size(tokens::ICON_SIZE)
             .show_loading_spinner(false)
             .atom_size(tokens::ICON_SIZE);
-        let layout = AtomLayout::new((icon, self.text))
+        let layout = WidgetAtom::new((icon, self.text))
             .id(self.id)
             .direction(self.direction)
             .gap(self.gap)
@@ -73,7 +73,7 @@ impl StackedButton {
         let t = ui
             .ctx()
             .animate_bool_with_time(self.id.with("hover"), allocated.response.hovered(), tokens::HOVER_FADE_SECS);
-        allocated.sized.frame.fill = theme::hover_fill(self.base, self.veil, t);
+        allocated.container.frame.fill = theme::hover_fill(self.base, self.veil, t);
         allocated.paint(ui).response
     }
 }
