@@ -132,6 +132,18 @@
           "url": "https://github.com/1Password/arboard"
         },
         {
+          "name": "base64",
+          "version": "0.23.1",
+          "license": "MIT OR Apache-2.0",
+          "url": "https://github.com/marshallpierce/rust-base64"
+        },
+        {
+          "name": "bindgen",
+          "version": "0.72.1",
+          "license": "BSD-3-Clause",
+          "url": "https://github.com/rust-lang/rust-bindgen"
+        },
+        {
           "name": "block2",
           "version": "0.6.2",
           "license": "MIT",
@@ -150,16 +162,22 @@
           "url": "https://github.com/clap-rs/clap"
         },
         {
-          "name": "core-foundation",
-          "version": "0.10.1",
-          "license": "MIT OR Apache-2.0",
-          "url": "https://github.com/servo/core-foundation-rs"
+          "name": "csbindgen",
+          "version": "1.9.8",
+          "license": "MIT",
+          "url": "https://github.com/Cysharp/csbindgen/"
         },
         {
-          "name": "core-graphics",
-          "version": "0.25.0",
-          "license": "MIT OR Apache-2.0",
-          "url": "https://github.com/servo/core-foundation-rs"
+          "name": "ctrlc",
+          "version": "3.5.2",
+          "license": "MIT/Apache-2.0",
+          "url": "https://github.com/Detegr/rust-ctrlc.git"
+        },
+        {
+          "name": "dispatch2",
+          "version": "0.3.1",
+          "license": "Zlib OR Apache-2.0 OR MIT",
+          "url": "https://github.com/madsmtm/objc2"
         },
         {
           "name": "DPDFNet",
@@ -202,12 +220,6 @@
           "version": "0.23.0",
           "license": "MIT",
           "url": "https://github.com/RazrFalcon/fontdb"
-        },
-        {
-          "name": "foreign-types",
-          "version": "0.5.0",
-          "license": "MIT/Apache-2.0",
-          "url": "https://github.com/sfackler/foreign-types"
         },
         {
           "name": "image",
@@ -253,6 +265,30 @@
         },
         {
           "name": "objc2-app-kit",
+          "version": "0.3.2",
+          "license": "Zlib OR Apache-2.0 OR MIT",
+          "url": "https://github.com/madsmtm/objc2"
+        },
+        {
+          "name": "objc2-audio-toolbox",
+          "version": "0.3.2",
+          "license": "Zlib OR Apache-2.0 OR MIT",
+          "url": "https://github.com/madsmtm/objc2"
+        },
+        {
+          "name": "objc2-av-foundation",
+          "version": "0.3.2",
+          "license": "Zlib OR Apache-2.0 OR MIT",
+          "url": "https://github.com/madsmtm/objc2"
+        },
+        {
+          "name": "objc2-core-audio",
+          "version": "0.3.2",
+          "license": "Zlib OR Apache-2.0 OR MIT",
+          "url": "https://github.com/madsmtm/objc2"
+        },
+        {
+          "name": "objc2-core-audio-types",
           "version": "0.3.2",
           "license": "Zlib OR Apache-2.0 OR MIT",
           "url": "https://github.com/madsmtm/objc2"
@@ -312,6 +348,18 @@
           "url": "https://github.com/PaddlePaddle/PaddleOCR"
         },
         {
+          "name": "proc-macro2",
+          "version": "1.0.107",
+          "license": "MIT OR Apache-2.0",
+          "url": "https://github.com/dtolnay/proc-macro2"
+        },
+        {
+          "name": "quote",
+          "version": "1.0.47",
+          "license": "MIT OR Apache-2.0",
+          "url": "https://github.com/dtolnay/quote"
+        },
+        {
           "name": "realfft",
           "version": "3.5.0",
           "license": "MIT",
@@ -358,6 +406,12 @@
           "version": "0.44.0",
           "license": "MIT OR Apache-2.0",
           "url": "https://github.com/googlefonts/fontations"
+        },
+        {
+          "name": "syn",
+          "version": "2.0.119",
+          "license": "MIT OR Apache-2.0",
+          "url": "https://github.com/dtolnay/syn"
         },
         {
           "name": "windows",
