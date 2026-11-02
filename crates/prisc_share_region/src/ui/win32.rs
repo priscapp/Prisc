@@ -1004,10 +1004,12 @@ unsafe fn draw_prompt(app: *mut App, hdc: HDC, cw: i32, ch: i32, dpi: u32) {
 /// The OK button: a rounded accent rectangle with a bold label, in whichever
 /// state the pointer has put it. Drawn as part of the client paint — there is
 /// no control here, so nothing else can put a pixel inside it or around it. The
-/// corners the rounded rect gives up show the footer it sits on.
+/// corners the rounded rect gives up show the footer it sits on. A press only
+/// looks pressed while the pointer is on the button: dragged off, it rests, as
+/// a push button does, since letting go there does nothing.
 unsafe fn draw_ok_button(g: &Gfx, l: &PromptLayout, dpi: u32, accent: u32, hot: bool, down: bool) {
     let [rest, over, pressed] = button_fills(accent);
-    let fill = if down {
+    let fill = if down && hot {
         pressed
     } else if hot {
         over
