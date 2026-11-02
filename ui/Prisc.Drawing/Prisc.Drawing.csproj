@@ -6,9 +6,9 @@
     <RootNamespace>Prisc.Drawing</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.1.4" />
+    <PackageReference Include="Avalonia" Version="12.1.5" />
     <!-- the Skia lease, for ink that blends with what is under it (the highlighter) -->
-    <PackageReference Include="Avalonia.Skia" Version="12.1.4" />
+    <PackageReference Include="Avalonia.Skia" Version="12.1.5" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Prisc.Drawing.Tests" />

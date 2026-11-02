@@ -112,7 +112,6 @@ namespace Prisc.Interop.Tests
             // none touches the bogus handle
             Assert.False(WindowChrome.TakeForeground(Bogus));
             Assert.False(WindowChrome.SetBounds(Bogus, 0, 0, 10, 10));
-            Assert.Equal(0, WindowChrome.DefaultWindowProc(Bogus, 0, 0, 0));
             Assert.Null(ForegroundWatch.Start(() => { }));
         }
 

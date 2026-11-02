@@ -19,8 +19,7 @@ namespace Prisc.Interop
     /// to the debug output with the library's message. A caller error (a zero handle, an unknown
     /// flag, a macOS call off the main thread) throws <see cref="InteropException"/>.</para>
     /// <para>Threads: on macOS every member except <see cref="TakeForeground"/> must run on the main
-    /// (UI) thread; elsewhere any thread, except <see cref="DefaultWindowProc"/>, which runs inside
-    /// the window's own procedure.</para>
+    /// (UI) thread; elsewhere any thread.</para>
     /// </remarks>
     public static unsafe class WindowChrome
     {
@@ -105,18 +104,6 @@ namespace Prisc.Interop
             InteropLibrary.Require();
             var rect = new PriscRect { x = x, y = y, width = width, height = height };
             return Applied(NativeMethods.prisc_window_set_bounds(handle, &rect), "prisc_window_set_bounds");
-        }
-
-        /// <summary>
-        /// Windows: the default window procedure's answer for a message a procedure hook hands on. Call
-        /// only from inside the window's procedure. 0 when the call could not be made (off Windows).
-        /// </summary>
-        public static nint DefaultWindowProc(nint hwnd, uint message, nuint wParam, nint lParam)
-        {
-            InteropLibrary.Require();
-            nint result;
-            int status = NativeMethods.prisc_window_default_proc_windows(hwnd, message, wParam, lParam, &result);
-            return Applied(status, "prisc_window_default_proc_windows") ? result : 0;
         }
 
         /// <summary>

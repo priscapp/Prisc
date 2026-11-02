@@ -75,7 +75,6 @@ namespace Prisc.UI.Harness
 
             // the one-OS exports
             run.Item("window.traffic_lights", () => WindowChrome.SetTrafficLightPosition(Handle(), 14, 14));
-            run.Item("window.default_proc", () => (long)WindowChrome.DefaultWindowProc(Handle(), 0 /* WM_NULL */, 0, 0));
             run.Item("window.foreground_watch", () =>
             {
                 using var watch = ForegroundWatch.Start(() => { });

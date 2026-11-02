@@ -1,18 +1,18 @@
 //! Windows: window chrome and the foreground watch (`prisc_window_*`).
 //!
 //! The HWND is borrowed for the call; the export prologue has already refused a zero handle. The
-//! user32 calls here are callable from any thread except `DefWindowProcW` (inside the window's
-//! procedure) and the WinEvent hook (on the thread whose message loop delivers it).
+//! user32 calls here are callable from any thread except the WinEvent hook (on the thread whose
+//! message loop delivers it).
 
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use windows::Win32::Foundation::{GetLastError, SetLastError, COLORREF, HWND, LPARAM, WIN32_ERROR, WPARAM};
+use windows::Win32::Foundation::{GetLastError, SetLastError, COLORREF, HWND, WIN32_ERROR};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, GetForegroundWindow, GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowDisplayAffinity, SetWindowLongPtrW,
+    GetForegroundWindow, GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowDisplayAffinity, SetWindowLongPtrW,
     SetWindowPos, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE, HWND_TOPMOST, LWA_ALPHA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
     SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WINEVENT_OUTOFCONTEXT, WS_EX_TRANSPARENT,
 };
@@ -124,10 +124,6 @@ pub(crate) fn set_bounds(handle: isize, rect: PriscRect) -> Result<()> {
         )
     }
     .map_err(|e| os_error(&e, "SetWindowPos(SWP_NOZORDER)"))
-}
-
-pub(crate) fn default_proc(handle: isize, msg: u32, wparam: usize, lparam: isize) -> isize {
-    unsafe { DefWindowProcW(hwnd(handle), msg, WPARAM(wparam), LPARAM(lparam)) }.0
 }
 
 // ---------------------------------------------------------------------------

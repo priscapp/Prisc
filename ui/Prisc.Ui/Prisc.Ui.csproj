@@ -18,8 +18,8 @@
     <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Avalonia" Version="12.1.4" />
-    <PackageReference Include="Avalonia.Desktop" Version="12.1.4" />
+    <PackageReference Include="Avalonia" Version="12.1.5" />
+    <PackageReference Include="Avalonia.Desktop" Version="12.1.5" />
     <PackageReference Include="Semi.Avalonia" Version="12.1.0.1" />
     <PackageReference Include="Irihi.Ursa" Version="2.2.0" />
     <PackageReference Include="Irihi.Ursa.Themes.Semi" Version="2.2.0" />
