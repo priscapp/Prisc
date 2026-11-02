@@ -756,9 +756,10 @@ const MBEDTLS_SHA256: &str = "a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c086
 const SIMDE_REPO: &str = "https://github.com/simd-everywhere/simde.git";
 const SIMDE_COMMIT: &str = "71fd833d9666141edcd1d3c109a80e228303d8d7";
 
-/// The single static archive obs-outputs links in place of Mbed TLS's three
-/// (see `linux_ensure_mbedtls`).
-const MBEDTLS_COMBINED_LIB: &str = "libmbedtls-combined.a";
+/// The static archives Mbed TLS installs, kept out of obs-outputs.so's
+/// exported symbols (`--exclude-libs`). p256m and everest are the ECC
+/// backends libmbedcrypto calls into.
+const MBEDTLS_LIBS: &str = "libmbedtls.a:libmbedx509.a:libmbedcrypto.a:libp256m.a:libeverest.a";
 
 /// The OBS targets built on Linux, and why each is needed. Configure still
 /// visits every plugin's CMakeLists (so their REQUIRED packages matter even
@@ -791,20 +792,16 @@ const LINUX_TARGETS: &[&str] = &[
 
 /// A path that will never exist, compiled into libobs as OBS_INSTALL_PREFIX.
 ///
-/// libobs searches `OBS_INSTALL_PREFIX/lib/obs-plugins` and
-/// `OBS_INSTALL_PREFIX/share/obs/libobs` at runtime in addition to the paths
-/// we register. With the default `/usr/local` (or a distro-style `/usr`), a
-/// system-wide OBS installation's plugins and effect files — built against a
-/// different libobs — could be loaded next to ours. A bogus prefix makes
-/// those two particular lookups miss harmlessly.
+/// libobs searches `OBS_INSTALL_PREFIX/share/obs/libobs` at runtime in
+/// addition to the data path we register. With the default `/usr/local` (or a
+/// distro-style `/usr`), a system-wide OBS installation's effect files — built
+/// against a different libobs — could be loaded instead of ours. A bogus
+/// prefix makes that lookup miss harmlessly. (Plugins are not affected: since
+/// OBS 33 libobs registers no default module paths, and
+/// `prisc_obs::ObsContext::load_modules` loads only our own directory.)
 ///
-/// It is NOT the whole defence: libobs's `add_default_module_paths()` also
-/// registers exe-relative (`<exe>/../lib/obs-plugins`) and CWD-relative plugin
-/// dirs that no configure option removes. Plugin loading is therefore
-/// restricted to our own registered directory at runtime instead
-/// (`prisc_obs::ObsContext::load_all_modules`, Linux branch). libobs *data* files
-/// still resolve CWD-relative `share/obs/libobs/` and exe-relative
-/// `../share/obs/libobs/` before our `obs_add_data_path` entry
+/// libobs *data* files still resolve CWD-relative `share/obs/libobs/` and
+/// exe-relative `../share/obs/libobs/` before our `obs_add_data_path` entry
 /// (`find_libobs_data_file`, libobs/obs-nix.c); that only matters if the
 /// bundle is unpacked next to a system OBS's `share/obs`, and fixing it would
 /// need a libobs patch.
@@ -1026,18 +1023,14 @@ fn linux_ensure_simde(deps_dir: &Path) -> PathBuf {
 }
 
 /// Builds Mbed TLS [`MBEDTLS_VERSION`] into `<.deps>/mbedtls-<ver>-<arch>`
-/// (once) and returns that prefix, which holds `include/` and
-/// `lib/`[`MBEDTLS_COMBINED_LIB`].
+/// (once) and returns that prefix, which holds `include/`, the static
+/// archives and Mbed TLS's own CMake package (`lib/cmake/MbedTLS`).
 ///
 /// Static and PIC, for the same reason as x264: the archives end up inside
-/// obs-outputs.so, a shared object. Upstream produces three archives (tls,
-/// x509, crypto) that depend on each other in that order, but OBS's
-/// FindMbedTLS links them as tls, crypto, x509; with static archives that
-/// order leaves x509's calls into crypto undefined, and a module link does
-/// not reject undefined symbols, so it would only fail at dlopen time. The
-/// three are therefore merged into one archive (the linker resolves members of
-/// a single archive in any order), which FindMbedTLS accepts as a lone
-/// `Mbedtls_LIBRARY` once its X509/crypto probe results are preset.
+/// obs-outputs.so, a shared object. OBS finds Mbed TLS through that package
+/// (`find_package(MbedTLS)`, config mode), whose `MbedTLS::mbedtls` target
+/// carries its x509 and crypto dependencies, so the archives link in the
+/// right order.
 ///
 /// Same `.deps` placement, versioned prefix and lock/marker scheme as x264.
 fn linux_ensure_mbedtls(deps_dir: &Path, arch_suffix: &str) -> PathBuf {
@@ -1100,44 +1093,10 @@ fn linux_ensure_mbedtls(deps_dir: &Path, arch_suffix: &str) -> PathBuf {
     run(Command::new("cmake").arg("--build").arg(&build));
     run(Command::new("cmake").arg("--install").arg(&build));
 
-    // Merge tls + x509 + crypto into one archive (see the doc comment), plus
-    // the two small helper archives crypto may call into (the p256-m and
-    // Everest ECC backends) whenever this release installs them.
-    let lib = prefix.join("lib");
-    let mut script = format!("CREATE {}\n", lib.join(MBEDTLS_COMBINED_LIB).display());
-    for name in [
-        "libmbedtls.a",
-        "libmbedx509.a",
-        "libmbedcrypto.a",
-        "libp256m.a",
-        "libeverest.a",
-    ] {
-        let path = lib.join(name);
-        if path.exists() {
-            script.push_str(&format!("ADDLIB {}\n", path.display()));
-        }
-    }
-    script.push_str("SAVE\nEND\n");
-    let mut ar = Command::new("ar")
-        .arg("-M")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .expect("failed to start ar");
-    {
-        use std::io::Write;
-        ar.stdin
-            .take()
-            .unwrap()
-            .write_all(script.as_bytes())
-            .expect("write ar script");
-    }
     assert!(
-        ar.wait().expect("ar").success(),
-        "ar -M failed merging the Mbed TLS archives"
-    );
-    assert!(
-        lib.join(MBEDTLS_COMBINED_LIB).exists() && prefix.join("include/mbedtls/ssl.h").exists(),
-        "Mbed TLS install did not produce lib/{MBEDTLS_COMBINED_LIB} + include/mbedtls/ssl.h under {}",
+        prefix.join("lib/cmake/MbedTLS/MbedTLSConfig.cmake").exists()
+            && prefix.join("include/mbedtls/ssl.h").exists(),
+        "Mbed TLS install produced no CMake package + headers under {}",
         prefix.display()
     );
 
@@ -1249,7 +1208,7 @@ fn linux_cmake_configure(
         // in by some system library) could satisfy obs-x264's own calls with a
         // different ABI, or ours could satisfy theirs.
         // The same goes for the static Mbed TLS inside obs-outputs.so.
-        format!("-DCMAKE_MODULE_LINKER_FLAGS=-Wl,--exclude-libs,libx264.a:{MBEDTLS_COMBINED_LIB}"),
+        format!("-DCMAKE_MODULE_LINKER_FLAGS=-Wl,--exclude-libs,libx264.a:{MBEDTLS_LIBS}"),
         // ...and give obs-x264.so its own DT_NEEDED on libm. The static archive
         // calls exp/exp2/log etc., but obs-x264 links only libobs, so without
         // this those references stay unversioned and resolve only by luck of
@@ -1259,21 +1218,12 @@ fn linux_cmake_configure(
         "-DCMAKE_C_STANDARD_LIBRARIES=-lm".into(),
         format!("-DLibx264_INCLUDE_DIR={}", x264.join("include").display()),
         format!("-DLibx264_LIBRARY={}", x264.join("lib/libx264.a").display()),
-        // Static Mbed TLS (see `linux_ensure_mbedtls`): one merged archive as
-        // FindMbedTLS's single-library form. Presetting the two probe results
-        // selects that form; the probe itself would fail regardless, because
-        // FindMbedTLS feeds it the unset `MbedTLS_LIBRARY` rather than
-        // `Mbedtls_LIBRARY`.
+        // Static Mbed TLS (see `linux_ensure_mbedtls`), through its own CMake
+        // package.
         format!(
-            "-DMbedTLS_INCLUDE_DIR={}",
-            mbedtls.join("include").display()
+            "-DMbedTLS_DIR={}",
+            mbedtls.join("lib/cmake/MbedTLS").display()
         ),
-        format!(
-            "-DMbedtls_LIBRARY={}",
-            mbedtls.join("lib").join(MBEDTLS_COMBINED_LIB).display()
-        ),
-        "-DMbedTLS_INCLUDES_X509=TRUE".into(),
-        "-DMbedTLS_INCLUDES_CRYPTO=TRUE".into(),
         format!("-DSIMDe_INCLUDE_DIR={}", simde.display()),
         // Our finder overrides (crates/prisc_obs_sys/cmake), searched before OBS's
         // own (OBS appends its finder dirs to CMAKE_MODULE_PATH).
