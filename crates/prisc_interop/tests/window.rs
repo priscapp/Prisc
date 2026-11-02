@@ -95,8 +95,8 @@ mod windows_chrome {
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, DispatchMessageW, GetLayeredWindowAttributes, GetWindowDisplayAffinity, GetWindowLongPtrW,
         GetWindowRect, PeekMessageW, CHILDID_SELF, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE, LAYERED_WINDOW_ATTRIBUTES_FLAGS, MSG,
-        OBJID_WINDOW, PM_REMOVE, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WINDOW_EX_STYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-        WS_EX_TRANSPARENT, WS_POPUP,
+        OBJID_WINDOW, PM_REMOVE, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WINDOW_EX_STYLE, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
+        WS_POPUP,
     };
 
     /// A real top-level popup of the predefined STATIC class (no class to register), never shown.
