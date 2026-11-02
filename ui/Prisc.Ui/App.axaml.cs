@@ -152,8 +152,10 @@ namespace Prisc
                 // (settings wait on the mutex, which a harness deliberately runs ahead of), so a
                 // harness launch reached those constructors with SettingsRoot.Current still null
                 // and died there. Loading is a pure parse, and only a harness launch does it this
-                // early, so production startup keeps the order it had.
-                if (IsHarnessLaunch(args))
+                // early, so production startup keeps the order it had. Parsing the gestures needs
+                // prisc_interop, so without it the probe below reports the library and every other
+                // harness gets RequireInterop's notice, not a settings error offering a reset.
+                if (IsHarnessLaunch(args) && Prisc.Interop.InteropLibrary.IsAvailable)
                 {
                     await SetupSettings();
                     ApplyTheme();
