@@ -796,6 +796,14 @@ impl App {
         // foreground handback rather than a bare hide, even though the action
         // dispatches have usually done it already.
         hide_overlay_for_action(&self.windows);
+        // Cancelling or sampling a colour while zoomed leaves the hardware
+        // cursor parked at the magnifier anchor; put it back where the user
+        // was pointing before it is shown again.
+        if let Some(cycle) = self.cycle.as_mut() {
+            if let Some(restore) = InteractionController::release_anchor(&mut cycle.input) {
+                SystemInterop::set_mouse_position(restore, &self.monitors);
+            }
+        }
         // Idempotent (guarded by a static in window.rs) even when cursors
         // were already restored via update_cursor_visibility.
         set_hardware_cursor_visible(true);
@@ -2682,13 +2690,7 @@ impl ApplicationHandler for App {
                             cycle.input.peek_suspended = true;
                             cycle.input.captured = true;
                             update_cursor_visibility(&self.windows, &cycle.input);
-                            if cycle.input.anchored {
-                                cycle.input.anchored = false;
-                                cycle.input.anchor_just_engaged = false;
-                                let restore = ScreenPoint::new(
-                                    cycle.input.virtual_cursor.x.floor() as i32,
-                                    cycle.input.virtual_cursor.y.floor() as i32,
-                                );
+                            if let Some(restore) = InteractionController::release_anchor(&mut cycle.input) {
                                 SystemInterop::set_mouse_position(restore, &self.monitors);
                             }
                             cycle.input.zoom = 1.0;

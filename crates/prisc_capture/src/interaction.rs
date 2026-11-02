@@ -410,13 +410,8 @@ impl InteractionController {
 
         // Auto-exit magnifier mode when zoom returns to 1×.
         let restore_mouse = if input.anchored && (new_zoom - 1.0).abs() < f32::EPSILON {
-            input.anchored = false;
-            input.anchor_just_engaged = false;
             input.overlays_visible = true;
-            Some(ScreenPoint::new(
-                input.virtual_cursor.x.floor() as i32,
-                input.virtual_cursor.y.floor() as i32,
-            ))
+            Self::release_anchor(input)
         } else {
             restore_mouse
         };
@@ -427,6 +422,21 @@ impl InteractionController {
             restore_mouse,
             ..Default::default()
         }
+    }
+
+    /// Leave magnifier mode's cursor anchoring: the hardware cursor is parked
+    /// at `anchor` while zoomed, so it must go back to where the user was
+    /// pointing. Returns that point, or `None` when the cursor was not anchored.
+    pub fn release_anchor(input: &mut InteractionState) -> Option<ScreenPoint> {
+        if !input.anchored {
+            return None;
+        }
+        input.anchored = false;
+        input.anchor_just_engaged = false;
+        Some(ScreenPoint::new(
+            input.virtual_cursor.x.floor() as i32,
+            input.virtual_cursor.y.floor() as i32,
+        ))
     }
 
     pub fn finalize_selection(
@@ -445,16 +455,7 @@ impl InteractionController {
         input.captured = true;
         input.overlays_visible = true;
 
-        let restore_mouse = if input.anchored {
-            input.anchored = false;
-            input.anchor_just_engaged = false;
-            Some(ScreenPoint::new(
-                input.virtual_cursor.x.floor() as i32,
-                input.virtual_cursor.y.floor() as i32,
-            ))
-        } else {
-            None
-        };
+        let restore_mouse = Self::release_anchor(input);
         input.zoom = 1.0;
 
         let dpi = dpi_at_point(input.virtual_cursor, monitors);
@@ -579,6 +580,17 @@ mod tests {
         assert_eq!(effects.restore_mouse, Some(ScreenPoint::new(30, 30)));
         assert!(effects.broadcast_mouse);
         assert!(effects.broadcast_ui);
+    }
+
+    #[test]
+    fn release_anchor_returns_the_virtual_cursor_once() {
+        let mut input = state();
+        input.virtual_cursor = ScreenPointF::new(319.6, 260.2);
+
+        assert_eq!(InteractionController::release_anchor(&mut input), Some(ScreenPoint::new(319, 260)));
+        assert!(!input.anchored);
+        assert!(!input.anchor_just_engaged);
+        assert_eq!(InteractionController::release_anchor(&mut input), None);
     }
 
     #[test]
