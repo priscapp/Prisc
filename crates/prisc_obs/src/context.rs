@@ -89,12 +89,14 @@ impl ObsContext {
         unsafe { prisc_obs_sys::obs_add_module_path(bin_c.as_ptr(), data_c.as_ptr()) };
         #[cfg(target_os = "linux")]
         linux_modules::register_dir(bin);
+        #[cfg(not(target_os = "linux"))]
+        plugin_paths::register(bin_c, data_c);
     }
 
     pub fn load_all_modules(&self) {
         unsafe {
             #[cfg(not(target_os = "linux"))]
-            prisc_obs_sys::obs_load_all_modules();
+            plugin_paths::load_registered();
             #[cfg(target_os = "linux")]
             linux_modules::load_registered();
             prisc_obs_sys::obs_post_load_modules();
@@ -122,11 +124,52 @@ impl ObsContext {
     }
 }
 
+/// Windows / macOS: load the modules found on the registered paths.
+///
+/// OBS 33 split module loading in two and turned `obs_load_all_modules` into a
+/// no-op: "core modules" load from a fixed, build-time layout
+/// (`obs_load_core_modules`), everything else through `obs_load_plugins` on a
+/// caller-supplied path. prisc_recorder ships its own flat layout (see
+/// `prisc_obs_platform::default_obs_paths`) rather than OBS's per-module
+/// `core/<module>/` tree, so every registered path is loaded as a plain plugin
+/// path, which keeps libobs's `%module%` data-dir resolution.
+#[cfg(not(target_os = "linux"))]
+mod plugin_paths {
+    use std::ffi::CString;
+    use std::sync::Mutex;
+
+    static PATHS: Mutex<Vec<(CString, CString)>> = Mutex::new(Vec::new());
+
+    pub(super) fn register(bin: CString, data: CString) {
+        PATHS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((bin, data));
+    }
+
+    pub(super) unsafe fn load_registered() {
+        let paths = PATHS.lock().unwrap_or_else(|e| e.into_inner());
+        for (bin, data) in paths.iter() {
+            let mut info = prisc_obs_sys::obs_runtime_module_info {
+                path_info: prisc_obs_sys::obs_runtime_module_path {
+                    binary: bin.as_ptr(),
+                    data: data.as_ptr(),
+                },
+                type_: prisc_obs_sys::obs_runtime_module_type_OBS_MODULE_TYPE_PLUGIN,
+                name: std::ptr::null(),
+            };
+            let mut failures = std::mem::zeroed::<prisc_obs_sys::obs_module_failure_info>();
+            prisc_obs_sys::obs_load_plugins(&mut info, &mut failures);
+            prisc_obs_sys::obs_module_failure_info_free(&mut failures);
+        }
+    }
+}
+
 /// Linux: load plugins ONLY from the directories registered through
 /// [`ObsContext::add_module_path`], never from libobs's built-in defaults.
 ///
-/// `obs_startup` calls `add_default_module_paths()` (libobs/obs-nix.c), which
-/// registers, ahead of anything we add:
+/// Before OBS 33, `obs_startup` called `add_default_module_paths()`
+/// (libobs/obs-nix.c), which registered, ahead of anything we add:
 ///   - `<exe dir>/../lib/obs-plugins` (exe-relative; e.g. a bundle unpacked to
 ///     `/usr/local/prisc-recorder` would pick up `/usr/local/lib/obs-plugins`),
 ///   - the CWD-relative `../../obs-plugins/64bit`,
@@ -141,9 +184,10 @@ impl ObsContext {
 /// `%module%` data-dir resolution) and open only modules that live directly in
 /// one of our own directories.
 ///
-/// Windows and macOS keep plain `obs_load_all_modules`: their default paths
-/// are exe-relative into our own bundle layout, and changing them is out of
-/// scope for the Linux port.
+/// OBS 33 dropped the default paths and made `obs_load_all_modules` a no-op, so
+/// this walk is now the only thing loading plugins; it is kept (rather than
+/// switched to `obs_load_plugins`) because it still guarantees a module is
+/// opened only from a directory we registered.
 #[cfg(target_os = "linux")]
 mod linux_modules {
     use std::collections::HashSet;

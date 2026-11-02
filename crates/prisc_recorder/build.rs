@@ -263,11 +263,40 @@ fn build_windows() {
         &["dll", "exe"],
     );
 
-    // obs-plugins/64bit/* -> profile/obs-plugins/64bit/
-    copy_dir_all(
-        &rundir.join("obs-plugins").join("64bit"),
-        &profile_dir.join("obs-plugins").join("64bit"),
-    );
+    // OBS 33 builds every core module into its own directory,
+    // core/<m>/<m>.dll with its data in core/<m>/data. The bundle keeps the flat
+    // obs-plugins/64bit/<m>.dll + data/obs-plugins/<m>/ layout that
+    // prisc_obs_platform::default_obs_paths registers.
+    if let Ok(modules) = fs::read_dir(rundir.join("core")) {
+        for module in modules.flatten() {
+            let dir = module.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            let name = module.file_name();
+            for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    copy_if_newer(
+                        &path,
+                        &profile_dir
+                            .join("obs-plugins")
+                            .join("64bit")
+                            .join(entry.file_name()),
+                    );
+                }
+            }
+            copy_dir_all(
+                &dir.join("data"),
+                &profile_dir.join("data").join("obs-plugins").join(&name),
+            );
+        }
+    } else {
+        println!(
+            "cargo:warning=prisc_recorder: missing dir {}",
+            rundir.join("core").display()
+        );
+    }
 
     // data/* -> profile/data/ (contains libobs/ effects required by obs_reset_video)
     copy_dir_all(&rundir.join("data"), &profile_dir.join("data"));
@@ -431,7 +460,10 @@ fn build_linux() {
     assert!(mux.exists(), "OBS build output missing: {}", mux.display());
     linux::stage_with_runpath(&mux, &profile_dir.join("obs-ffmpeg-mux"), "$ORIGIN");
 
-    let plugin_src = lib_dir.join("obs-plugins");
+    // OBS 33 installs its (former plugin) core modules to lib/obs-modules/core
+    // and their data to share/obs/obs-modules/core/<m>; the bundle keeps the
+    // flat obs-plugins/ + data/obs-plugins/<m> layout prisc_obs_platform expects.
+    let plugin_src = lib_dir.join("obs-modules").join("core");
     let plugin_dst = profile_dir.join("obs-plugins");
     let plugins = fs::read_dir(&plugin_src)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", plugin_src.display()));
@@ -442,9 +474,14 @@ fn build_linux() {
         }
     }
 
-    // share/obs/{libobs,obs-plugins/<p>} -> data/{libobs,obs-plugins/<p>}: the
-    // same data layout the Windows runtime has.
-    copy_dir_all(&rundir.join("share").join("obs"), &profile_dir.join("data"));
+    // share/obs/{libobs,obs-modules/core/<p>} -> data/{libobs,obs-plugins/<p>}:
+    // the same data layout the Windows runtime has.
+    let share_obs = rundir.join("share").join("obs");
+    copy_dir_all(&share_obs.join("libobs"), &profile_dir.join("data").join("libobs"));
+    copy_dir_all(
+        &share_obs.join("obs-modules").join("core"),
+        &profile_dir.join("data").join("obs-plugins"),
+    );
 
     linux::stage_ffmpeg_runtime(&bundle, &profile_dir);
 }

@@ -791,17 +791,18 @@ const LINUX_TARGETS: &[&str] = &[
 
 /// A path that will never exist, compiled into libobs as OBS_INSTALL_PREFIX.
 ///
-/// libobs searches `OBS_INSTALL_PREFIX/lib/obs-plugins` and
-/// `OBS_INSTALL_PREFIX/share/obs/libobs` at runtime in addition to the paths
+/// libobs searches `OBS_INSTALL_PREFIX/share/obs/libobs` (and, before OBS 33,
+/// `OBS_INSTALL_PREFIX/lib/obs-plugins`) at runtime in addition to the paths
 /// we register. With the default `/usr/local` (or a distro-style `/usr`), a
 /// system-wide OBS installation's plugins and effect files — built against a
 /// different libobs — could be loaded next to ours. A bogus prefix makes
-/// those two particular lookups miss harmlessly.
+/// those lookups miss harmlessly.
 ///
-/// It is NOT the whole defence: libobs's `add_default_module_paths()` also
-/// registers exe-relative (`<exe>/../lib/obs-plugins`) and CWD-relative plugin
-/// dirs that no configure option removes. Plugin loading is therefore
-/// restricted to our own registered directory at runtime instead
+/// It is NOT the whole defence: before OBS 33, libobs's
+/// `add_default_module_paths()` also registered exe-relative
+/// (`<exe>/../lib/obs-plugins`) and CWD-relative plugin dirs that no configure
+/// option removes. Plugin loading is therefore restricted to our own registered
+/// directory at runtime
 /// (`prisc_obs::ObsContext::load_all_modules`, Linux branch). libobs *data* files
 /// still resolve CWD-relative `share/obs/libobs/` and exe-relative
 /// `../share/obs/libobs/` before our `obs_add_data_path` entry
