@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.Threading.Tasks;
+using Avalonia.Controls;
 using Avalonia.Threading;
 using Prisc.Config;
 using Prisc.PlatformUtil;
@@ -143,7 +144,7 @@ namespace Prisc.UI
                     {
                         result.Session.Name = "Scrolling Capture";
                         EditorWindow.ShowSession(result.Session);
-                        ShowOutcomeToast(outcome.Result.Value);
+                        ShowOutcomeToast(outcome.Result.Value, EditorWindow.FindWindowForSession(result.Session));
                         Close();
                         return;
                     }
@@ -369,7 +370,7 @@ namespace Prisc.UI
         /// <summary>Explains an outcome that is not simply "here is your image". Only the two
         /// surprising ones get a toast: a capture that stopped because it hit a limit, and one
         /// that produced a single screen because nothing scrolled.</summary>
-        private static void ShowOutcomeToast(ScrollResult result)
+        private static void ShowOutcomeToast(ScrollResult result, Window editor)
         {
             var message = result switch
             {
@@ -384,9 +385,9 @@ namespace Prisc.UI
             if (message == null)
                 return;
 
-            // null-owner tolerant: with no window open there is simply nowhere to host a toast,
-            // and the editor this capture just opened is normally the host.
-            var host = Toast.GetActiveOrMainWindow();
+            // hosted on the editor this capture just opened; null-owner tolerant, since with no
+            // window open there is simply nowhere to host a toast.
+            var host = editor ?? Toast.GetActiveOrMainWindow();
             if (host != null)
                 Toast.Show(host, message);
         }
