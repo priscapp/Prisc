@@ -207,11 +207,14 @@ impl WindowHandle {
     }
 
     pub fn focus(&self) {
+        #[cfg(not(windows))]
         self.window.focus_window();
+        // Windows: not winit's focus_window, whose foreground-lock hack taps a bare Alt into the
+        // app that is still in front, leaving it in menu mode (its next key is eaten, and a
+        // scrolling capture's wheel bursts with it). prisc_hotkeys' raise masks that Alt.
         #[cfg(windows)]
         {
-            let fg = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
-            if win32_hwnd(&self.window) == Some(fg) {
+            if win32_hwnd(&self.window).is_some_and(prisc_hotkeys::take_foreground) {
                 info!("overlay window took foreground focus");
             } else {
                 warn!("overlay window was denied foreground focus; keyboard input may go to the previous app until the overlay is clicked");

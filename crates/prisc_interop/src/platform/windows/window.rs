@@ -11,11 +11,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use windows::Win32::Foundation::{GetLastError, SetLastError, COLORREF, HWND, LPARAM, WIN32_ERROR, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
-use windows::Win32::UI::Input::KeyboardAndMouse::VK_MENU;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, GetForegroundWindow, GetWindowLongPtrW, SetForegroundWindow, SetLayeredWindowAttributes, SetWindowDisplayAffinity,
-    SetWindowLongPtrW, SetWindowPos, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE, HWND_TOPMOST, LWA_ALPHA, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WINEVENT_OUTOFCONTEXT, WS_EX_TRANSPARENT,
+    DefWindowProcW, GetForegroundWindow, GetWindowLongPtrW, SetLayeredWindowAttributes, SetWindowDisplayAffinity, SetWindowLongPtrW,
+    SetWindowPos, EVENT_SYSTEM_FOREGROUND, GWL_EXSTYLE, HWND_TOPMOST, LWA_ALPHA, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, WDA_EXCLUDEFROMCAPTURE, WDA_NONE, WINEVENT_OUTOFCONTEXT, WS_EX_TRANSPARENT,
 };
 
 use crate::error::{Error, Result};
@@ -106,30 +105,10 @@ pub(crate) fn is_foreground(handle: isize) -> Result<bool> {
     Ok(unsafe { GetForegroundWindow() } == hwnd(handle))
 }
 
-/// The foreground-lock dance of the export. Whether the window ended up in front.
+/// The foreground-lock dance of the export (prisc_hotkeys owns it, shared with prisc_capture's
+/// overlay). Whether the window ended up in front.
 pub(crate) fn take_foreground(handle: isize) -> bool {
-    let window = hwnd(handle);
-    let in_front = || unsafe { GetForegroundWindow() } == window;
-    if in_front() {
-        return true;
-    }
-
-    // a click on one of our windows is input we did receive: no keys needed then, and none
-    // injected into the gesture it starts
-    if unsafe { SetForegroundWindow(window) }.as_bool() && in_front() {
-        return true;
-    }
-
-    // Alt is the key the foreground lock reliably yields to, with prisc_hotkeys' menu mask chord
-    // inside it so no app sees a lone Alt tap. An Alt the user is physically holding (part of the
-    // hotkey) is left alone: injecting its release would tell Windows they let go.
-    let alt_held = prisc_platform::input::is_key_down(u32::from(VK_MENU.0)).unwrap_or(false);
-    prisc_hotkeys::inject_mask_chord(!alt_held);
-    let _ = unsafe { SetForegroundWindow(window) };
-    if !alt_held {
-        prisc_hotkeys::release_injected_alt();
-    }
-    in_front()
+    prisc_hotkeys::take_foreground(hwnd(handle))
 }
 
 pub(crate) fn set_bounds(handle: isize, rect: PriscRect) -> Result<()> {

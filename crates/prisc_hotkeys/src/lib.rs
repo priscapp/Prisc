@@ -77,4 +77,4 @@ pub use key::Key;
 pub use modifiers::Modifiers;
 pub use reserved::Os;
 #[cfg(windows)]
-pub use windows::{inject_mask_chord, release_injected_alt};
+pub use windows::take_foreground;

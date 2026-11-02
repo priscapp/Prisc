@@ -19,8 +19,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Input::{GetRegisteredRawInputDevices, RegisterRawInputDevices, RAWINPUTDEVICE, RIDEV_INPUTSINK, RIDEV_REMOVE};
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DestroyWindow, DispatchMessageW, GetForegroundWindow, GetGUIThreadInfo, GetMessageW,
-    GetWindowThreadProcessId, PeekMessageW, PostThreadMessageW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, GUITHREADINFO,
-    HHOOK, HWND_MESSAGE, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE, WH_KEYBOARD_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_INPUT, WM_QUIT,
+    GetWindowThreadProcessId, PeekMessageW, PostThreadMessageW, SetForegroundWindow, SetWindowsHookExW, TranslateMessage,
+    UnhookWindowsHookEx, GUITHREADINFO, HHOOK, HWND_MESSAGE, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE, WH_KEYBOARD_LL, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_INPUT, WM_QUIT,
 };
 
 use crate::core::{HookCore, Verdict};
@@ -378,9 +379,9 @@ fn send_mask() {
 /// The menu mask chord, in one `SendInput`: an Alt down when `press_alt`, then a down+up of the
 /// unassigned mask VK (so no app sees a lone Alt tap and enters menu mode), every event marked so
 /// this crate's hook passes it untouched. The hook injects it after a swallowed Win or Alt combo;
-/// prisc_interop's `take_foreground` presses it, with Alt, to satisfy the foreground lock, and
-/// lifts that Alt with [`release_injected_alt`] once the window is in front.
-pub fn inject_mask_chord(press_alt: bool) {
+/// [`take_foreground`] presses it, with Alt, to satisfy the foreground lock, and lifts that Alt
+/// with [`release_injected_alt`] once the window is in front.
+fn inject_mask_chord(press_alt: bool) {
     let alt = marked(VK_MENU.0, KEYBD_EVENT_FLAGS(0));
     let mask = [marked(MASK_VK, KEYBD_EVENT_FLAGS(0)), marked(MASK_VK, KEYEVENTF_KEYUP)];
     if press_alt {
@@ -391,8 +392,37 @@ pub fn inject_mask_chord(press_alt: bool) {
 }
 
 /// Lifts the Alt an [`inject_mask_chord`]`(true)` pressed, marked like it.
-pub fn release_injected_alt() {
+fn release_injected_alt() {
     send(&[marked(VK_MENU.0, KEYEVENTF_KEYUP)]);
+}
+
+/// Brings `window` to the front with the keyboard and says whether it ended up there, for
+/// prisc_interop's `prisc_window_take_foreground` and prisc_capture's overlay. Nothing when it
+/// already is; then a plain `SetForegroundWindow` (allowed after a click on one of our windows, or
+/// with a shell's `AllowSetForegroundWindow` grant); failing that, the foreground lock is lifted by
+/// making this process the last to send input: Alt with the mask chord inside it, so no app sees
+/// a lone Alt tap and enters menu mode (winit's `focus_window` taps a bare Alt, which leaves the
+/// previous app in menu mode, eating its next key or wheel). Every injected event is marked, so
+/// this crate's hook, in this process or another, passes it untouched. An Alt the user is
+/// physically holding (part of the hotkey) is left alone: injecting its release would tell
+/// Windows they let go. Any thread.
+pub fn take_foreground(window: HWND) -> bool {
+    // SAFETY: GetForegroundWindow takes nothing; SetForegroundWindow takes any HWND value and
+    // fails on one that is not a window.
+    let in_front = || unsafe { GetForegroundWindow() } == window;
+    if in_front() {
+        return true;
+    }
+    if unsafe { SetForegroundWindow(window) }.as_bool() && in_front() {
+        return true;
+    }
+    let alt_held = key_down(VK_MENU.0);
+    inject_mask_chord(!alt_held);
+    let _ = unsafe { SetForegroundWindow(window) };
+    if !alt_held {
+        release_injected_alt();
+    }
+    in_front()
 }
 
 #[cfg(test)]
