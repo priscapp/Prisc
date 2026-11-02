@@ -1033,12 +1033,12 @@ fn linux_ensure_simde(deps_dir: &Path) -> PathBuf {
 /// Static and PIC, for the same reason as x264: the archives end up inside
 /// obs-outputs.so, a shared object. Upstream produces three archives (tls,
 /// x509, crypto) that depend on each other in that order, but OBS's
-/// FindMbedTLS links them as tls, crypto, x509; with static archives that
+/// finder linked them as tls, crypto, x509; with static archives that
 /// order leaves x509's calls into crypto undefined, and a module link does
 /// not reject undefined symbols, so it would only fail at dlopen time. The
 /// three are therefore merged into one archive (the linker resolves members of
 /// a single archive in any order), which FindMbedTLS accepts as a lone
-/// `Mbedtls_LIBRARY` once its X509/crypto probe results are preset.
+/// `Mbedtls_LIBRARY`.
 ///
 /// Same `.deps` placement, versioned prefix and lock/marker scheme as x264.
 fn linux_ensure_mbedtls(deps_dir: &Path, arch_suffix: &str) -> PathBuf {
@@ -1260,11 +1260,8 @@ fn linux_cmake_configure(
         "-DCMAKE_C_STANDARD_LIBRARIES=-lm".into(),
         format!("-DLibx264_INCLUDE_DIR={}", x264.join("include").display()),
         format!("-DLibx264_LIBRARY={}", x264.join("lib/libx264.a").display()),
-        // Static Mbed TLS (see `linux_ensure_mbedtls`): one merged archive as
-        // FindMbedTLS's single-library form. Presetting the two probe results
-        // selects that form; the probe itself would fail regardless, because
-        // FindMbedTLS feeds it the unset `MbedTLS_LIBRARY` rather than
-        // `Mbedtls_LIBRARY`.
+        // Static Mbed TLS (see `linux_ensure_mbedtls`): one merged archive, which
+        // our FindMbedTLS (crates/prisc_obs_sys/cmake) wraps as MbedTLS::mbedtls.
         format!(
             "-DMbedTLS_INCLUDE_DIR={}",
             mbedtls.join("include").display()
@@ -1273,8 +1270,6 @@ fn linux_cmake_configure(
             "-DMbedtls_LIBRARY={}",
             mbedtls.join("lib").join(MBEDTLS_COMBINED_LIB).display()
         ),
-        "-DMbedTLS_INCLUDES_X509=TRUE".into(),
-        "-DMbedTLS_INCLUDES_CRYPTO=TRUE".into(),
         format!("-DSIMDe_INCLUDE_DIR={}", simde.display()),
         // Our finder overrides (crates/prisc_obs_sys/cmake), searched before OBS's
         // own (OBS appends its finder dirs to CMAKE_MODULE_PATH).
