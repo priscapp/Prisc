@@ -634,7 +634,7 @@ mod tests {
             |ui| {
                 let p = ui
                     .ctx()
-                    .layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::new("hints-order-test")));
+                    .layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::unique("hints-order-test")));
                 show(ui.ctx(), &p, &h, None, screen, (Color32::RED, Color32::WHITE));
             },
         );

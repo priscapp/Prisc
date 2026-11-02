@@ -129,7 +129,7 @@ pub struct OverlayInputs {
 /// covers the background layer however these calls are sequenced.
 pub fn compose(ctx: &egui::Context, inputs: &HostInputs, monitor: UiMonitor) -> PanelOutcome {
     let o = &inputs.overlays;
-    let painter = ctx.layer_painter(LayerId::new(Order::Background, Id::new("prisc-overlays")));
+    let painter = ctx.layer_painter(LayerId::new(Order::Background, Id::unique("prisc-overlays")));
     // egui 0.36 calls the old `screen_rect` the viewport rect; with no
     // safe-area insets on Windows it is the whole monitor, in points.
     let screen = ctx.viewport_rect();
@@ -305,7 +305,7 @@ mod tests {
             .drop_without_applying_deltas();
         }
         let tray = ctx
-            .memory(|m| m.area_rect(egui::Id::new(panel_show::PANEL_ID)))
+            .memory(|m| m.area_rect(egui::Id::unique(panel_show::PANEL_ID)))
             .expect("the tray has an area rect after a pass");
 
         // The reticle's centre dot is painted in the accent; count it as
@@ -356,7 +356,7 @@ mod tests {
             .drop_without_applying_deltas();
         }
         let tray = ctx
-            .memory(|m| m.area_rect(egui::Id::new(panel_show::PANEL_ID)))
+            .memory(|m| m.area_rect(egui::Id::unique(panel_show::PANEL_ID)))
             .expect("the tray has an area rect after a pass");
 
         let mut outcome = PanelOutcome::default();

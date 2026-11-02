@@ -108,16 +108,15 @@ fn start(app: &'static str, sessions: bool) -> Option<sentry::ClientInitGuard> {
 
     let guard = sentry::init((
         DSN,
-        sentry::ClientOptions {
-            release: Some(release()),
-            environment: Some(Cow::Borrowed(ENVIRONMENT)),
-            attach_stacktrace: true,
-            auto_session_tracking: sessions,
-            session_mode: sentry::SessionMode::Application,
+        // sentry 0.49 made ClientOptions #[non_exhaustive], so it is built through its setters.
+        sentry::ClientOptions::new()
+            .release(release())
+            .environment(Cow::Borrowed(ENVIRONMENT))
+            .attach_stacktrace(true)
+            .auto_session_tracking(sessions)
+            .session_mode(sentry::SessionMode::Application)
             // no window titles, file paths, or captured pixels
-            send_default_pii: false,
-            ..Default::default()
-        },
+            .send_default_pii(false),
     ));
 
     if !guard.is_enabled() {

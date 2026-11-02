@@ -95,16 +95,16 @@ bytemuck = "1"
 # System-font lookup for the OCR bubbles' glyph fallback: fontdb finds and memory-maps the
 # curated faces, skrifa (the same version epaint shapes with) checks a face parses and whether
 # the bundled Cascadia already covers a page.
-fontdb = { version = "0.23", default-features = false, features = ["memmap"] }
+fontdb = { version = "0.24", default-features = false, features = ["memmap"] }
 skrifa = "0.44"
 # Immediate-mode UI (layout, widgets, text) for the capture overlay; painted through gxi.
-egui = { version = "0.36", default-features = false, features = ["bytemuck"] }
+egui = { version = "0.37", default-features = false, features = ["bytemuck"] }
 # SVG rasterisation into egui textures (resvg under the hood) and live plots for the debug panel.
-egui_extras = { version = "0.36", default-features = false, features = ["svg"] }
-egui_plot = "0.37"
+egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
+egui_plot = "0.38"
 arboard = "3.6"
 rfd = { version = "0.17", default-features = false }
-xdialog = "3.1"
+xdialog = "4.1"
 windows = "0.62"
 objc2 = "0.6"
 objc2-core-foundation = "0.3"
@@ -120,7 +120,7 @@ dispatch2 = "0.3"
 naga = "30.0"
 libloading = "0.9"
 # rustls keeps every target off OpenSSL/schannel, and debug-images/log/anyhow are what make the reports symbolicated and readable.
-sentry = { version = "0.48", default-features = false, features = [
+sentry = { version = "0.49", default-features = false, features = [
     "anyhow",
     "backtrace",
     "contexts",

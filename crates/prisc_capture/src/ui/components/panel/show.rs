@@ -93,7 +93,7 @@ fn tip_rect(axis: Axis, tray: Rect, button: Rect, chip: Vec2, screen: Rect) -> R
 /// its chip. Only a pause off every button as long as the wait itself
 /// brings the wait back.
 fn show_tip(ctx: &egui::Context, axis: Axis, tray: Rect, hovered: Option<(egui::Id, Rect, &'static ButtonDef)>, visible: bool) {
-    let key = egui::Id::new(TIP_ID);
+    let key = egui::Id::unique(TIP_ID);
     let now = ctx.input(|i| i.time);
     let mut clock = ctx.data(|d| {
         d.get_temp::<TipClock>(key)
@@ -781,7 +781,7 @@ fn button(
     // The set is part of the id, so hover state and hit tests can never
     // resolve against another strip; the table index keeps a switched-off
     // button from renumbering its neighbours.
-    let id = egui::Id::new(("panel", p.set as u8, table_idx));
+    let id = egui::Id::unique(("panel", p.set as u8, table_idx));
     let mut widget = match skin.kind {
         Presentation::Key => widgets::key_hint_button(def, id, size, skin.base, skin.veil),
         Presentation::Below => widgets::below_button(def, id, size, skin.base, skin.veil),
@@ -1052,7 +1052,7 @@ pub fn show(ctx: &egui::Context, p: &PanelInputs, monitor: UiMonitor, visible: b
 
     let mut out = PanelOutcome::default();
     let mut hovered: Option<(egui::Id, Rect, &'static ButtonDef)> = None;
-    let area = egui::Area::new(egui::Id::new(PANEL_ID))
+    let area = egui::Area::new(egui::Id::unique(PANEL_ID))
         .order(egui::Order::Foreground)
         .fixed_pos(local)
         // Never `constrain`: egui's symmetric clamp would override the
@@ -1228,7 +1228,7 @@ mod tests {
 
         fn area_rect(&self) -> Rect {
             self.ctx
-                .memory(|m| m.area_rect(egui::Id::new(PANEL_ID)))
+                .memory(|m| m.area_rect(egui::Id::unique(PANEL_ID)))
                 .expect("the tray has an area rect after a run")
         }
 
@@ -1388,7 +1388,7 @@ mod tests {
             .filter(|r| r.width() <= tokens::KEY_TILE + 0.5)
             .min_by(|a, b| a.left().total_cmp(&b.left()))
             .expect("a button rect");
-        let tip_layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(TIP_ID));
+        let tip_layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique(TIP_ID));
         let tip_shown = |h: &Harness| {
             h.ctx
                 .memory(|m| m.areas().visible_last_frame(&tip_layer))
@@ -1403,7 +1403,7 @@ mod tests {
         assert!(tip_shown(&h), "the chip is up after {passes} passes");
         let tip = h
             .ctx
-            .memory(|m| m.area_rect(egui::Id::new(TIP_ID)))
+            .memory(|m| m.area_rect(egui::Id::unique(TIP_ID)))
             .expect("the chip has a rect");
         let tray = h.area_rect();
         assert!(
@@ -1428,7 +1428,7 @@ mod tests {
         assert!(tip_shown(&h), "the chip follows the pointer within the grace period");
         let tip = h
             .ctx
-            .memory(|m| m.area_rect(egui::Id::new(TIP_ID)))
+            .memory(|m| m.area_rect(egui::Id::unique(TIP_ID)))
             .expect("the chip has a rect");
         assert!((tip.center().x - second.center().x).abs() <= 0.5, "{tip:?} vs {second:?}");
 
@@ -1469,7 +1469,7 @@ mod tests {
         h.run(&p, None);
         for set in PanelButtonSet::ALL {
             for def in set.defs() {
-                let button = widgets::key_hint_button(def, egui::Id::new(def.label), Vec2::ZERO, ACCENT, tokens::HOVER_VEIL_PRIMARY);
+                let button = widgets::key_hint_button(def, egui::Id::unique(def.label), Vec2::ZERO, ACCENT, tokens::HOVER_VEIL_PRIMARY);
                 assert_eq!(
                     button.text.text(),
                     def.accel_key()
@@ -1788,7 +1788,7 @@ mod tests {
             .filter(|r| r.height() <= tokens::DOUBLE_ROW + 0.5 && r.width() > tokens::KEY_TILE + 0.5 && r.top() < area.center().y)
             .min_by(|a, b| a.left().total_cmp(&b.left()))
             .expect("a labelled button rect");
-        let tip_layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(TIP_ID));
+        let tip_layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique(TIP_ID));
         let tip_shown = |h: &Harness| {
             h.ctx
                 .memory(|m| m.areas().visible_last_frame(&tip_layer))
