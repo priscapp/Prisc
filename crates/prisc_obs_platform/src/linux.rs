@@ -472,7 +472,8 @@ pub fn cursor_update_settings(show_cursor: bool) -> ObsData {
 }
 
 /// The self-contained bundle layout prisc_recorder's build script stages (and
-/// the release zip ships), mirroring Windows minus its `64bit` level:
+/// the release zip ships): OBS 33's own flat Linux module layout
+/// (`lib/obs-modules/core`, `share/obs/obs-modules/core`) under shorter names:
 ///
 /// ```text
 /// <exe dir>/obs-plugins/<plugin>.so

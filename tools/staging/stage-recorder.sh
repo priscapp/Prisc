@@ -7,7 +7,7 @@
 #   stage-recorder.sh <rid> <cargo profile dir> <dest>
 #
 # Windows: the runtime tree prisc_recorder's build.rs assembled in the profile
-#   dir (obs.dll, graphics modules, FFmpeg/x264 DLLs, obs-plugins/, data/),
+#   dir (obs.dll, graphics modules, FFmpeg/x264 DLLs, core/, data/),
 #   plus the VC++ runtime.
 # macOS: libobs.framework, the graphics modules, the dep dylibs build.rs
 #   staged, the plugin bundles, all relocated to @executable_path/Frameworks
@@ -65,7 +65,7 @@ stage_windows() {
     if grep -qxF "$name" <<< "$skip"; then continue; fi
     cp "$f" "$dist/"
   done
-  cp -R "$src/obs-plugins" "$src/data" "$dist/"
+  cp -R "$src/core" "$src/data" "$dist/"
 
   # obs.dll, its plugins and the FFmpeg DLLs are /MD builds (copy_vc_runtime
   # checks its own result).

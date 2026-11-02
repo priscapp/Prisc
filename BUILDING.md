@@ -242,7 +242,7 @@ The build scripts stage the runtime next to the binaries:
 
 - **Windows** — `prisc_recorder.exe`, `prisc_share_region.exe` and `prisc_vid2gif.exe` plus
   `obs.dll`, the graphics/plugin DLLs, `obs-ffmpeg-mux.exe`, the FFmpeg & x264 runtime DLLs,
-  `obs-plugins/` and `data/` end up in `target/<profile>/`.
+  `core/` (OBS's per-module directories) and `data/` end up in `target/<profile>/`.
 - **Linux** — like Windows: `libobs.so.30`, `libobs-opengl.so.30`, the FFmpeg `.so` files,
   `obs-ffmpeg-mux`, `obs-plugins/*.so` and `data/` are copied into `target/<profile>/`, each with an
   `$ORIGIN`-relative RUNPATH. The executables also carry absolute RUNPATHs into the build tree, so

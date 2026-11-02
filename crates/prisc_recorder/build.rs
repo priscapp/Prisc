@@ -263,11 +263,9 @@ fn build_windows() {
         &["dll", "exe"],
     );
 
-    // obs-plugins/64bit/* -> profile/obs-plugins/64bit/
-    copy_dir_all(
-        &rundir.join("obs-plugins").join("64bit"),
-        &profile_dir.join("obs-plugins").join("64bit"),
-    );
+    // core/<module>/{<module>.dll,data/} -> profile/core/: OBS 33's module
+    // layout, kept as is (prisc_obs_platform::default_obs_paths loads it).
+    copy_dir_all(&rundir.join("core"), &profile_dir.join("core"));
 
     // data/* -> profile/data/ (contains libobs/ effects required by obs_reset_video)
     copy_dir_all(&rundir.join("data"), &profile_dir.join("data"));
@@ -431,7 +429,10 @@ fn build_linux() {
     assert!(mux.exists(), "OBS build output missing: {}", mux.display());
     linux::stage_with_runpath(&mux, &profile_dir.join("obs-ffmpeg-mux"), "$ORIGIN");
 
-    let plugin_src = lib_dir.join("obs-plugins");
+    // OBS 33 builds its modules flat into lib/obs-modules/core/ (data in
+    // share/obs/obs-modules/core/<p>); the bundle keeps the shorter
+    // obs-plugins/ name for that same flat layout.
+    let plugin_src = lib_dir.join("obs-modules").join("core");
     let plugin_dst = profile_dir.join("obs-plugins");
     let plugins = fs::read_dir(&plugin_src)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", plugin_src.display()));
@@ -442,9 +443,13 @@ fn build_linux() {
         }
     }
 
-    // share/obs/{libobs,obs-plugins/<p>} -> data/{libobs,obs-plugins/<p>}: the
-    // same data layout the Windows runtime has.
-    copy_dir_all(&rundir.join("share").join("obs"), &profile_dir.join("data"));
+    // share/obs/{libobs,obs-modules/core/<p>} -> data/{libobs,obs-plugins/<p>}
+    let share = rundir.join("share").join("obs");
+    copy_dir_all(&share.join("libobs"), &profile_dir.join("data").join("libobs"));
+    copy_dir_all(
+        &share.join("obs-modules").join("core"),
+        &profile_dir.join("data").join("obs-plugins"),
+    );
 
     linux::stage_ffmpeg_runtime(&bundle, &profile_dir);
 }
