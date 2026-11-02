@@ -211,7 +211,7 @@ namespace Prisc.Drawing.Graphics
 
         private sealed record InkForPaper(Color Paper, Color Ink);
 
-        private InkForPaper _ink;
+        [Transient] private InkForPaper _ink;
 
         /// <summary>
         /// The ink for a paper (<c>prisc_color_note_ink</c>): a deep shade of the paper's own hue

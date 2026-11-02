@@ -12,6 +12,7 @@ using Avalonia.Styling;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media;
 using Prisc.Drawing.Graphics;
+using Prisc.Drawing.History;
 using Prisc.Drawing.Rendering;
 using Prisc.Interop.Testing;
 using Xunit;
@@ -201,6 +202,33 @@ namespace Prisc.Drawing.Tests
             Assert.Equal(Color.FromRgb(0x59, 0x4A, 0x0D), note.TextColor);
             note.ObjectColor = Color.FromUInt32(0xFF302060);
             Assert.Equal(Color.FromRgb(0xD2, 0xC9, 0xED), note.TextColor);
+        }
+
+        [AvaloniaFact]
+        public void InkCache_IsNotSaved_AndASavedOneIsIgnored()
+        {
+            // the ink is a cache of the rule, not part of the note: it stays out of the document,
+            // the history and the clipboard, and one written by an earlier build is not trusted
+            InteropTestGate.Require();
+            var paper = Color.FromUInt32(0xFFFFF1B8);
+            var note = Make("x");
+            note.ObjectColor = paper;
+
+            // a repaint fills the cache; that is no change to the note
+            var map = GraphicFieldMap.For(typeof(GraphicStickyNote));
+            var before = map.Capture(note);
+            _ = note.TextColor;
+            Assert.Equal(before, map.Capture(note));
+            Assert.DoesNotContain(map.Slots, s => s.JsonName == "ink");
+
+            var json = JsonNode.Parse(GraphicsSerializer.SerializeToUtf8Bytes(new GraphicBase[] { note }))!.AsArray();
+            var obj = json[0]!.AsObject();
+            Assert.False(obj.ContainsKey("ink"));
+
+            obj["ink"] = new JsonObject { ["Paper"] = "#FFFFF1B8", ["Ink"] = "#FFFF0000" };
+            var r = Assert.IsType<GraphicStickyNote>(Assert.Single(GraphicsSerializer.DeserializeFromUtf8Bytes(Encoding.UTF8.GetBytes(json.ToJsonString()))));
+            Assert.Equal(paper, r.ObjectColor);
+            Assert.Equal(GraphicStickyNote.GetInk(paper), r.TextColor);
         }
 
         [AvaloniaFact]
