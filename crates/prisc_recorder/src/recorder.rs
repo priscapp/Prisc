@@ -493,8 +493,7 @@ impl Recorder {
         }
 
         // 6. Modules + sanity checks.
-        context.add_module_path(&paths.module_bin, &paths.module_data);
-        context.load_all_modules();
+        context.load_modules(&paths.module_bin, &paths.module_data);
         let encoder_types = prisc_obs::properties::enum_encoder_types();
         if encoder_types.is_empty() {
             fail(format_args!("No OBS encoders registered after module load — no usable plugins were found.\n  module \

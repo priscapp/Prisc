@@ -227,27 +227,20 @@ pub fn cursor_update_settings(show_cursor: bool) -> ObsData {
 }
 
 pub fn default_obs_paths(exe_dir: &Path) -> ObsPaths {
-    let module_bin = env::var("OBS_PLUGIN_PATH").unwrap_or_else(|_| {
-        exe_dir
-            .join("obs-plugins")
-            .join("64bit")
-            .to_string_lossy()
-            .into_owned()
-    });
-    let module_data_base = env::var("OBS_PLUGIN_DATA_PATH").unwrap_or_else(|_| {
-        exe_dir
-            .join("data")
-            .join("obs-plugins")
-            .to_string_lossy()
-            .into_owned()
-    });
+    // OBS 33's module layout: <exe dir>/core/<module>/<module>.dll, with the
+    // module's data in core/<module>/data.
+    let core = exe_dir.join("core").to_string_lossy().into_owned();
+    let module_bin =
+        env::var("OBS_PLUGIN_PATH").unwrap_or_else(|_| format!("{core}/%module%"));
+    let module_data = env::var("OBS_PLUGIN_DATA_PATH")
+        .map(|v| format!("{v}/%module%"))
+        .unwrap_or_else(|_| format!("{core}/%module%/data"));
     let libobs_data = env::var("OBS_DATA_PATH")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| exe_dir.join("data").join("libobs"));
     ObsPaths {
         module_bin,
-        // The %module% suffix is appended internally (§1.6).
-        module_data: format!("{module_data_base}/%module%"),
+        module_data,
         libobs_data: Some(libobs_data),
     }
 }

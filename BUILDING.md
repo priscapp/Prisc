@@ -177,7 +177,7 @@ any view that formats a gesture or reads an OS value, so build it before preview
 
 Screen recording runs in a separate process, `prisc_recorder`, a Rust front end over libobs. It and
 its helpers are GPL-2.0 (see `crates/prisc_recorder/LICENSE`) and only ever run as separate
-processes of the MIT app. libobs is compiled from the `crates/obs-studio` submodule (pinned to **32.2.2**),
+processes of the MIT app. libobs is compiled from the `crates/obs-studio` submodule (pinned to **33.0.1**),
 so this part needs a full native toolchain:
 
 - the submodule, recursively: `git submodule update --init --recursive` (or clone with
@@ -218,7 +218,7 @@ cargo recr                        # the same, --release
 
 The first build compiles libobs and takes 20–40 minutes; later builds reuse it. OBS derives its
 version from `git describe --tags`, and a submodule checkout usually has no tags, so the build
-passes the version itself (`OBS_VERSION_OVERRIDE`, default the pinned 32.2.2, sets it). On
+passes the version itself (`OBS_VERSION_OVERRIDE`, default the pinned 33.0.1, sets it). On
 Windows, OBS's child configures for the 32-bit helpers ignore that and still run `git describe`,
 so before configuring, the build script gives HEAD a local lightweight tag of that version when it
 has none. No manual tagging is needed, in CI or locally.
@@ -242,7 +242,7 @@ The build scripts stage the runtime next to the binaries:
 
 - **Windows** — `prisc_recorder.exe`, `prisc_share_region.exe` and `prisc_vid2gif.exe` plus
   `obs.dll`, the graphics/plugin DLLs, `obs-ffmpeg-mux.exe`, the FFmpeg & x264 runtime DLLs,
-  `obs-plugins/` and `data/` end up in `target/<profile>/`.
+  `core/` (OBS's per-module directories) and `data/` end up in `target/<profile>/`.
 - **Linux** — like Windows: `libobs.so.30`, `libobs-opengl.so.30`, the FFmpeg `.so` files,
   `obs-ffmpeg-mux`, `obs-plugins/*.so` and `data/` are copied into `target/<profile>/`, each with an
   `$ORIGIN`-relative RUNPATH. The executables also carry absolute RUNPATHs into the build tree, so

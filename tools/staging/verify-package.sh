@@ -33,7 +33,7 @@ if rid_has_ai "$rid"; then
 fi
 case "$rid" in
   win-*)
-    expected+=(recorder/obs.dll recorder/obs-plugins recorder/data/libobs)
+    expected+=(recorder/obs.dll recorder/core recorder/data/libobs)
     if rid_has_ai "$rid"; then expected+=(DirectML.dll); fi
     if [ "$ci" = 1 ]; then
       expected+=('PriscShellExt_*.dll' PriscShellExt.msix recorder/vcruntime140.dll)

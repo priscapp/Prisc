@@ -184,8 +184,7 @@ impl Mirror {
         // 6. Modules + display-capture sanity check. NOT obs_source_create !=
         //    null: libobs creates a placeholder source for unknown ids;
         //    get_display_name returns null exactly when unregistered.
-        context.add_module_path(&paths.module_bin, &paths.module_data);
-        context.load_all_modules();
+        context.load_modules(&paths.module_bin, &paths.module_data);
         let display_capture_c = CString::new(prisc_obs_platform::display_capture_id()).unwrap();
         let display_name =
             unsafe { prisc_obs_sys::obs_source_get_display_name(display_capture_c.as_ptr()) };

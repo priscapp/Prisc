@@ -178,7 +178,7 @@ impl std::fmt::Display for CaptureMethod {
     }
 }
 
-/// Paths handed to `obs_add_module_path` / `obs_add_data_path`. `module_bin` /
+/// Paths handed to `ObsContext::load_modules` / `obs_add_data_path`. `module_bin` /
 /// `module_data` are passed to libobs verbatim (they may contain the
 /// `%module%` template token).
 pub struct ObsPaths {

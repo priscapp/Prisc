@@ -74,8 +74,7 @@ fn list_cameras() -> Result<Vec<prisc_obs::properties::ListItem>, String> {
         })
         .map_err(|e| format!("Failed to reset OBS audio: {e}"))?;
 
-    context.add_module_path(&paths.module_bin, &paths.module_data);
-    context.load_all_modules();
+    context.load_modules(&paths.module_bin, &paths.module_data);
 
     // Registration check (same as Recorder::new).
     let source_id = platform::WEBCAM_SOURCE_ID;
