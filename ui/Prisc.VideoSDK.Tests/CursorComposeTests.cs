@@ -982,6 +982,27 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
+        public void Cursor_size_scales_the_release_animation()
+        {
+            // same geometry as Click_size_scales_the_release_animation, driven by Size instead
+            string capture = WriteCapture(Header, Frame(0, 32, 32),
+                MouseEvent("mu", 1000, 32, 32));
+            var (p, _, cursor) = CursorProject(capture, "none");
+            var content = (CursorContent)cursor.Content;
+            content.ClickAnimation = "ripple";
+
+            using var frames = new MultiStreamSource().Set(0, Blue, 64);
+            long at = (long)(1.2 * Sec);
+
+            content.Size = 0.5;
+            AssertColor(Px(Render(p, at, frames), 52, 32), 255, 0, 0, tolerance: 3);
+
+            content.Size = 1.0;
+            Assert.True(Px(Render(p, at, frames), 52, 32).R > 60,
+                "cursor size did not scale the release animation");
+        }
+
+        [Fact]
         public void Animation_speed_shortens_the_release_animation()
         {
             string capture = WriteCapture(Header, Frame(0, 32, 32),

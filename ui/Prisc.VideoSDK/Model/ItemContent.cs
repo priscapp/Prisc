@@ -538,7 +538,9 @@ public sealed class CursorContent : ItemContent
     public string Variant { get; set; }
 
     /// <summary>Size multiplier, validated to 0.25..5: over the style's base size for themed
-    /// glyphs, over the sprite's recorded pixel size for the <c>native</c> style.</summary>
+    /// glyphs, over the sprite's recorded pixel size for the <c>native</c> style. Also scales
+    /// the click highlight (held dot, release sweep, ring, press reach), with
+    /// <see cref="HoldSize"/>/<see cref="ClickSize"/> as further multipliers on top.</summary>
     public double Size { get; set; } = 1.0;
 
     /// <summary>Debounces the capture's Hidden/visible flicker: Windows hides the cursor while

@@ -564,6 +564,11 @@ namespace Prisc.VideoSDK.Composition
 
             var header = capture.Header;
             double monitorScale = CursorCompose.MonitorScaleAt(header, row.X, row.Y);
+            double cursorSize = cursor.Size > 0 ? cursor.Size : 1.0;
+            // the click highlights grow with the cursor: Size is "how big the pointer reads",
+            // and a 3x cursor wearing a 1x ripple looks like the ripple shrank. HoldSize and
+            // ClickSize stay relative multipliers on top of it.
+            double highlightScale = monitorScale * cursorSize;
 
             int save = target.Save();
             try
@@ -580,11 +585,11 @@ namespace Prisc.VideoSDK.Composition
                     && screenFrame.Image != null)
                 {
                     CursorCompose.DrawPressWarp(target, capture, map, imgW, imgH, row, sourceMs,
-                        TimelineOps.SpeedOf(media), cursor, monitorScale, opacity, screenFrame.Image);
+                        TimelineOps.SpeedOf(media), cursor, highlightScale, opacity, screenFrame.Image);
                 }
 
                 CursorCompose.DrawClickAnimations(target, capture, map, row, sourceMs,
-                    TimelineOps.SpeedOf(media), cursor, monitorScale, opacity);
+                    TimelineOps.SpeedOf(media), cursor, highlightScale, opacity);
 
                 if (string.Equals(cursor.Style, CursorAssets.NoneStyle, StringComparison.OrdinalIgnoreCase))
                 {
@@ -597,7 +602,7 @@ namespace Prisc.VideoSDK.Composition
                     {
                         CursorCompose.DrawNativeSprite(target, sprite, map,
                             row.X - header.RegionX, row.Y - header.RegionY,
-                            cursor.Size > 0 ? cursor.Size : 1.0, opacity);
+                            cursorSize, opacity);
                     }
                 }
                 else
@@ -609,8 +614,7 @@ namespace Prisc.VideoSDK.Composition
                         ?.FrameAt(timeTicks / (double)TimeSpan.TicksPerMillisecond);
                     if (glyph != null)
                     {
-                        double sizeSourcePx = (cursor.Size > 0 ? cursor.Size : 1.0)
-                            * CursorCompose.BaseCursorPx * monitorScale;
+                        double sizeSourcePx = cursorSize * CursorCompose.BaseCursorPx * monitorScale;
                         var pos = map.Map(row.X - header.RegionX, row.Y - header.RegionY);
                         CursorCompose.DrawGlyph(target, glyph, pos,
                             (float)(sizeSourcePx * map.ScaleX), item.Surround, opacity);
