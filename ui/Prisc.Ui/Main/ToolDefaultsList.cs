@@ -1,8 +1,7 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
-using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -158,23 +157,11 @@ namespace Prisc.UI.Config
             }, DispatcherPriority.Background);
         }
 
-        /// <summary>The "Reset all" button for the row this list sits under: enabled while any
-        /// tool differs from its default.</summary>
-        public Button CreateResetAllButton()
+        /// <summary>Every tool back to its default style, without asking: the caller is the
+        /// Image Editor section's header Reset (<see cref="SettingsGroupReset"/>), which has already
+        /// confirmed. Enabled there while <see cref="HasChanges"/>.</summary>
+        public void ResetAll()
         {
-            var button = new Button { Content = "Reset all…" };
-            button.Classes.Add("Danger");
-            button.Bind(IsEnabledProperty, this.GetObservable(HasChangesProperty));
-            button.Click += async (_, _) => await ResetAllAsync();
-            return button;
-        }
-
-        private async Task ResetAllAsync()
-        {
-            if (!await NiceDialog.ShowYesNoPromptAsync(this, NiceDialogIcon.Warning,
-                    "Reset every tool's saved color, line width and font back to the defaults? This cannot be undone."))
-                return;
-
             // in place, entry by entry: an open editor's property bar is bound to these instances
             foreach (var (tool, settings) in _editor.Tools.ToList())
                 settings?.ResetToDefault(tool);

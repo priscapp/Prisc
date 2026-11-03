@@ -262,6 +262,10 @@
     <!-- Material "flash" bolt -->
     <StreamGeometry x:Key="IconLightning">M7,2V13H10V22L17,10H13L17,2H7Z</StreamGeometry>
 
+    <!-- A filled backspace key with an X cut out of it (24px canvas): a settings group's Reset
+         button in the group header (SettingsGroupReset). Supplied by the user. -->
+    <StreamGeometry x:Key="IconResetGroup">M21,4H6.109c-0.69,0-1.331,0.355-1.696,0.94L0,12l4.412,7.06C4.778,19.645,5.419,20,6.109,20H21c1.105,0,2-0.895,2-2V6 C23,4.895,22.105,4,21,4z M17.707,15.293c0.391,0.391,0.391,1.023,0,1.414C17.512,16.902,17.256,17,17,17s-0.512-0.098-0.707-0.293 L13,13.414l-3.293,3.293C9.512,16.902,9.256,17,9,17s-0.512-0.098-0.707-0.293c-0.391-0.391-0.391-1.023,0-1.414L11.586,12 L8.293,8.707c-0.391-0.391-0.391-1.023,0-1.414s1.023-0.391,1.414,0L13,10.586l3.293-3.293c0.391-0.391,1.023-0.391,1.414,0 s0.391,1.023,0,1.414L14.414,12L17.707,15.293z</StreamGeometry>
+
     <!-- The power mark (an open ring under a bar), 24px canvas: what an "Off" mode wears on a
          settings page's mode banner (ModeSelector). Drawn as filled outlines rather than a stroke
          so it fills like every other glyph here: the ring is a 2px band of radius 7-9 about

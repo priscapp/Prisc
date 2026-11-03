@@ -20,6 +20,7 @@ using Avalonia.Styling;
 using Prisc.Config;
 using Prisc.UI.Controls;
 using Prisc.UI.Converters;
+using Prisc.UI.DrawOnScreen;
 using Prisc.UI.Helpers;
 
 namespace Prisc.UI.Config
@@ -145,11 +146,17 @@ namespace Prisc.UI.Config
             // even when declarations interleave.
             foreach (var group in rows.GroupBy(r => GetFirstAttributeOrDefault<CategoryAttribute>(r.Pd)?.Category ?? "Other"))
             {
+                // the header's Reset covers the rows of this section and nothing else
+                var reset = new SettingsGroupReset(group.Key);
                 var panel = NewRowsPanel();
                 foreach (var (owner, pd) in group)
-                    owner.AddRow(panel, pd);
+                    owner.AddRow(panel, pd, reset);
 
-                var box = new HeaderedContentControl { Header = group.Key, Content = panel };
+                var box = new HeaderedContentControl
+                {
+                    Header = reset.IsEmpty ? group.Key : reset.CreateHeader(),
+                    Content = panel,
+                };
                 var app = Application.Current;
                 if (app != null && app.TryGetResource("GroupBox", app.ActualThemeVariant, out var theme) && theme is ControlTheme groupBoxTheme)
                     box.Theme = groupBoxTheme;
@@ -242,30 +249,36 @@ namespace Prisc.UI.Config
             return new SettingsControlFactory(() => null, obj).BuildModeSelector(pd);
         }
 
-        private void AddRow(SettingsRowsPanel panel, PropertyDescriptor pd)
+        /// <param name="reset">The section's header Reset, which the row joins; null on a flat page.</param>
+        private void AddRow(SettingsRowsPanel panel, PropertyDescriptor pd, SettingsGroupReset reset = null)
         {
             var description = GetFirstAttributeOrDefault<DescriptionAttribute>(pd)?.Description;
 
             // the image editor's tool styles are a list too big for the editor column: it goes
-            // under the caption as a block of its own, and the row's editor is its "Reset all"
-            Control block = null, editor;
+            // under the caption as a block of its own, with the editor column left empty. The
+            // section header's Reset puts every tool back (the list's own rows reset one each).
+            Control block = null, editor = null;
+            Action<Control> joinReset;
             if (_obj is SettingsEditor editorSettings && pd.Name == nameof(SettingsEditor.Tools))
             {
                 var tools = new ToolDefaultsList(editorSettings);
                 block = tools;
-                editor = tools.CreateResetAllButton();
+                joinReset = row => reset?.AddCustom(() => !tools.HasChanges, tools.ResetAll, row,
+                    signal: tools, signalProperty: ToolDefaultsList.HasChangesProperty);
             }
             // ...and so is the keystroke style picker (the inspector's own control), which edits
-            // the style row together with its hidden theme and custom-look values
+            // the style row together with its hidden theme and custom-look values; its reset is
+            // DrawKeystrokeStyle's, which keeps the custom look for the next time Custom is picked
             else if (_obj is SettingsDrawOnScreen drawSettings && pd.Name == nameof(SettingsDrawOnScreen.KeystrokeStyle))
             {
-                var look = new DrawKeystrokeStylePanel(drawSettings);
-                block = look;
-                editor = look.CreateResetButton();
+                block = new DrawKeystrokeStylePanel(drawSettings);
+                joinReset = row => reset?.AddCustom(() => DrawKeystrokeStyle.IsDefault(drawSettings),
+                    () => DrawKeystrokeStyle.Reset(drawSettings), row, source: drawSettings);
             }
             else
             {
                 editor = GetRowForProperty(pd);
+                joinReset = row => reset?.AddProperty(_obj, pd, row);
             }
 
             // [DisabledWhen] rows stay visible but stop responding (and dim) while the bool they
@@ -329,6 +342,10 @@ namespace Prisc.UI.Config
 
             panel.Children.Add(rowLabel);
             panel.Children.Add(rowContent);
+
+            // the label's visibility is the row's ([VisibleWhen] below): a hidden row is neither
+            // reset nor counted as changed
+            joinReset(rowLabel);
 
             // the Border carries the gate for the editor inside it, so IsEnabled cascades.
             ApplyDisabledWhen(rowLabel);

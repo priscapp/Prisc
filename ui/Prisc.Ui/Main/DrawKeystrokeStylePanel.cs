@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -13,8 +13,8 @@ namespace Prisc.UI.Config
     /// the video editor's inspector shows (style tiles, theme tiles, custom editor), over
     /// <see cref="SettingsDrawOnScreen"/> through <see cref="DrawKeystrokeStyleHost"/>. The settings
     /// page builds it for the <see cref="SettingsDrawOnScreen.KeystrokeStyle"/> row, as a block under
-    /// the row's caption (it is far too big for the editor column), with
-    /// <see cref="CreateResetButton"/> as the row's editor.
+    /// the row's caption (it is far too big for the editor column). Resetting it is the section
+    /// header's job (<see cref="SettingsGroupReset"/> over <see cref="DrawKeystrokeStyle.Reset"/>).
     /// </summary>
     /// <remarks>
     /// The settings object outlives every settings window, so it is watched only while this block
@@ -29,7 +29,6 @@ namespace Prisc.UI.Config
         private readonly SettingsDrawOnScreen _settings;
         private readonly DrawKeystrokeStyleHost _host;
         private readonly KeystrokeStyleEditor _editor;
-        private Button _reset;
 
         public DrawKeystrokeStylePanel(SettingsDrawOnScreen settings)
         {
@@ -43,18 +42,6 @@ namespace Prisc.UI.Config
 
         /// <summary>The editor the picker is bound to (for tests and callers that drive it).</summary>
         public KeystrokeStyleEditor Editor => _editor;
-
-        /// <summary>The row's editor: back to the default style and theme, enabled while either
-        /// differs. The custom look is kept (see <see cref="DrawKeystrokeStyle.Reset"/>), so it needs
-        /// no confirmation.</summary>
-        public Button CreateResetButton()
-        {
-            _reset = new Button { Content = "Reset" };
-            ToolTip.SetTip(_reset, "Back to the Default style in the Dark theme. Your custom look is kept for the next time you pick Custom.");
-            _reset.Click += (_, _) => DrawKeystrokeStyle.Reset(_settings);
-            UpdateReset();
-            return _reset;
-        }
 
         /// <summary>As wide as the page allows up to <see cref="MaxBlockWidth"/>, left-aligned like
         /// the rows above it. The tiles would otherwise ask only for their content's width (a Left
@@ -77,7 +64,6 @@ namespace Prisc.UI.Config
             base.OnAttachedToVisualTree(e);
             _settings.PropertyChanged += OnSettingsPropertyChanged;
             _editor.Refresh();
-            UpdateReset();
         }
 
         protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
@@ -94,18 +80,10 @@ namespace Prisc.UI.Config
                 or nameof(SettingsDrawOnScreen.KeystrokeCustom)))
                 return;
 
-            UpdateReset();
-
             // the picker's own write re-reads once it is done; refreshing mid-write would show the
             // half-written state (the look already seeded, the style not yet custom)
             if (!_host.IsWriting)
                 _editor.Refresh();
-        }
-
-        private void UpdateReset()
-        {
-            if (_reset != null)
-                _reset.IsEnabled = !DrawKeystrokeStyle.IsDefault(_settings);
         }
     }
 }

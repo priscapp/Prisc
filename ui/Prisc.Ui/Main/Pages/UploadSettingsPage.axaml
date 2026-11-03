@@ -1,4 +1,4 @@
-<UserControl
+﻿<UserControl
     xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:conv="using:Prisc.UI.Converters"
@@ -103,7 +103,8 @@
                 <!-- The page's own options, framed like the groups on the System page
                      (HeaderedContentControl + Semi's keyed GroupBox theme); the provider list below
                      is the page's real subject and stays unframed. -->
-                <HeaderedContentControl Header="Upload Options"
+                <HeaderedContentControl x:Name="OptionsGroup"
+                                        Header="Upload Options"
                                         Margin="0,0,0,12"
                                         Theme="{StaticResource GroupBox}">
                     <StackPanel Classes="SettingsGroup">

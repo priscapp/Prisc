@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -47,6 +47,13 @@ namespace Prisc.UI.Pages
             _transferBar.Bind(IsVisibleProperty, new Binding(nameof(SettingsUpload.IsEnabled)) { Source = SettingsRoot.Current.Uploads });
 
             InitializeContextMenu();
+
+            // the header's Reset covers the two options; providers, their defaults and their
+            // credentials are not part of it (a slip there would lose an account's sign-in)
+            var reset = new SettingsGroupReset("Upload Options");
+            reset.AddProperty(SettingsRoot.Current.Uploads, nameof(SettingsUpload.WrapDangerousUploadsInZip));
+            reset.AddProperty(SettingsRoot.Current.General, nameof(SettingsGeneral.RegisterExplorerContextMenu), ContextMenuCheck);
+            OptionsGroup.Header = reset.CreateHeader();
         }
 
         // ---- "Upload with Prisc" shell entry ----

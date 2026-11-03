@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
@@ -26,6 +26,34 @@ namespace Prisc.UI.Pages
             InitializeAutoStart();
             InitializePermissions();
             InitializeAccent();
+            InitializeGroupResets();
+        }
+
+        /// <summary>The Appearance and Behavior headers' Reset buttons (the generated pages'
+        /// <see cref="SettingsGroupReset"/>), over the settings each group shows. Runs after the
+        /// platform checks above, which hide the rows that do not apply here; a hidden row is left
+        /// alone by its group's reset. Permissions has none: it reports OS state, not settings.</summary>
+        private void InitializeGroupResets()
+        {
+            var general = SettingsRoot.Current.General;
+
+            var appearance = new SettingsGroupReset("Appearance");
+            appearance.AddProperty(general, nameof(SettingsGeneral.Theme));
+            appearance.AddProperty(general, nameof(SettingsGeneral.ExtendIntoTitleBar), ExtendTitleBarSetting);
+            appearance.AddProperty(general, nameof(SettingsGeneral.UseSystemAccentColor), SystemAccentSetting);
+            appearance.AddProperty(general, nameof(SettingsGeneral.AccentColor), AccentColorSetting);
+            appearance.AddProperty(general, nameof(SettingsGeneral.MaintainMinimumContrast));
+            AppearanceGroup.Header = appearance.CreateHeader();
+
+            var behavior = new SettingsGroupReset("Behavior");
+            // where auto-start is unsupported the box is disabled, and its value means nothing
+            if (AutoStartManager.IsSupported)
+                behavior.AddProperty(general, nameof(SettingsGeneral.RegisterAutoStart));
+            behavior.AddProperty(general, nameof(SettingsGeneral.ConfirmClose));
+            behavior.AddProperty(general, nameof(SettingsGeneral.TrayClick));
+            behavior.AddProperty(general, nameof(SettingsGeneral.ShortcutClick));
+            behavior.AddProperty(general, nameof(SettingsGeneral.HideFromScreenCapture));
+            BehaviorGroup.Header = behavior.CreateHeader();
         }
 
         // ---- Accent color (Appearance group) ----

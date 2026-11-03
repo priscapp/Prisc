@@ -1,4 +1,4 @@
-<UserControl
+﻿<UserControl
     xmlns="https://github.com/avaloniaui"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:controls="using:Prisc.UI.Controls"
@@ -102,7 +102,7 @@
                 </StackPanel>
             </HeaderedContentControl>
 
-            <HeaderedContentControl Header="Appearance" Theme="{StaticResource GroupBox}">
+            <HeaderedContentControl x:Name="AppearanceGroup" Header="Appearance" Theme="{StaticResource GroupBox}">
                 <StackPanel Classes="SettingsGroup">
                     <StackPanel Classes="Setting">
                         <StackPanel Classes="SettingRow">
@@ -173,7 +173,7 @@
                     </StackPanel>
                 </StackPanel>
             </HeaderedContentControl>
-            <HeaderedContentControl Header="Behavior" Theme="{StaticResource GroupBox}">
+            <HeaderedContentControl x:Name="BehaviorGroup" Header="Behavior" Theme="{StaticResource GroupBox}">
                 <StackPanel Classes="SettingsGroup">
                     <StackPanel Classes="Setting">
                         <CheckBox x:Name="AutoStartCheck" IsChecked="{Binding RegisterAutoStart}">

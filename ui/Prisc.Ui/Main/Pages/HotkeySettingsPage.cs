@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
@@ -83,7 +83,13 @@ namespace Prisc.UI.Pages
         private static void AddSection(SettingsRowsPanel panel, HotkeySection section, HotkeyManager manager,
             SettingsHotkey settings, PropertyDescriptorCollection properties, bool first)
         {
-            var header = SectionHeader(section.Title);
+            // the section's Reset puts its actions back to their default shortcuts, through the
+            // entries like any other edit (saved, re-registered, and taken from whichever other
+            // action held one meanwhile)
+            var reset = new SettingsGroupReset(section.Title);
+            var defaults = new SettingsHotkey();
+
+            var header = SectionHeader(section.Title, reset.CreateButton());
             header.Margin = new Thickness(0, first ? 0 : 20, 4, 2);
             SettingsRowsPanel.SetRole(header, SettingsRowsPanel.Role.Block);
             panel.Children.Add(header);
@@ -133,6 +139,10 @@ namespace Prisc.UI.Pages
                         label.Opacity = editor.IsEmpty ? EmptyLabelOpacity : 1;
                 };
 
+                var defaultGestures = (GestureList)pd.GetValue(defaults);
+                reset.AddCustom(() => entry.Gestures.Equals(defaultGestures), () => entry.Gestures = defaultGestures,
+                    label, source: entry);
+
                 panel.Children.Add(label);
                 panel.Children.Add(editor);
                 SettingsControlFactory.BindVisibleWhen(label, settings, pd);
@@ -146,21 +156,28 @@ namespace Prisc.UI.Pages
         /// GroupBox: a page of short rows reads as one list, broken up rather than boxed in. The
         /// title is half of every row's name ("Draw" / "On Screen"), so it is set in full-strength
         /// text, not the muted caption color.</summary>
-        private static Control SectionHeader(string title)
+        private static Control SectionHeader(string title, Button reset)
         {
             var text = new TextBlock
             {
                 Text = title,
                 FontSize = 14,
                 FontWeight = FontWeight.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
             };
             text.Bind(TextBlock.ForegroundProperty, text.GetResourceObservable("SemiColorText0"));
+
+            // the generated pages' header Reset, at the far end of the title line
+            var titleRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+            titleRow.Children.Add(text);
+            Grid.SetColumn(reset, 1);
+            titleRow.Children.Add(reset);
 
             var rule = new Rectangle { Height = 1, HorizontalAlignment = HorizontalAlignment.Stretch };
             rule.Bind(Shape.FillProperty, rule.GetResourceObservable("SemiColorBorder"));
 
             var stack = new StackPanel { Orientation = Orientation.Vertical, Spacing = 6 };
-            stack.Children.Add(text);
+            stack.Children.Add(titleRow);
             stack.Children.Add(rule);
             return stack;
         }

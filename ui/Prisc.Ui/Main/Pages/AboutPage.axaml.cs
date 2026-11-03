@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -72,6 +72,16 @@ namespace Prisc.UI.Pages
             UpdatesGroup.DataContext = SettingsRoot.Current.General;
             BindEnumCombo(UpdateIntervalCombo, nameof(SettingsGeneral.UpdateCheckInterval), typeof(UpdateInterval));
             InitializeUpdateGroup();
+
+            // the header's Reset (as on every settings group) covers the update options only; the
+            // check button and status above them are not settings
+            var general = SettingsRoot.Current.General;
+            var reset = new SettingsGroupReset("Updates");
+            reset.AddProperty(general, nameof(SettingsGeneral.AutoDownloadUpdates));
+            reset.AddProperty(general, nameof(SettingsGeneral.UpdateCheckInterval));
+            reset.AddProperty(general, nameof(SettingsGeneral.AutoApplyUpdates));
+            reset.AddProperty(general, nameof(SettingsGeneral.IncludePrereleaseUpdates));
+            UpdatesGroup.Header = reset.CreateHeader();
         }
 
         // ---- Updates group ----
