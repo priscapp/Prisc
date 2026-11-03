@@ -322,9 +322,14 @@ namespace Prisc.UI.VideoEditor
             {
                 if (e.PropertyName == nameof(SelectedItemViewModel.CropModeActive))
                     preview.Gizmo.CropMode = Inspector.CropModeActive;
+                else if (e.PropertyName == nameof(SelectedItemViewModel.CropDrawActive))
+                    SyncCropDraw();
                 else if (e.PropertyName == nameof(SelectedItemViewModel.AspectUnlocked))
                     preview.Gizmo.FreeResize = Inspector.AspectUnlocked;
             };
+
+            // a finished crop drag lands in the inspector, which owns the write and the mode
+            preview.CropDraw.Drawn += (_, result) => Inspector.ApplyDrawnCrop(result);
 
             btnMute.Click += (_, _) => ToggleMute();
             btnTimelineCollapse.Click += (_, _) => ToggleTimelineVisible();
@@ -1557,8 +1562,40 @@ namespace Prisc.UI.VideoEditor
                 KeyBindings.Add(meta);
         }
 
+        /// <summary>Follows the inspector's "Draw crop" toggle onto the preview. Entering the mode
+        /// pauses playback (a crop is drawn on a still picture) and, when the playhead is not on
+        /// the item, brings it to the item's first frame so there is something to draw on.</summary>
+        private void SyncCropDraw()
+        {
+            var item = Inspector.CropDrawActive ? _editor?.PrimarySelectedItem : null;
+            preview.CropDrawItemId = item?.Id ?? Guid.Empty;
+            if (item == null)
+                return;
+
+            if (_player?.State == PlayerState.Playing)
+                _player.Pause();
+
+            long position = preview.PositionTicks;
+            if (position < item.TimelineStartTicks || position >= item.TimelineEndTicks)
+                SeekTo(item.TimelineStartTicks);
+
+            // the drag surface takes the keyboard, so Escape reaches it (and this window) rather
+            // than the toggle that was just clicked in the sidebar
+            preview.CropDraw.Focus();
+        }
+
         private void OnTunnelKeyDown(object sender, KeyEventArgs e)
         {
+            // Escape leaves "Draw crop" from anywhere, putting the crop the item had back; a drag in
+            // flight on the surface is dropped by the same press.
+            if (e.Key == Key.Escape && Inspector.CropDrawActive && _editor?.IsGestureActive != true)
+            {
+                preview.CropDraw.Reset();
+                Inspector.CropDrawActive = false;
+                e.Handled = true;
+                return;
+            }
+
             // Escape leaves crop mode from anywhere — checked ahead of the guards below because
             // the crop toggle itself lives in the sidebar. A drag in progress keeps its own
             // Escape (the gizmo/timeline cancel the drag; a second press then exits the mode).

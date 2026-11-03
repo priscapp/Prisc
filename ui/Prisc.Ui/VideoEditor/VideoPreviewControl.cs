@@ -38,6 +38,12 @@ namespace Prisc.UI.VideoEditor
         private EditorSession _session;
         private Project _project;
 
+        /// <summary>While a crop is being drawn: the item it is drawn on, and the isolated copy of
+        /// <see cref="_project"/> the picture is composed from instead (see
+        /// <see cref="CropDrawMath.BuildIsolatedProject"/>). Empty / null otherwise.</summary>
+        private Guid _cropDrawItemId;
+        private Project _cropDrawProject;
+
         /// <summary>Whether the current snapshot holds a looping wallpaper on a visible row — the
         /// preview's repaint gate for the playhead (see <see cref="PositionTicks"/>).</summary>
         private bool _animatedBackground;
@@ -71,12 +77,14 @@ namespace Prisc.UI.VideoEditor
             Gizmo = new TransformGizmoControl();
             ZoomFocus = new ZoomFocusControl();
             ShapeHandles = new ShapeHandlesControl();
+            CropDraw = new CropDrawControl { IsVisible = false };
 
             Children.Add(_surface);
             Children.Add(PosterImage);
             Children.Add(Gizmo);
             Children.Add(ZoomFocus);
             Children.Add(ShapeHandles); // on top: its handles may sit past the video rect's edge
+            Children.Add(CropDraw);     // over everything: while it is up it owns every press
 
             PointerPressed += OnCanvasPressed;
         }
@@ -98,6 +106,34 @@ namespace Prisc.UI.VideoEditor
         /// shown (over the whole preview, in place of the gizmo) while one is selected with the
         /// playhead inside its span: a line's geometry is its endpoints, not a box.</summary>
         public ShapeHandlesControl ShapeHandles { get; }
+
+        /// <summary>The "Draw crop" surface, up (over the whole preview) only while
+        /// <see cref="CropDrawItemId"/> names an item.</summary>
+        public CropDrawControl CropDraw { get; }
+
+        /// <summary>
+        /// The item a crop is being drawn on, or <see cref="Guid.Empty"/> for the normal preview.
+        /// While set, the picture is composed from an isolated copy of the project — that item's row
+        /// alone, unzoomed, its whole source picture shown — the gizmo and the other overlays stand
+        /// down, and <see cref="CropDraw"/> takes the presses. Pure view state: nothing in the
+        /// project changes until a drag finishes.
+        /// </summary>
+        public Guid CropDrawItemId
+        {
+            get => _cropDrawItemId;
+            set
+            {
+                if (_cropDrawItemId == value)
+                    return;
+
+                _cropDrawItemId = value;
+                _cropDrawProject = CropDrawMath.BuildIsolatedProject(_project, value);
+                CropDraw.Reset();
+                CropDraw.IsVisible = value != Guid.Empty;
+                InvalidateArrange();
+                RequestRender();
+            }
+        }
 
         /// <summary>The letterboxed video rectangle from the last arrange, in local coordinates.</summary>
         public Rect VideoRect { get; private set; }
@@ -217,6 +253,8 @@ namespace Prisc.UI.VideoEditor
         public void SetProject(Project project)
         {
             _project = project;
+            _cropDrawProject = _cropDrawItemId == Guid.Empty ? null
+                : CropDrawMath.BuildIsolatedProject(project, _cropDrawItemId);
             // read once per snapshot rather than per playhead move: every edit hands us a fresh
             // project, so this is exactly as current as the picture is
             _animatedBackground = BackgroundCatalog.ProjectHasAnimatedBackground(project);
@@ -341,7 +379,9 @@ namespace Prisc.UI.VideoEditor
                 base.Render(context);
 
                 var player = _owner._player;
-                var project = _owner._project;
+                // drawing a crop composes the isolated copy; an item that has gone (an undo under
+                // the mode) falls back to the whole project rather than a blank frame
+                var project = _owner._cropDrawProject ?? _owner._project;
                 if (player == null || project == null)
                     return;
 
@@ -409,6 +449,10 @@ namespace Prisc.UI.VideoEditor
 
             ShapeHandles.CanvasRect = videoRect;
             ShapeHandles.Arrange(ResolveShapeHandlesRect(finalSize, videoRect));
+
+            CropDraw.CanvasRect = videoRect;
+            ResolveCropDrawTarget(videoRect);
+            CropDraw.Arrange(_cropDrawItemId != Guid.Empty ? full : new Rect(0, 0, 0, 0));
 
             return finalSize;
         }
@@ -501,7 +545,7 @@ namespace Prisc.UI.VideoEditor
         {
             var empty = new Rect(0, 0, 0, 0);
             var session = _session;
-            if (session == null || videoRect.Width <= 0 || videoRect.Height <= 0)
+            if (session == null || videoRect.Width <= 0 || videoRect.Height <= 0 || _cropDrawItemId != Guid.Empty)
             {
                 Gizmo.SetTarget(Guid.Empty, default);
                 return empty;
@@ -566,7 +610,7 @@ namespace Prisc.UI.VideoEditor
         {
             var empty = new Rect(0, 0, 0, 0);
             var session = _session;
-            if (session == null || videoRect.Width <= 0 || videoRect.Height <= 0)
+            if (session == null || videoRect.Width <= 0 || videoRect.Height <= 0 || _cropDrawItemId != Guid.Empty)
             {
                 ZoomFocus.SetTarget(Guid.Empty);
                 return empty;
@@ -616,7 +660,7 @@ namespace Prisc.UI.VideoEditor
         {
             var empty = new Rect(0, 0, 0, 0);
             var session = _session;
-            if (session == null || videoRect.Width <= 0 || videoRect.Height <= 0)
+            if (session == null || videoRect.Width <= 0 || videoRect.Height <= 0 || _cropDrawItemId != Guid.Empty)
             {
                 ShapeHandles.SetTarget(Guid.Empty);
                 return empty;
@@ -651,6 +695,34 @@ namespace Prisc.UI.VideoEditor
 
             ShapeHandles.SetTarget(item.Id);
             return new Rect(finalSize);
+        }
+
+        /// <summary>
+        /// Hands the crop surface the rectangle the drag is drawn against this pass: where the
+        /// isolated project composes the item (its whole picture, upright and unzoomed — the very
+        /// copy the picture is drawn from, so the outline lands on the pixels), or nothing while the
+        /// playhead is outside the item. The ratio a drag is held to comes from the LIVE item: the
+        /// isolated copy has its preset stripped so the whole source shows.
+        /// </summary>
+        private void ResolveCropDrawTarget(Rect videoRect)
+        {
+            var project = _cropDrawProject;
+            var item = project?.Items.Find(i => i.Id == _cropDrawItemId);
+            var ticks = ComposedTicks(project);
+            if (item == null || videoRect.Width <= 0 || videoRect.Height <= 0 ||
+                ticks < item.TimelineStartTicks || ticks >= item.TimelineEndTicks ||
+                !ItemPlacement.TryResolve(project, item, videoRect.Width, videoRect.Height, out var placed, ticks))
+            {
+                CropDraw.SetTarget(default, null);
+                return;
+            }
+
+            double? aspect = null;
+            var live = _session?.Project?.Items.Find(i => i.Id == _cropDrawItemId);
+            if (live?.Transform?.Aspect is > 0 and var ratio)
+                aspect = ratio;
+
+            CropDraw.SetTarget(new Rect(videoRect.X + placed.X, videoRect.Y + placed.Y, placed.W, placed.H), aspect);
         }
     }
 }

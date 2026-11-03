@@ -1006,10 +1006,36 @@
                             ToolTip.Tip="{Binding CropWindowTip}" />
                     </DockPanel>
 
+                    <!--  draw the crop on the preview instead of typing it: the selected row is
+                          shown alone, unzoomed and uncropped, and a drag across it sets all four
+                          insets. Manual mode only - a followed window owns the region.  -->
+                    <ToggleButton
+                        x:Name="btnDrawCrop"
+                        Margin="0,4,0,2"
+                        HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Center"
+                        IsChecked="{Binding CropDrawActive, Mode=TwoWay}"
+                        IsVisible="{Binding ShowCropDraw}"
+                        ToolTip.Tip="Drag a rectangle on the preview to crop to it (Esc cancels)">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Path
+                                Width="14"
+                                Height="14"
+                                VerticalAlignment="Center"
+                                Data="{StaticResource CropIconManual}"
+                                Fill="{Binding $parent[ToggleButton].Foreground}"
+                                Stretch="Uniform" />
+                            <TextBlock VerticalAlignment="Center" Text="Draw crop" />
+                        </StackPanel>
+                    </ToggleButton>
+
                     <!--  the insets are offered in both modes: with a window followed they are
                           read as fractions OF THE WINDOW, which is how a title bar gets cut off
                           and stays off as the window moves. See ShowCropInsets.  -->
-                    <DockPanel Classes="row" IsVisible="{Binding ShowCropInsets}">
+                    <DockPanel
+                        Classes="row"
+                        IsEnabled="{Binding CropInsetsEditable}"
+                        IsVisible="{Binding ShowCropInsets}">
                         <Panel Classes="dot" DockPanel.Dock="Left">
                             <controls:ResetDefaultButton CurrentValue="{Binding CropLeft, Mode=TwoWay}" DefaultValue="0" />
                         </Panel>
@@ -1023,7 +1049,10 @@
                             Value="{Binding CropLeft, Mode=TwoWay}" />
                     </DockPanel>
 
-                    <DockPanel Classes="row" IsVisible="{Binding ShowCropInsets}">
+                    <DockPanel
+                        Classes="row"
+                        IsEnabled="{Binding CropInsetsEditable}"
+                        IsVisible="{Binding ShowCropInsets}">
                         <Panel Classes="dot" DockPanel.Dock="Left">
                             <controls:ResetDefaultButton CurrentValue="{Binding CropTop, Mode=TwoWay}" DefaultValue="0" />
                         </Panel>
@@ -1037,7 +1066,10 @@
                             Value="{Binding CropTop, Mode=TwoWay}" />
                     </DockPanel>
 
-                    <DockPanel Classes="row" IsVisible="{Binding ShowCropInsets}">
+                    <DockPanel
+                        Classes="row"
+                        IsEnabled="{Binding CropInsetsEditable}"
+                        IsVisible="{Binding ShowCropInsets}">
                         <Panel Classes="dot" DockPanel.Dock="Left">
                             <controls:ResetDefaultButton CurrentValue="{Binding CropRight, Mode=TwoWay}" DefaultValue="0" />
                         </Panel>
@@ -1051,7 +1083,10 @@
                             Value="{Binding CropRight, Mode=TwoWay}" />
                     </DockPanel>
 
-                    <DockPanel Classes="row" IsVisible="{Binding ShowCropInsets}">
+                    <DockPanel
+                        Classes="row"
+                        IsEnabled="{Binding CropInsetsEditable}"
+                        IsVisible="{Binding ShowCropInsets}">
                         <Panel Classes="dot" DockPanel.Dock="Left">
                             <controls:ResetDefaultButton CurrentValue="{Binding CropBottom, Mode=TwoWay}" DefaultValue="0" />
                         </Panel>

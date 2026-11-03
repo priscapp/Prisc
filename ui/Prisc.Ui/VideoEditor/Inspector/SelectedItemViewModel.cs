@@ -551,6 +551,7 @@ namespace Prisc.UI.VideoEditor.Inspector
         private double _customAspectW = 16;
         private double _customAspectH = 9;
         private bool _cropModeActive;
+        private bool _cropDrawActive;
 
         private bool _maskSquare = true;
         private bool _maskCircle;
@@ -1285,6 +1286,108 @@ namespace Prisc.UI.VideoEditor.Inspector
         /// item had.</summary>
         public bool ShowAspect => _showCrop && !_cropFollowsWindow;
 
+        /// <summary>The "Draw crop" toggle: offered on a croppable picture while its crop is set by
+        /// hand. A followed window owns the region, so there is nothing to draw then.</summary>
+        public bool ShowCropDraw => _showCrop && !_cropFollowsWindow;
+
+        /// <summary>The inset spinners stand still while a crop is being drawn: they read zero then
+        /// (the whole picture is on show), and a typed value would race the drag that is about to
+        /// replace all four.</summary>
+        public bool CropInsetsEditable => !_cropDrawActive;
+
+        /// <summary>
+        /// True while the preview is in "Draw crop" mode: the selected item's row is shown alone,
+        /// unzoomed and uncropped, and a drag across it sets all four insets at once
+        /// (<see cref="ApplyDrawnCrop"/>). Pure UI state, like <see cref="CropModeActive"/>: the
+        /// spinners read zero for the duration but nothing is written until the drag lands, so
+        /// leaving the mode any other way (Escape, the toggle, a new selection) puts the crop the
+        /// item had straight back. Cleared whenever the selection changes.
+        /// </summary>
+        public bool CropDrawActive
+        {
+            get => _cropDrawActive;
+            set
+            {
+                if (value && !ShowCropDraw)
+                {
+                    // a toggle the guard refused still has to bounce back
+                    OnPropertyChanged(nameof(CropDrawActive));
+                    return;
+                }
+                if (_cropDrawActive == value)
+                    return;
+
+                _cropDrawActive = value;
+                if (value)
+                    CropModeActive = false; // the gizmo's crop drag and this are two ways to one end
+
+                OnPropertyChanged(nameof(CropDrawActive));
+                OnPropertyChanged(nameof(CropInsetsEditable));
+                SyncCropInsets(SelectedItem);
+            }
+        }
+
+        /// <summary>Writes the insets a crop drag produced (fractions of the whole picture) as one
+        /// undo entry, and leaves the mode. An item on the Unlocked tile has its explicit height
+        /// re-fitted to the drawn region's shape, so the cut shows undistorted; an aspect preset
+        /// needs nothing, because the drag was already held to its ratio.</summary>
+        public void ApplyDrawnCrop(CropDrawResult result)
+        {
+            if (!_cropDrawActive || SelectedItem == null)
+                return;
+
+            double l = Clamp(result.Left, 0, MaxCropInset);
+            double t = Clamp(result.Top, 0, MaxCropInset);
+            double r = Clamp(result.Right, 0, MaxCropInset);
+            double b = Clamp(result.Bottom, 0, MaxCropInset);
+            double regionHw = result.RegionHeightOverWidth;
+            double canvasHw = result.CanvasHeightOverWidth;
+
+            // the mode ends first, so the echo of the write below re-reads the real insets
+            _cropDrawActive = false;
+            OnPropertyChanged(nameof(CropDrawActive));
+            OnPropertyChanged(nameof(CropInsetsEditable));
+
+            EditRow("sel:cropdraw", i =>
+            {
+                SetCrop(i, c =>
+                {
+                    c.Left = l;
+                    c.Top = t;
+                    c.Right = r;
+                    c.Bottom = b;
+                });
+
+                var transform = TransformOf(i);
+                if (transform.ScaleY != null && transform.Aspect == null && regionHw > 0 && canvasHw > 0)
+                    transform.ScaleY = Clamp(transform.Scale * regionHw / canvasHw, MinScale, MaxScale);
+            }, origin: null);
+
+            // a write that changed nothing raises no echo; re-read so the spinners leave zero
+            SyncCropInsets(SelectedItem);
+        }
+
+        /// <summary>The four inset spinners from the model — or all zero while a crop is being
+        /// drawn, the whole picture being what is on show then.</summary>
+        private void SyncCropInsets(Item item)
+        {
+            bool wasSyncing = _syncing;
+            _syncing = true;
+            try
+            {
+                var crop = _cropDrawActive ? new CropRect() : item?.Transform?.Crop ?? new CropRect();
+                Set(ref _cropLeft, crop.Left, nameof(CropLeft));
+                Set(ref _cropTop, crop.Top, nameof(CropTop));
+                Set(ref _cropRight, crop.Right, nameof(CropRight));
+                Set(ref _cropBottom, crop.Bottom, nameof(CropBottom));
+                OnPropertyChanged(nameof(CropTotal));
+            }
+            finally
+            {
+                _syncing = wasSyncing;
+            }
+        }
+
         /// <summary>The windows this recording tracked, ours filtered out, in the order it first
         /// saw them. Empty for every selection the selector is not offered on. The same instance is
         /// returned while the sidecar path is unchanged, so moving the selection between two items
@@ -1385,6 +1488,7 @@ namespace Prisc.UI.VideoEditor.Inspector
             // the gizmo's crop drag is a conversation about the four insets, which this mode has
             // none of (mirrors the non-croppable clear in Sync)
             CropModeActive = false;
+            CropDrawActive = false;
 
             int id = pick.Id;
             string title = pick.Title;
@@ -1406,6 +1510,7 @@ namespace Prisc.UI.VideoEditor.Inspector
             OnPropertyChanged(nameof(ShowCropInsets));
             OnPropertyChanged(nameof(ShowCropWindow));
             OnPropertyChanged(nameof(ShowAspect));
+            OnPropertyChanged(nameof(ShowCropDraw));
             OnPropertyChanged(nameof(AspectFitEnabled));
             OnPropertyChanged(nameof(CropWindow));
             OnPropertyChanged(nameof(CropWindowTip));
@@ -3490,6 +3595,7 @@ namespace Prisc.UI.VideoEditor.Inspector
         {
             // crop mode is a conversation about one item; a new selection ends it.
             CropModeActive = false;
+            CropDrawActive = false;
             // so is the recorder's settings mode, which is about the take the user is *about* to
             // record: picking a clip means they want that clip's properties back.
             HideVoiceRecorderSettings();
@@ -3571,7 +3677,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 Set(ref _showRotation, visual && item.Content is not KeyboardContent && !isLineShape,
                     nameof(ShowRotation));
                 Set(ref _showMask, isPicture, nameof(ShowMask));
-                Set(ref _showCrop, isCroppable, nameof(ShowCrop));
+                Set(ref _showCrop, isCroppable, nameof(ShowCrop), nameof(ShowCropDraw));
                 Set(ref _showText, isText, nameof(ShowText));
                 Set(ref _showAudio, isAudio, nameof(ShowAudio));
                 // an obscure box animates by fading the obscuring itself (a ramp of its own value,
@@ -3784,12 +3890,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 Set(ref _cornerRadius, mask?.CornerRadius ?? _rememberedCornerRadius, nameof(CornerRadius));
                 OnPropertyChanged(nameof(ShowCornerRadius));
 
-                var crop = transform.Crop ?? new CropRect();
-                Set(ref _cropLeft, crop.Left, nameof(CropLeft));
-                Set(ref _cropTop, crop.Top, nameof(CropTop));
-                Set(ref _cropRight, crop.Right, nameof(CropRight));
-                Set(ref _cropBottom, crop.Bottom, nameof(CropBottom));
-                OnPropertyChanged(nameof(CropTotal));
+                SyncCropInsets(item);
 
                 // the picker's list and its pick are published in that order and nowhere else:
                 // the entries are matched by reference, so raising the pick first would resolve it
@@ -3798,9 +3899,12 @@ namespace Prisc.UI.VideoEditor.Inspector
 
                 SyncAspect(item);
 
-                // crop mode only means anything while a croppable picture is selected
+                // crop mode only means anything while a croppable picture is selected, and
+                // drawing one only while its crop is set by hand
                 if (!isCroppable)
                     CropModeActive = false;
+                if (!ShowCropDraw)
+                    CropDrawActive = false;
 
                 if (item?.Content is TextContent text)
                 {

@@ -1,7 +1,8 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
+using Prisc.UI.VideoEditor;
 using Prisc.UI.VideoEditor.Inspector;
 using Prisc.VideoSDK.Composition;
 using Prisc.VideoSDK.Editing;
@@ -676,6 +677,90 @@ namespace Prisc.VideoSDK.Tests
             Assert.Null(Live(session, webcamA.Id).Transform.Crop);
             Assert.Null(Live(session, webcamB.Id).Transform.Crop);
             Assert.Equal(before, session.Project.ToJson());
+        }
+
+        [Fact]
+        public void CropDraw_ShowsZeroWritesNothingUntilTheDragLands()
+        {
+            var (session, vm) = NewInspector(out _, out var webcamA, out var webcamB, out _, out _);
+            session.Select(webcamA.Id);
+            vm.CropLeft = 0.2;
+            vm.CropTop = 0.1;
+            var before = session.Project.ToJson();
+
+            Assert.True(vm.ShowCropDraw);
+            vm.CropDrawActive = true;
+
+            // the spinners read the whole picture, but the project still holds the old crop
+            Assert.True(vm.CropDrawActive);
+            Assert.False(vm.CropInsetsEditable);
+            Assert.Equal(0, vm.CropLeft);
+            Assert.Equal(0, vm.CropTop);
+            Assert.Equal(before, session.Project.ToJson());
+
+            vm.ApplyDrawnCrop(new CropDrawResult(0.25, 0.125, 0.05, 0.3, 0.5, 0.5625));
+
+            Assert.False(vm.CropDrawActive);
+            Assert.True(vm.CropInsetsEditable);
+            Assert.Equal(0.25, vm.CropLeft);
+            Assert.Equal(0.3, vm.CropBottom);
+            foreach (var id in new[] { webcamA.Id, webcamB.Id })
+            {
+                var crop = Live(session, id).Transform.Crop;
+                Assert.Equal(0.25, crop.Left);
+                Assert.Equal(0.125, crop.Top);
+                Assert.Equal(0.05, crop.Right);
+                Assert.Equal(0.3, crop.Bottom);
+                // no explicit height to re-fit: the box follows the region by itself
+                Assert.Null(Live(session, id).Transform.ScaleY);
+            }
+
+            // one drag, one undo entry, straight back to the crop the item had
+            session.Undo();
+            Assert.Equal(before, session.Project.ToJson());
+        }
+
+        [Fact]
+        public void CropDraw_LeavingTheModeRestoresTheSpinners()
+        {
+            var (session, vm) = NewInspector(out _, out var webcamA, out _, out _, out var text);
+            session.Select(webcamA.Id);
+            vm.CropRight = 0.3;
+            var before = session.Project.ToJson();
+
+            vm.CropDrawActive = true;
+            Assert.Equal(0, vm.CropRight);
+            vm.CropDrawActive = false;
+            Assert.Equal(0.3, vm.CropRight);
+
+            // a new selection ends it too, and nothing was written either way
+            vm.CropDrawActive = true;
+            session.Select(text.Id);
+            Assert.False(vm.CropDrawActive);
+            Assert.Equal(before, session.Project.ToJson());
+
+            // and it is not offered on content that has no crop at all
+            Assert.False(vm.ShowCropDraw);
+            vm.CropDrawActive = true;
+            Assert.False(vm.CropDrawActive);
+        }
+
+        [Fact]
+        public void CropDraw_RefitsAnUnlockedItemsHeightToTheRegion()
+        {
+            var (session, vm) = NewInspector(out _, out var webcamA, out _, out _, out _);
+            session.Select(webcamA.Id);
+            session.EditItem(webcamA.Id, i =>
+            {
+                i.Transform.Scale = 0.5;
+                i.Transform.ScaleY = 0.9;
+            }, origin: null);
+
+            vm.CropDrawActive = true;
+            // a square region on a 16:9 canvas: the box must come out square on screen too
+            vm.ApplyDrawnCrop(new CropDrawResult(0.1, 0.1, 0.1, 0.1, 1.0, 1080.0 / 1920.0));
+
+            Assert.Equal(0.5 * 1920.0 / 1080.0, Live(session, webcamA.Id).Transform.ScaleY.Value, 6);
         }
 
         /// <summary>The crop row's reset dot: writing 0 into CropTotal removes the crop from every
