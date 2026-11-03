@@ -75,6 +75,33 @@ namespace Prisc.Config
     }
 
     /// <summary>
+    /// The custom keystroke look, the SDK's <c>Prisc.VideoSDK.Model.KeystrokeLook</c> property for
+    /// property (same names, same meaning, same units), mapped by name inside Prisc.Ui: this
+    /// assembly does not reference the SDK. Shape values are fractions — the keycap's five of its
+    /// outer height, the four track values of the row height — and are clamped when drawn, never
+    /// here, so a hand-edited file still loads. Colors persist as <c>#AARRGGBB</c> like every other
+    /// settings color. A record, so an edit that changes nothing raises nothing.
+    /// </summary>
+    public sealed record DrawKeystrokeLook
+    {
+        public double OuterRadius { get; set; }
+        public double TopRadius { get; set; }
+        public double PaddingX { get; set; }
+        public double PaddingY { get; set; }
+        public double Drop { get; set; }
+        public double KeyTrackPadding { get; set; }
+        public double KeyTrackRadius { get; set; }
+        public double TypingPadding { get; set; }
+        public double TypingRadius { get; set; }
+        public Color TypingTrackColor { get; set; }
+        public Color TypingTextColor { get; set; }
+        public Color KeyTrackColor { get; set; }
+        public Color KeyTopColor { get; set; }
+        public Color KeyOuterColor { get; set; }
+        public Color KeyTextColor { get; set; }
+    }
+
+    /// <summary>
     /// Settings for Draw on Screen, and for the keystroke overlay its toolbar's keyboard button
     /// turns on. The keystroke rows are the video editor's keyboard track drawn live, so the
     /// settings are that track's KEYSTROKES, placement and ANIMATION inspector rows with the same
@@ -215,24 +242,44 @@ namespace Prisc.Config
             set => Set(ref _pauseBreakMs, value);
         }
 
-        [Category("Keystrokes")]
+        /// <summary>The keystroke style: one of the video editor's keyboard-track style ids
+        /// (<c>default</c>, <c>laptop</c>, <c>simple</c>, <c>custom</c>; the SDK's
+        /// <c>KeystrokeStyles</c>), mapped inside Prisc.Ui. A string rather than an enum because the
+        /// ids are the SDK's wire contract: an id this build does not know (a newer build's style)
+        /// draws the default instead of failing the whole settings file. Its row is the shared
+        /// keystroke style picker, built by the settings page itself, which edits
+        /// <see cref="KeystrokeTheme"/> and <see cref="KeystrokeCustom"/> with it.</summary>
+        [Category("Keystroke style")]
         [VisibleWhen(nameof(Mode), DrawOnScreenMode.On)]
-        [DisplayName("Text")]
-        [Description("Color of typed text.")]
-        public Color TextColor
+        [DisplayName("Look")]
+        [Description("How pressed keys and typed text look. Pick a style and a theme, or Custom to start from the look you were on and change any part of it.")]
+        public string KeystrokeStyle
         {
-            get => _textColor;
-            set => Set(ref _textColor, value);
+            get => _keystrokeStyle;
+            set => Set(ref _keystrokeStyle, value);
         }
 
-        [Category("Keystrokes")]
-        [VisibleWhen(nameof(Mode), DrawOnScreenMode.On)]
-        [DisplayName("Fill")]
-        [Description("Background behind typed text.")]
-        public Color FillColor
+        /// <summary>The theme the preset styles are drawn in: one of the SDK's
+        /// <c>KeystrokeStyles.Themes</c> ids (<c>dark</c>, <c>light</c>, <c>pink</c>...). The custom
+        /// style carries its own colors and ignores it. Edited by the style picker, so not a row of
+        /// its own.</summary>
+        [Browsable(false)]
+        public string KeystrokeTheme
         {
-            get => _fillColor;
-            set => Set(ref _fillColor, value);
+            get => _keystrokeTheme;
+            set => Set(ref _keystrokeTheme, value);
+        }
+
+        /// <summary>The custom style's look, null until the custom style was first picked (it is
+        /// then seeded from the preset and theme on screen). Kept when another style is picked, so
+        /// the user's own look survives trips through the presets. Replaced whole on every edit,
+        /// never changed in place, so this object raises the change.</summary>
+        [Browsable(false)]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public DrawKeystrokeLook KeystrokeCustom
+        {
+            get => _keystrokeCustom;
+            set => Set(ref _keystrokeCustom, value);
         }
 
         [Category("Keystroke animation")]
@@ -320,8 +367,9 @@ namespace Prisc.Config
         private int _fontSize = 40;
         private int _lingerMs = 1000;
         private int _pauseBreakMs = 1000;
-        private Color _textColor = Color.FromUInt32(0xFFFFFFFF);
-        private Color _fillColor = Color.FromUInt32(0x8C000000);
+        private string _keystrokeStyle = "default";
+        private string _keystrokeTheme = "dark";
+        private DrawKeystrokeLook _keystrokeCustom;
         private DrawKeystrokeAnimation _entryKind = DrawKeystrokeAnimation.SlideUp;
         private int _entryDurationMs = 300;
         private DrawKeystrokeEasing _entryEasing = DrawKeystrokeEasing.CubicInOut;

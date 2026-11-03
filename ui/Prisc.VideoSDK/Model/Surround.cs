@@ -45,7 +45,7 @@ public sealed class Surround
 
     /// <summary>White at 75%: a halo that lifts the item off whatever is behind it. Translucent
     /// because a glow reads as light, and the alpha is <i>in</i> the color (see
-    /// <see cref="KeyboardContent.DefaultBackgroundColor"/> for the same trade).</summary>
+    /// the keystroke overlay's typing track for the same trade).</summary>
     public const uint DefaultGlowColor = 0xC0FFFFFF;
 
     public const uint DefaultOutlineColor = 0xFFFFFFFF;

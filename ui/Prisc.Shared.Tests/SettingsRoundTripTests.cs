@@ -73,7 +73,9 @@ namespace Prisc.Shared.Tests
             original.DrawOnScreen.Region = DrawKeystrokeRegion.TopRight;
             original.DrawOnScreen.Margin = 12;
             original.DrawOnScreen.ShowKeystrokes = true;
-            original.DrawOnScreen.FillColor = Color.FromArgb(0x33, 0x01, 0x02, 0x03);
+            original.DrawOnScreen.KeystrokeStyle = "custom";
+            original.DrawOnScreen.KeystrokeTheme = "pink";
+            original.DrawOnScreen.KeystrokeCustom = SampleKeystrokeLook();
             original.DrawOnScreen.EntryKind = DrawKeystrokeAnimation.None;
 
             // Color ("#AARRGGBB")
@@ -127,7 +129,9 @@ namespace Prisc.Shared.Tests
             Assert.Equal(DrawKeystrokeRegion.TopRight, loaded.DrawOnScreen.Region);
             Assert.Equal(12, loaded.DrawOnScreen.Margin);
             Assert.True(loaded.DrawOnScreen.ShowKeystrokes);
-            Assert.Equal(Color.FromArgb(0x33, 0x01, 0x02, 0x03), loaded.DrawOnScreen.FillColor);
+            Assert.Equal("custom", loaded.DrawOnScreen.KeystrokeStyle);
+            Assert.Equal("pink", loaded.DrawOnScreen.KeystrokeTheme);
+            Assert.Equal(SampleKeystrokeLook(), loaded.DrawOnScreen.KeystrokeCustom);
             Assert.Equal(DrawKeystrokeAnimation.None, loaded.DrawOnScreen.EntryKind);
             Assert.False(loaded.DrawOnScreen.EntryAnimates);
 
@@ -928,6 +932,98 @@ namespace Prisc.Shared.Tests
             Assert.Null(HotkeyGesture.Parse(""));
             Assert.Null(HotkeyGesture.Parse("NotAKey"));
             Assert.Equal(new HotkeyGesture(HotkeyKey.None), HotkeyGesture.Parse("None"));
+        }
+
+        /// <summary>A custom keystroke look with every member off its default: fractions that need
+        /// the invariant culture to round-trip, and colors whose alpha must survive.</summary>
+        private static DrawKeystrokeLook SampleKeystrokeLook() => new()
+        {
+            OuterRadius = 0.17,
+            TopRadius = 0.125,
+            PaddingX = 0.09,
+            PaddingY = 0.055,
+            Drop = 0.105,
+            KeyTrackPadding = 0.1,
+            KeyTrackRadius = 0.2,
+            TypingPadding = 0.285,
+            TypingRadius = 0.3,
+            TypingTrackColor = Color.FromUInt32(0x8C000000),
+            TypingTextColor = Color.FromUInt32(0xFFFFFFFF),
+            KeyTrackColor = Color.FromUInt32(0x00000000),
+            KeyTopColor = Color.FromUInt32(0xFFDD5D8F),
+            KeyOuterColor = Color.FromUInt32(0xFFBD507A),
+            KeyTextColor = Color.FromUInt32(0x80112233),
+        };
+
+        [Fact]
+        public void DrawOnScreenKeystrokeStyle_DefaultsToDefaultDark_WithNoCustomLook()
+        {
+            // the keyboard track's defaults (KeystrokeStyles.DefaultStyle/DefaultTheme), so a live
+            // overlay and a fresh track look alike; the custom look is only seeded on first pick
+            var loaded = SettingsService.Load(_path);
+
+            Assert.Equal("default", loaded.DrawOnScreen.KeystrokeStyle);
+            Assert.Equal("dark", loaded.DrawOnScreen.KeystrokeTheme);
+            Assert.Null(loaded.DrawOnScreen.KeystrokeCustom);
+
+            // and a never-seeded look is left out of the file rather than written as null
+            SettingsService.Save(new SettingsRoot(), _path);
+            Assert.DoesNotContain(nameof(SettingsDrawOnScreen.KeystrokeCustom), File.ReadAllText(_path));
+            Assert.Null(SettingsService.Load(_path).DrawOnScreen.KeystrokeCustom);
+        }
+
+        [Fact]
+        public void DrawOnScreen_LegacyKeystrokeTextAndFill_AreIgnoredOnLoad_AndDroppedOnSave()
+        {
+            // before keystroke styles the page had plain Text/Fill colors; they are gone, and a file
+            // that still carries them must load (the rest of the section with it) with the new
+            // defaults, then lose them on the next save
+            Directory.CreateDirectory(Path.GetDirectoryName(_path));
+            File.WriteAllText(_path, """
+                {
+                  "DrawOnScreen": {
+                    "Margin": 12,
+                    "TextColor": "#FF00FF00",
+                    "FillColor": "#33010203"
+                  }
+                }
+                """);
+
+            var loaded = SettingsService.Load(_path);
+
+            Assert.Equal(12, loaded.DrawOnScreen.Margin);
+            Assert.Equal("default", loaded.DrawOnScreen.KeystrokeStyle);
+            Assert.Equal("dark", loaded.DrawOnScreen.KeystrokeTheme);
+            Assert.Null(loaded.DrawOnScreen.KeystrokeCustom);
+
+            SettingsService.Save(loaded, _path);
+            var json = File.ReadAllText(_path);
+            Assert.DoesNotContain("\"TextColor\"", json);
+            Assert.DoesNotContain("\"FillColor\"", json);
+        }
+
+        [Fact]
+        public void DrawOnScreen_UnknownKeystrokeIds_LoadAsWritten()
+        {
+            // style and theme are the SDK's wire ids, stored as strings so a newer build's id
+            // neither fails the file nor is rewritten: Prisc.Ui resolves it to the default when drawing
+            Directory.CreateDirectory(Path.GetDirectoryName(_path));
+            File.WriteAllText(_path, """
+                {
+                  "DrawOnScreen": {
+                    "KeystrokeStyle": "from-a-newer-build",
+                    "KeystrokeTheme": "chartreuse",
+                    "KeystrokeCustom": { "Drop": 0.3, "KeyTopColor": "#FF123456" }
+                  }
+                }
+                """);
+
+            var loaded = SettingsService.Load(_path);
+
+            Assert.Equal("from-a-newer-build", loaded.DrawOnScreen.KeystrokeStyle);
+            Assert.Equal("chartreuse", loaded.DrawOnScreen.KeystrokeTheme);
+            Assert.Equal(0.3, loaded.DrawOnScreen.KeystrokeCustom.Drop);
+            Assert.Equal(Color.FromUInt32(0xFF123456), loaded.DrawOnScreen.KeystrokeCustom.KeyTopColor);
         }
     }
 }

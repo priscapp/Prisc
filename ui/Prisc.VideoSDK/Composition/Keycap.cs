@@ -1,59 +1,89 @@
 using System;
+using Prisc.VideoSDK.Model;
 using SkiaSharp;
 
 namespace Prisc.VideoSDK.Composition
 {
     /// <summary>
-    /// The keycap half of the keystroke overlay: one 3D cap — a dark rounded face sitting on a
-    /// black rounded seat that peeks out below it — its legend, and the vector icons the familiar
-    /// wide keys carry. Every icon is an <see cref="SKPath"/> on purpose: the overlay draws with
-    /// the platform default typeface, and the symbols these keys want (⇧ ↵ ⌫ ⇥) are exactly the
-    /// glyphs a default typeface is likely to be missing, which renders as a tofu box.
+    /// The keycap half of the keystroke overlay: one parametric cap — an outer key with a key top
+    /// inset into it (<see cref="KeystrokeLook"/>'s padding and drop), both rounded — its legend,
+    /// and the vector icons the familiar wide keys carry. Every icon is an <see cref="SKPath"/> on
+    /// purpose: the overlay draws with the platform default typeface, and the symbols these keys
+    /// want (⇧ ↵ ⌫ ⇥) are exactly the glyphs a default typeface is likely to be missing, which
+    /// renders as a tofu box.
     ///
     /// The cap's whole vertical footprint fits inside one row of
-    /// <see cref="FrameComposer.KeyboardMetrics"/>, so a row of caps measures the same as a row of
-    /// text and the editor's gizmo stays truthful.
+    /// <see cref="KeystrokeRenderer.KeyboardMetrics"/> — the row less the key track padding top
+    /// and bottom — so a row of caps measures the same as a row of text whatever the look, and
+    /// the editor's gizmo stays truthful.
     /// </summary>
     internal sealed class Keycap : IDisposable
     {
-        private static readonly SKColor FaceColor = new SKColor(0x3D, 0x3D, 0x3D);
-        private static readonly SKColor SeatColor = SKColors.Black;
-        private static readonly SKColor LegendColor = SKColors.White;
-
         private readonly SKFont _centered;
         private readonly SKFont _legend;
+        private readonly KeystrokeLook _look;
 
-        public Keycap(SKTypeface typeface, float fontPx, float rowHeight)
+        /// <param name="look">An already clamped look (<see cref="KeystrokeLook.Clamped"/>).</param>
+        public Keycap(SKTypeface typeface, float fontPx, float rowHeight, KeystrokeLook look)
         {
-            Inset = fontPx * 0.06f;
-            BaseDrop = Math.Max(1f, fontPx * 0.10f);
-            Height = Math.Max(1f, rowHeight - 2 * Inset - BaseDrop);
-            Radius = Height * 0.22f;
-            PadX = fontPx * 0.24f;
-            PadY = fontPx * 0.16f;
-            IconSize = Height * 0.40f;
+            _look = look;
+            TrackPadding = (float)(look.KeyTrackPadding * rowHeight);
+            OuterHeight = Math.Max(1f, rowHeight - 2 * TrackPadding);
+            float h = OuterHeight;
+            OuterRadius = (float)(look.OuterRadius * h);
+            TopRadius = (float)(look.TopRadius * h);
+            // a hairline rim (Simple's) would antialias away at small sizes and leave borderless
+            // swatches, so any non-zero padding is at least one pixel — measured through Width
+            // below, so measuring and drawing still agree
+            PadX = RimPx(look.PaddingX, h);
+            PadY = RimPx(look.PaddingY, h);
+            // like the original seat (at least a pixel), a drop never vanishes at small sizes
+            Drop = look.Drop > 0 ? Math.Max(1f, (float)(look.Drop * h)) : 0f;
+            TopHeight = Math.Max(1f, h - 2 * PadY - Drop);
+
+            LegendPadX = fontPx * 0.24f;
+            LegendPadY = Math.Min(fontPx * 0.16f, TopHeight * 0.12f);
+            IconSize = TopHeight * 0.40f;
 
             // legends are smaller than the typing they sit beside, as they are on a real keyboard
-            _centered = new SKFont(typeface, fontPx * 0.78f) { Subpixel = true };
-            _legend = new SKFont(typeface, fontPx * 0.60f) { Subpixel = true };
+            // — and never taller than a shallow key top can carry
+            _centered = new SKFont(typeface, Math.Min(fontPx * 0.78f, TopHeight * 0.62f)) { Subpixel = true };
+            _legend = new SKFont(typeface, Math.Min(fontPx * 0.60f, TopHeight * 0.42f)) { Subpixel = true };
         }
 
-        /// <summary>Height of the cap face — the seat adds <see cref="BaseDrop"/> below it.</summary>
-        public float Height { get; }
+        /// <summary>A padding fraction of the outer height <paramref name="h"/> in px: 0 stays 0, any
+        /// other value is at least one pixel (or <see cref="KeystrokeLook.MaxPadding"/> of a key
+        /// too small for that).</summary>
+        private static float RimPx(double fraction, float h)
+        {
+            float px = (float)(fraction * h);
+            return fraction > 0 ? Math.Max(px, Math.Min(1f, h * (float)KeystrokeLook.MaxPadding)) : px;
+        }
 
-        /// <summary>How far the black seat sticks out under the face: the whole 3D of the thing.</summary>
-        public float BaseDrop { get; }
+        /// <summary>Space between the key track's edge and the caps on it, in px — horizontally as
+        /// well as vertically (see <see cref="KeystrokeLook.KeyTrackPadding"/>).</summary>
+        public float TrackPadding { get; }
 
-        /// <summary>The cap's full vertical footprint, face and seat together.</summary>
-        public float TotalHeight => Height + BaseDrop;
+        /// <summary>The cap's full vertical footprint, outer key included.</summary>
+        public float OuterHeight { get; }
 
-        private float Inset { get; }
+        /// <summary>Height of the key top.</summary>
+        public float TopHeight { get; }
 
-        private float Radius { get; }
+        /// <summary>The visible outer key under the key top, beyond the even rim.</summary>
+        public float Drop { get; }
+
+        private float OuterRadius { get; }
+
+        private float TopRadius { get; }
 
         private float PadX { get; }
 
         private float PadY { get; }
+
+        private float LegendPadX { get; }
+
+        private float LegendPadY { get; }
 
         private float IconSize { get; }
 
@@ -70,41 +100,44 @@ namespace Prisc.VideoSDK.Composition
         /// legend, and spelling "Left" on a square cap reads worse than the arrow does.</summary>
         private static bool IsArrow(string label) => label is "Up" or "Down" or "Left" or "Right";
 
-        public float Width(string label)
+        /// <summary>The cap's full width, outer key included: the key top's own width (square at
+        /// least, wider for a wide key or a long legend) plus the rim either side.</summary>
+        public float Width(string label) => TopWidth(label) + 2 * PadX;
+
+        private float TopWidth(string label)
         {
-            if (string.IsNullOrEmpty(label))
-                return Height;
-            if (IsArrow(label))
-                return Height;
+            if (string.IsNullOrEmpty(label) || IsArrow(label))
+                return TopHeight;
             if (IsWide(label))
-                return Math.Max(Height * 1.7f, _legend.MeasureText(label) + IconSize + 3 * PadX);
-            return Math.Max(Height, _centered.MeasureText(label) + 2 * PadX);
+                return Math.Max(TopHeight * 1.7f, _legend.MeasureText(label) + IconSize + 3 * LegendPadX);
+            return Math.Max(TopHeight, _centered.MeasureText(label) + 2 * LegendPadX);
         }
 
         /// <summary>Draws the cap with its left edge at <paramref name="left"/>, its footprint
-        /// centered on <paramref name="centerY"/>.</summary>
+        /// centered on <paramref name="centerY"/>: the outer key, the key top inset into it, then
+        /// the legend and icon on the key top.</summary>
         public void Draw(SKCanvas canvas, string label, float left, float centerY, double alpha)
         {
             float width = Width(label);
-            float top = centerY - TotalHeight / 2;
-            var face = new SKRect(left, top, left + width, top + Height);
-            var seat = new SKRect(left, top + BaseDrop, left + width, top + Height + BaseDrop);
+            float top = centerY - OuterHeight / 2;
+            var outer = new SKRect(left, top, left + width, top + OuterHeight);
+            var face = new SKRect(outer.Left + PadX, outer.Top + PadY,
+                outer.Right - PadX, outer.Top + PadY + TopHeight);
 
-            using var paint = new SKPaint { IsAntialias = true };
+            using var paint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Fill };
 
-            paint.Style = SKPaintStyle.Fill;
-            paint.Color = Fade(SeatColor, alpha);
-            using (var rr = new SKRoundRect(seat, Radius, Radius))
+            paint.Color = Fade(new SKColor(_look.KeyOuterColor), alpha);
+            using (var rr = new SKRoundRect(outer, OuterRadius, OuterRadius))
                 canvas.DrawRoundRect(rr, paint);
 
-            paint.Color = Fade(FaceColor, alpha);
-            using (var rr = new SKRoundRect(face, Radius, Radius))
+            paint.Color = Fade(new SKColor(_look.KeyTopColor), alpha);
+            using (var rr = new SKRoundRect(face, TopRadius, TopRadius))
                 canvas.DrawRoundRect(rr, paint);
 
-            var ink = Fade(LegendColor, alpha);
+            var ink = Fade(new SKColor(_look.KeyTextColor), alpha);
             if (IsArrow(label))
             {
-                float size = Height * 0.55f;
+                float size = TopHeight * 0.55f;
                 DrawIcon(canvas, label, new SKRect(
                     face.MidX - size / 2, face.MidY - size / 2,
                     face.MidX + size / 2, face.MidY + size / 2), ink);
@@ -115,11 +148,11 @@ namespace Prisc.VideoSDK.Composition
             {
                 paint.Color = ink;
                 var metrics = _legend.Metrics;
-                canvas.DrawText(label, face.Left + PadX, face.Bottom - PadY - metrics.Descent,
+                canvas.DrawText(label, face.Left + LegendPadX, face.Bottom - LegendPadY - metrics.Descent,
                     SKTextAlign.Left, _legend, paint);
                 DrawIcon(canvas, label, new SKRect(
-                    face.Right - PadX - IconSize, face.Top + PadY * 0.7f,
-                    face.Right - PadX, face.Top + PadY * 0.7f + IconSize), ink);
+                    face.Right - LegendPadX - IconSize, face.Top + LegendPadY * 0.7f,
+                    face.Right - LegendPadX, face.Top + LegendPadY * 0.7f + IconSize), ink);
                 return;
             }
 

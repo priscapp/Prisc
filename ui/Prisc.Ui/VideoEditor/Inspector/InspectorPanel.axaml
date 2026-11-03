@@ -525,6 +525,9 @@
         <Style Selector="insp|InspectorPanel[IsModern=True] RadioButton:checked TextBlock.tileText">
             <Setter Property="Foreground" Value="{DynamicResource SemiColorText0}" />
         </Style>
+        <Style Selector="insp|InspectorPanel[IsModern=True] controls|KeystrokeStylePicker">
+            <Setter Property="IsModern" Value="True" />
+        </Style>
         <Style Selector="insp|InspectorPanel[IsModern=True] ListBoxItem:selected insp|CursorStylePreview">
             <Setter Property="OutlineBrush" Value="{DynamicResource SemiColorText0}" />
         </Style>
@@ -2189,10 +2192,9 @@
                 </StackPanel>
 
                 <!--  keystroke overlay: how big the keys read, how long a run stays, when the next
-                      row starts, and the typing pill's own colors (the keycaps a special key
-                      draws keep their fixed livery). How a row arrives and leaves is the ANIMATION
-                      section below; where the block sits and how wide it wraps is placement,
-                      above.  -->
+                      row starts, and how the keys and the typing look (style/theme/custom). How a
+                      row arrives and leaves is the ANIMATION section below; where the block sits
+                      and how wide it wraps is placement, above.  -->
                 <StackPanel Classes="section" IsVisible="{Binding ShowKeyboardTrack}">
                     <DockPanel>
                         <TextBlock Classes="section" Text="KEYSTROKES" />
@@ -2253,74 +2255,11 @@
                             Value="{Binding KeyboardPauseBreakMs, Mode=TwoWay}" />
                     </DockPanel>
 
-                    <!--  the two color wells share the text card's picker (see the code-behind)  -->
-                    <DockPanel Classes="row">
-                        <Panel Classes="dot" DockPanel.Dock="Left">
-                            <controls:ResetDefaultButton CurrentValue="{Binding KeyboardTextColorHex, Mode=TwoWay}" DefaultValue="#FFFFFFFF" />
-                        </Panel>
-                        <TextBlock Classes="label" Text="Text" />
-                        <Border
-                            x:Name="keyTextColorWell"
-                            Margin="6,0,0,0"
-                            HorizontalAlignment="Right"
-                            Classes="well"
-                            BorderThickness="1"
-                            Cursor="Hand">
-                            <StackPanel
-                                Margin="6,0,0,0"
-                                HorizontalAlignment="Left"
-                                Orientation="Horizontal"
-                                Spacing="6">
-                                <Border
-                                    Width="14"
-                                    Height="14"
-                                    VerticalAlignment="Center"
-                                    BorderBrush="White"
-                                    BorderThickness="1">
-                                    <Rectangle x:Name="keyTextColorSwatch" Fill="White" />
-                                </Border>
-                                <TextBlock
-                                    x:Name="txtKeyTextColorHex"
-                                    VerticalAlignment="Center"
-                                    Classes="dim"
-                                    Text="#FFFFFFFF" />
-                            </StackPanel>
-                        </Border>
-                    </DockPanel>
-
-                    <DockPanel Classes="row">
-                        <Panel Classes="dot" DockPanel.Dock="Left">
-                            <controls:ResetDefaultButton CurrentValue="{Binding KeyboardBackColorHex, Mode=TwoWay}" DefaultValue="#8C000000" />
-                        </Panel>
-                        <TextBlock Classes="label" Text="Fill" />
-                        <Border
-                            x:Name="keyBackColorWell"
-                            Margin="6,0,0,0"
-                            HorizontalAlignment="Right"
-                            Classes="well"
-                            BorderThickness="1"
-                            Cursor="Hand">
-                            <StackPanel
-                                Margin="6,0,0,0"
-                                HorizontalAlignment="Left"
-                                Orientation="Horizontal"
-                                Spacing="6">
-                                <Border
-                                    Width="14"
-                                    Height="14"
-                                    VerticalAlignment="Center"
-                                    BorderBrush="White"
-                                    BorderThickness="1">
-                                    <Rectangle x:Name="keyBackColorSwatch" Fill="Black" />
-                                </Border>
-                                <TextBlock
-                                    x:Name="txtKeyBackColorHex"
-                                    VerticalAlignment="Center"
-                                    Classes="dim"
-                                    Text="#8C000000" />
-                            </StackPanel>
-                        </Border>
-                    </DockPanel>
+                    <!--  the look: style tiles, theme tiles, the custom editor — the shared picker
+                          Draw on Screen's settings page shows too, over the row's KeyboardContent
+                          (SelectedItemViewModel.KeystrokeStyle). It styles itself; the chrome is
+                          handed on below.  -->
+                    <controls:KeystrokeStylePicker x:Name="keystrokeStylePicker" Margin="0,8,0,0" DataContext="{Binding KeystrokeStyle}" />
                 </StackPanel>
 
                 <!--  effect: what is applied to the item's OWN pixels — the name the SURROUND

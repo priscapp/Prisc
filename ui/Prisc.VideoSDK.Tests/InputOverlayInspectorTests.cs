@@ -1,5 +1,6 @@
-using System;
+﻿using System;
 using System.Linq;
+using Prisc.UI.Controls;
 using Prisc.UI.VideoEditor.Inspector;
 using Prisc.VideoSDK.Composition;
 using Prisc.VideoSDK.Editing;
@@ -487,32 +488,222 @@ namespace Prisc.VideoSDK.Tests
             });
         }
 
+        // ------------------------------------------------------------- keystroke style picker
+
+        private static KeystrokeNumberRow NumberRow(SelectedItemViewModel vm, string label) =>
+            vm.KeystrokeStyle.AllRows.OfType<KeystrokeNumberRow>().First(r => r.Label == label);
+
+        private static KeystrokeColorRow KeyColorRow(SelectedItemViewModel vm, string label) =>
+            vm.KeystrokeStyle.KeyRows.OfType<KeystrokeColorRow>().First(r => r.Label == label);
+
+        private static KeystrokeColorRow TypingColorRow(SelectedItemViewModel vm, string label) =>
+            vm.KeystrokeStyle.TypingRows.OfType<KeystrokeColorRow>().First(r => r.Label == label);
+
+        private static KeystrokeStyleOption StyleOption(string id) =>
+            KeystrokeStyleEditor.StyleOptions.First(o => o.Value == id);
+
+        private static KeystrokeStyleOption ThemeOption(string id) =>
+            KeystrokeStyleEditor.ThemeOptions.First(o => o.Value == id);
+
         [Fact]
-        public void KeyboardColorWells_WriteTheWholeRow()
+        public void KeystrokeStyle_AFreshItemReadsDefaultDark()
         {
             var (session, vm) = NewInspector(out _);
             var keys = session.AddKeyboardTrack();
             session.Select(keys.Id);
 
-            Assert.Equal(SelectedItemViewModel.DefaultKeyboardTextColorHex, vm.KeyboardTextColorHex);
-            Assert.Equal(SelectedItemViewModel.DefaultKeyboardBackColorHex, vm.KeyboardBackColorHex);
+            var editor = vm.KeystrokeStyle;
+            Assert.True(editor.HasTarget);
+            Assert.Equal(KeystrokeStyles.Default, editor.SelectedStyle.Value);
+            Assert.Equal(KeystrokeStyles.Dark, editor.SelectedTheme.Value);
+            Assert.True(editor.IsPreset);
+            Assert.False(editor.IsCustom);
+            // the Custom tile shows what picking it would start from: the preset on screen
+            Assert.Equal(KeystrokeStyles.Preset(KeystrokeStyles.Default, KeystrokeStyles.Dark), editor.CustomTileLook);
+            Assert.Equal(KeystrokeStyles.Styles, KeystrokeStyleEditor.StyleOptions.Select(o => o.Value));
+            Assert.Contains(KeystrokeStyleEditor.ThemeOptions, o => o.Value == KeystrokeStyles.Light);
+        }
 
-            vm.KeyboardTextColorHex = "#FF11AA33";
-            vm.KeyboardBackColorHex = "#402244FF";
+        [Fact]
+        public void KeystrokeStyle_StyleAndThemeWriteTheWholeRow()
+        {
+            var (session, vm) = NewInspector(out _);
+            var keys = session.AddKeyboardTrack();
+            session.Select(keys.Id);
+
+            vm.KeystrokeStyle.SelectedStyle = StyleOption(KeystrokeStyles.Laptop);
+            vm.KeystrokeStyle.SelectedTheme = ThemeOption("pink");
+
+            Assert.Equal(2, KeyboardItems(session).Length);
+            Assert.All(KeyboardItems(session), k =>
+            {
+                Assert.Equal(KeystrokeStyles.Laptop, k.Style);
+                Assert.Equal("pink", k.Theme);
+                Assert.Null(k.Custom);
+            });
+            Assert.Equal("pink", vm.KeystrokeStyle.Theme);
+            Assert.Equal(KeystrokeStyles.Laptop, vm.KeystrokeStyle.PresetStyle);
+            Assert.Equal(KeystrokeStyles.Preset(KeystrokeStyles.Laptop, "pink"), vm.KeystrokeStyle.CustomTileLook);
+        }
+
+        [Fact]
+        public void KeystrokeStyle_CustomSeedsFromThePresetOnScreen()
+        {
+            var (session, vm) = NewInspector(out _);
+            var keys = session.AddKeyboardTrack();
+            session.Select(keys.Id);
+            var editor = vm.KeystrokeStyle;
+
+            editor.SelectedStyle = StyleOption(KeystrokeStyles.Simple);
+            editor.SelectedTheme = ThemeOption(KeystrokeStyles.Light);
+            editor.SelectedStyle = StyleOption(KeystrokeStyles.Custom);
+
+            var seeded = KeystrokeStyles.Preset(KeystrokeStyles.Simple, KeystrokeStyles.Light);
+            Assert.All(KeyboardItems(session), k =>
+            {
+                Assert.Equal(KeystrokeStyles.Custom, k.Style);
+                Assert.Equal(seeded, k.Custom);
+            });
+            Assert.True(editor.IsCustom);
+            Assert.False(editor.IsPreset);
+            Assert.Equal(seeded, editor.CustomTileLook);
+
+            // the rows show the seeded look, and reset to the preset it was seeded from — so a
+            // fresh seed shows no reset dots, even though Simple differs from Default
+            Assert.Equal(seeded.OuterRadius, NumberRow(vm, "Outer radius").Value);
+            Assert.Equal(seeded.OuterRadius, NumberRow(vm, "Outer radius").DefaultValue);
+            Assert.Equal(seeded.KeyTrackPadding, NumberRow(vm, "Track padding").Value);
+            Assert.Equal(seeded.KeyTrackPadding, NumberRow(vm, "Track padding").DefaultValue);
+            Assert.Equal(KeystrokeStyleEditor.HexOf(seeded.KeyTrackColor), KeyColorRow(vm, "Track").Hex);
+            Assert.Equal(KeystrokeStyleEditor.HexOf(seeded.TypingTrackColor), TypingColorRow(vm, "Track").Hex);
+            Assert.Equal(KeystrokeStyleEditor.HexOf(seeded.KeyTrackColor), KeyColorRow(vm, "Track").DefaultHex);
+
+            // one edit leaves the look nearest that preset: the edited row resets to Simple's value
+            NumberRow(vm, "Outer radius").Value = 0.3;
+            Assert.Equal(0.3, NumberRow(vm, "Outer radius").Value);
+            Assert.Equal(seeded.OuterRadius, NumberRow(vm, "Outer radius").DefaultValue);
+            Assert.Equal(KeystrokeStyleEditor.HexOf(seeded.KeyTrackColor), KeyColorRow(vm, "Track").DefaultHex);
+        }
+
+        [Fact]
+        public void KeystrokeStyle_CustomRowsWriteTheWholeRowAndClamp()
+        {
+            var (session, vm) = NewInspector(out _);
+            var keys = session.AddKeyboardTrack();
+            session.Select(keys.Id);
+            vm.KeystrokeStyle.SelectedStyle = StyleOption(KeystrokeStyles.Custom);
+
+            NumberRow(vm, "Offset").Value = 0.2;
+            NumberRow(vm, "Outer radius").Value = 9;          // past the 0.5 pill
+            NumberRow(vm, "Padding W").Value = Double.NaN;
+            NumberRow(vm, "Radius").Value = 0.12;              // the typing track's
+            KeyColorRow(vm, "Key top").Hex = "#FF123456";
+            KeyColorRow(vm, "Track").Hex = "#80FFFFFF";
+            TypingColorRow(vm, "Text").Hex = "#00FF00";       // #RRGGBB is opaque
 
             Assert.All(KeyboardItems(session), k =>
             {
-                Assert.Equal(0xFF11AA33u, k.TextColor);
-                Assert.Equal(0x402244FFu, k.BackgroundColor);
+                Assert.Equal(0.2, k.Custom.Drop);
+                Assert.Equal(KeystrokeLook.MaxRadius, k.Custom.OuterRadius);
+                Assert.Equal(0, k.Custom.PaddingX);
+                Assert.Equal(0.12, k.Custom.TypingRadius);
+                Assert.Equal(0xFF123456u, k.Custom.KeyTopColor);
+                Assert.Equal(0x80FFFFFFu, k.Custom.KeyTrackColor);
+                Assert.Equal(0xFF00FF00u, k.Custom.TypingTextColor);
             });
+            Assert.Equal(KeystrokeLook.MaxRadius, NumberRow(vm, "Outer radius").Value);
+            Assert.Equal(0xFF123456u, KeyColorRow(vm, "Key top").Argb);
+            Assert.Equal(0xFF123456u, vm.KeystrokeStyle.CustomTileLook.KeyTopColor);
 
-            // a #RRGGBB literal is opaque; half-typed values stay in the box unwritten
-            vm.KeyboardTextColorHex = "#00FF00";
-            Assert.All(KeyboardItems(session), k => Assert.Equal(0xFF00FF00u, k.TextColor));
+            // a half-typed value stays on the row unwritten
+            TypingColorRow(vm, "Text").Hex = "#00FF0";
+            Assert.Equal("#00FF0", TypingColorRow(vm, "Text").Hex);
+            Assert.All(KeyboardItems(session), k => Assert.Equal(0xFF00FF00u, k.Custom.TypingTextColor));
+        }
 
-            vm.KeyboardTextColorHex = "#00FF0";
-            Assert.Equal("#00FF0", vm.KeyboardTextColorHex);
-            Assert.All(KeyboardItems(session), k => Assert.Equal(0xFF00FF00u, k.TextColor));
+        [Fact]
+        public void KeystrokeStyle_CustomAfterAPresetStartsFromThatPresetEvenAfterEdits()
+        {
+            var (session, vm) = NewInspector(out _);
+            var keys = session.AddKeyboardTrack();
+            session.Select(keys.Id);
+            var editor = vm.KeystrokeStyle;
+
+            editor.SelectedStyle = StyleOption(KeystrokeStyles.Custom);
+            KeyColorRow(vm, "Key top").Hex = "#FFABCDEF";
+            editor.SelectedStyle = StyleOption(KeystrokeStyles.Laptop);
+            editor.SelectedTheme = ThemeOption("teal");
+
+            // the Custom tile previews what picking it would start from: the preset on screen
+            Assert.Equal(KeystrokeStyles.Preset(KeystrokeStyles.Laptop, "teal"), editor.CustomTileLook);
+
+            editor.SelectedStyle = StyleOption(KeystrokeStyles.Custom);
+            var seeded = KeystrokeStyles.Preset(KeystrokeStyles.Laptop, "teal");
+            Assert.All(KeyboardItems(session), k => Assert.Equal(seeded, k.Custom));
+            Assert.Equal($"#{seeded.KeyTopColor:X8}", KeyColorRow(vm, "Key top").Hex);
+        }
+
+        [Fact]
+        public void KeystrokeStyle_UneditedCustomReseedsFromTheNextPreset()
+        {
+            var (session, vm) = NewInspector(out _);
+            var keys = session.AddKeyboardTrack();
+            session.Select(keys.Id);
+            var editor = vm.KeystrokeStyle;
+
+            editor.SelectedStyle = StyleOption(KeystrokeStyles.Custom);
+            editor.SelectedStyle = StyleOption(KeystrokeStyles.Simple);
+            editor.SelectedTheme = ThemeOption("blue");
+            Assert.Equal(KeystrokeStyles.Preset(KeystrokeStyles.Simple, "blue"), editor.CustomTileLook);
+
+            editor.SelectedStyle = StyleOption(KeystrokeStyles.Custom);
+            Assert.All(KeyboardItems(session), k =>
+                Assert.Equal(KeystrokeStyles.Preset(KeystrokeStyles.Simple, "blue"), k.Custom));
+        }
+
+        [Fact]
+        public void KeystrokeStyle_ASpinnerDragIsOneUndoEntry()
+        {
+            var (session, vm) = NewInspector(out _);
+            var keys = session.AddKeyboardTrack();
+            session.Select(keys.Id);
+            vm.KeystrokeStyle.SelectedStyle = StyleOption(KeystrokeStyles.Custom);
+            var seeded = ((KeyboardContent)Live(session, keys.Id).Content).Custom.Drop;
+
+            NumberRow(vm, "Offset").Value = 0.11;
+            NumberRow(vm, "Offset").Value = 0.12;
+            NumberRow(vm, "Offset").Value = 0.13;
+            Assert.All(KeyboardItems(session), k => Assert.Equal(0.13, k.Custom.Drop));
+
+            session.Undo();
+
+            // the whole drag went, and the picker re-read what undo put back
+            Assert.All(KeyboardItems(session), k => Assert.Equal(seeded, k.Custom.Drop));
+            Assert.Equal(seeded, NumberRow(vm, "Offset").Value);
+            Assert.True(vm.KeystrokeStyle.IsCustom);
+
+            session.Undo();
+            Assert.All(KeyboardItems(session), k => Assert.Equal(KeystrokeStyles.Default, k.Style));
+            Assert.True(vm.KeystrokeStyle.IsPreset);
+        }
+
+        [Fact]
+        public void KeystrokeStyle_IgnoresPicksWithNothingToEdit()
+        {
+            var (session, vm) = NewInspector(out var screen);
+            session.AddKeyboardTrack();
+            session.Select(screen.Id);
+
+            Assert.False(vm.KeystrokeStyle.HasTarget);
+            vm.KeystrokeStyle.SelectedStyle = StyleOption(KeystrokeStyles.Simple);
+            NumberRow(vm, "Offset").Value = 0.3;
+
+            Assert.Equal(KeystrokeStyles.Default, vm.KeystrokeStyle.SelectedStyle.Value);
+            Assert.All(KeyboardItems(session), k =>
+            {
+                Assert.Equal(KeystrokeStyles.Default, k.Style);
+                Assert.Null(k.Custom);
+            });
         }
 
         [Fact]
@@ -564,15 +755,17 @@ namespace Prisc.VideoSDK.Tests
                 content.FontSize = 64;
                 content.LingerMs = 111;
                 content.PauseBreakMs = 333;
-                content.TextColor = 0xFF010203;
-                content.BackgroundColor = 0x11223344;
+                KeystrokeStyles.SelectStyle(content, KeystrokeStyles.Custom);
+                content.Custom.TypingTextColor = 0xFF010203;
+                content.Custom.TypingTrackColor = 0x11223344;
             }, "test", structural: false, origin: new object());
 
             Assert.Equal(64, vm.KeyboardFontSize);
             Assert.Equal(111, vm.KeyboardLingerMs);
             Assert.Equal(333, vm.KeyboardPauseBreakMs);
-            Assert.Equal("#FF010203", vm.KeyboardTextColorHex);
-            Assert.Equal("#11223344", vm.KeyboardBackColorHex);
+            Assert.True(vm.KeystrokeStyle.IsCustom);
+            Assert.Equal("#FF010203", TypingColorRow(vm, "Text").Hex);
+            Assert.Equal("#11223344", TypingColorRow(vm, "Track").Hex);
         }
 
         /// <summary>The animation section stays on for a keystroke overlay — it is what animates

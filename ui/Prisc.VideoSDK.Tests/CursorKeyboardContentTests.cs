@@ -87,8 +87,14 @@ namespace Prisc.VideoSDK.Tests
                     FontSize = 36,
                     LingerMs = 500,
                     PauseBreakMs = 1500,
-                    TextColor = 0xFF22DD88,
-                    BackgroundColor = 0x66112233,
+                    Style = KeystrokeStyles.Custom,
+                    Theme = "pink",
+                    Custom = KeystrokeStyles.Preset(KeystrokeStyles.Simple, "teal") with
+                    {
+                        TypingTextColor = 0xFF22DD88,
+                        TypingTrackColor = 0x66112233,
+                        Drop = 0.125,
+                    },
                 },
                 Transform = new Transform { X = 0.5, Y = 0.85, Scale = 0.5 },
                 GroupId = group,
@@ -158,8 +164,12 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(36, keyboard.FontSize);
             Assert.Equal(500, keyboard.LingerMs);
             Assert.Equal(1500, keyboard.PauseBreakMs);
-            Assert.Equal(0xFF22DD88u, keyboard.TextColor);
-            Assert.Equal(0x66112233u, keyboard.BackgroundColor);
+            Assert.Equal(KeystrokeStyles.Custom, keyboard.Style);
+            Assert.Equal("pink", keyboard.Theme);
+            Assert.Equal(((KeyboardContent)keyboardItem.Content).Custom, keyboard.Custom);
+            Assert.Equal(0xFF22DD88u, keyboard.Custom.TypingTextColor);
+            Assert.Equal(0x66112233u, keyboard.Custom.TypingTrackColor);
+            Assert.Equal(0.125, keyboard.Custom.Drop);
         }
 
         /// <summary>The fade time is gone: rows now leave with the item's exit transition. The
@@ -207,8 +217,12 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(40, keyboard.FontSize);
             Assert.Equal(1000, keyboard.LingerMs);
             Assert.Equal(1000, keyboard.PauseBreakMs);
-            Assert.Equal(0xFFFFFFFFu, keyboard.TextColor);
-            Assert.Equal(0x8C000000u, keyboard.BackgroundColor); // black at 55%
+            Assert.Equal(KeystrokeStyles.Default, keyboard.Style);
+            Assert.Equal(KeystrokeStyles.Dark, keyboard.Theme);
+            Assert.Null(keyboard.Custom); // seeded the first time the user picks custom
+            var look = KeystrokeStyles.Resolve(keyboard);
+            Assert.Equal(0xFFFFFFFFu, look.TypingTextColor);
+            Assert.Equal(0x8C000000u, look.TypingTrackColor); // black at 55%
         }
 
         [Fact]
@@ -240,15 +254,24 @@ namespace Prisc.VideoSDK.Tests
 
             var keyboard = new KeyboardContent
             {
-                SourceId = Guid.NewGuid(), FontSize = 40, LingerMs = 100, TextColor = 0xFF00FF00,
+                SourceId = Guid.NewGuid(), FontSize = 40, LingerMs = 100, Style = KeystrokeStyles.Custom,
+                Theme = "blue", Custom = KeystrokeStyles.Preset(KeystrokeStyles.Laptop, "blue") with { TypingTextColor = 0xFF00FF00 },
             };
             var keyboardCopy = (KeyboardContent)keyboard.Clone();
+            Assert.NotSame(keyboard.Custom, keyboardCopy.Custom);
+            Assert.Equal(keyboard.Custom, keyboardCopy.Custom);
             keyboardCopy.FontSize = 12;
             keyboardCopy.LingerMs = 900;
-            keyboardCopy.TextColor = 0xFF0000FF;
+            keyboardCopy.Style = KeystrokeStyles.Simple;
+            keyboardCopy.Theme = "red";
+            keyboardCopy.Custom.TypingTextColor = 0xFF0000FF;
+            keyboardCopy.Custom.Drop = 0.3;
             Assert.Equal(40, keyboard.FontSize);
             Assert.Equal(100, keyboard.LingerMs);
-            Assert.Equal(0xFF00FF00u, keyboard.TextColor);
+            Assert.Equal(KeystrokeStyles.Custom, keyboard.Style);
+            Assert.Equal("blue", keyboard.Theme);
+            Assert.Equal(0xFF00FF00u, keyboard.Custom.TypingTextColor);
+            Assert.Equal(KeystrokeStyles.Preset(KeystrokeStyles.Laptop, "blue").Drop, keyboard.Custom.Drop);
             Assert.Equal(keyboard.SourceId, keyboardCopy.SourceId);
         }
 

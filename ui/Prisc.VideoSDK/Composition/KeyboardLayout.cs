@@ -133,12 +133,12 @@ namespace Prisc.VideoSDK.Composition
         /// <summary>The atom's own drawn width.</summary>
         float Width(KeyAtom atom);
 
-        /// <summary>The space left between two atoms that end up side by side — the typing pill's
-        /// padding included, where one of the two closes or opens a pill.</summary>
+        /// <summary>The space left between two atoms that end up side by side — both tracks'
+        /// padding included, where the line switches between typing and keycaps.</summary>
         float Gap(KeyAtom left, KeyAtom right);
 
-        /// <summary>What the atom adds at the line's outer edge: the typing pill's padding when
-        /// the line begins or ends inside one, nothing for a bare keycap.</summary>
+        /// <summary>What the atom adds at the line's outer edge: the padding of the track it sits
+        /// on — the typing track's for a word, the key track's for a keycap or chord "+".</summary>
         float Edge(KeyAtom atom);
     }
 

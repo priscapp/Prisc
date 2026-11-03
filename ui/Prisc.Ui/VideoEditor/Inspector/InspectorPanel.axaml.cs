@@ -109,10 +109,6 @@ namespace Prisc.UI.VideoEditor.Inspector
             btnUngroup.Click += async (_, _) => await ConfirmUngroupAsync();
             colorWell.PointerPressed += (_, e) => OpenColorPicker(e,
                 () => _vm.TextColorHex, hex => _vm.TextColorHex = hex);
-            keyTextColorWell.PointerPressed += (_, e) => OpenColorPicker(e,
-                () => _vm.KeyboardTextColorHex, hex => _vm.KeyboardTextColorHex = hex);
-            keyBackColorWell.PointerPressed += (_, e) => OpenColorPicker(e,
-                () => _vm.KeyboardBackColorHex, hex => _vm.KeyboardBackColorHex = hex);
             surroundColorWell.PointerPressed += (_, e) => OpenColorPicker(e,
                 () => _vm.SurroundColorHex, hex => _vm.SurroundColorHex = hex);
             cursorClickColorWell.PointerPressed += (_, e) => OpenColorPicker(e,
@@ -176,8 +172,6 @@ namespace Prisc.UI.VideoEditor.Inspector
                     RefreshFontButton();
                     break;
                 case nameof(SelectedItemViewModel.TextColorHex):
-                case nameof(SelectedItemViewModel.KeyboardTextColorHex):
-                case nameof(SelectedItemViewModel.KeyboardBackColorHex):
                 case nameof(SelectedItemViewModel.SurroundColorHex):
                 case nameof(SelectedItemViewModel.CursorClickColorHex):
                 case nameof(SelectedItemViewModel.BackgroundColorHex):
@@ -222,10 +216,6 @@ namespace Prisc.UI.VideoEditor.Inspector
         private void RefreshColorWells()
         {
             RefreshColorWell(txtColorHex, colorSwatch, _vm?.TextColorHex, "#FFFFFFFF");
-            RefreshColorWell(txtKeyTextColorHex, keyTextColorSwatch, _vm?.KeyboardTextColorHex,
-                SelectedItemViewModel.DefaultKeyboardTextColorHex);
-            RefreshColorWell(txtKeyBackColorHex, keyBackColorSwatch, _vm?.KeyboardBackColorHex,
-                SelectedItemViewModel.DefaultKeyboardBackColorHex);
             RefreshColorWell(txtSurroundColorHex, surroundColorSwatch, _vm?.SurroundColorHex,
                 _vm?.DefaultSurroundColorHex ?? "#80000000");
             RefreshColorWell(txtCursorClickColorHex, cursorClickColorSwatch, _vm?.CursorClickColorHex,

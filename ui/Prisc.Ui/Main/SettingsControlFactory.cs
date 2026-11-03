@@ -255,6 +255,14 @@ namespace Prisc.UI.Config
                 block = tools;
                 editor = tools.CreateResetAllButton();
             }
+            // ...and so is the keystroke style picker (the inspector's own control), which edits
+            // the style row together with its hidden theme and custom-look values
+            else if (_obj is SettingsDrawOnScreen drawSettings && pd.Name == nameof(SettingsDrawOnScreen.KeystrokeStyle))
+            {
+                var look = new DrawKeystrokeStylePanel(drawSettings);
+                block = look;
+                editor = look.CreateResetButton();
+            }
             else
             {
                 editor = GetRowForProperty(pd);

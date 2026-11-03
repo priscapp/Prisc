@@ -772,9 +772,10 @@ namespace Prisc.VideoSDK.Composition
             (float)((keyboard.FontSize > 0 ? keyboard.FontSize : KeyboardContent.DefaultFontSize) * textScale);
 
         /// <summary>
-        /// The drawn height of a keyboard overlay of <paramref name="rows"/> pill rows on a canvas
+        /// The drawn height of a keyboard overlay of <paramref name="rows"/> rows on a canvas
         /// of the given height, in canvas pixels — measured from the very metrics
-        /// <see cref="DrawKeyboard"/> lays the pills out on, and exposed so the editor's transform
+        /// <see cref="DrawKeyboard"/> lays the rows out on (whatever the style: every track and
+        /// keycap draws inside the row height), and exposed so the editor's transform
         /// gizmo can box the block without re-deriving it. The <b>width</b> is not measured: it is
         /// the wrap box the transform sets (<c>Scale</c> · canvas width), which is why the block is
         /// the one content whose gizmo sizes horizontally alone.
@@ -843,7 +844,7 @@ namespace Prisc.VideoSDK.Composition
             if (rows.Count == 0)
                 return;
 
-            KeystrokeRenderer.Draw(target, rows, keyboard, item.Entry, item.Exit,
+            KeystrokeRenderer.Draw(target, rows, KeystrokeStyles.Resolve(keyboard), item.Entry, item.Exit,
                 KeyboardFontPx(keyboard, textScale),
                 (float)(transform.X * canvasWidth), (float)(transform.Y * canvasHeight),
                 (float)(transform.Scale * canvasWidth),

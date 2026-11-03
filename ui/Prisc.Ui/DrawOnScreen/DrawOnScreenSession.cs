@@ -676,7 +676,8 @@ namespace Prisc.UI.DrawOnScreen
         }
 
         /// <summary>Copies the settings into the keyboard track's own style objects, which is what
-        /// the shared renderer reads.</summary>
+        /// the shared renderer reads — the keystroke style, theme and custom look included
+        /// (<see cref="DrawKeystrokeStyle.ApplyTo"/>).</summary>
         private void ApplyKeystrokeStyle()
         {
             var s = _keySettings ?? new SettingsDrawOnScreen();
@@ -691,9 +692,8 @@ namespace Prisc.UI.DrawOnScreen
                     DrawKeystrokeFilter.Shortcuts => KeystrokeFilter.Shortcuts,
                     _ => KeystrokeFilter.None,
                 },
-                TextColor = s.TextColor.ToUInt32(),
-                BackgroundColor = s.FillColor.ToUInt32(),
             };
+            DrawKeystrokeStyle.ApplyTo(s, _keys.Style);
             _keys.Entry = RowTransition(s.EntryKind, s.EntryDurationMs, s.EntryEasing);
             _keys.Exit = RowTransition(s.ExitKind, s.ExitDurationMs, s.ExitEasing);
         }

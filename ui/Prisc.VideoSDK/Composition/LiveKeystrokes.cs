@@ -38,7 +38,7 @@ namespace Prisc.VideoSDK.Composition
             _platform = macOS ? KeyboardPlatform.MacOS : KeyboardPlatform.Windows;
         }
 
-        /// <summary>Size, linger, new-row gap, filter and colors — the keyboard track's own
+        /// <summary>Size, linger, new-row gap, filter and style/theme/custom look — the keyboard track's own
         /// settings object, so the two overlays share their defaults and validation ranges too.
         /// <see cref="KeyboardContent.FontSize"/> is in the units <see cref="Draw"/>'s scale maps
         /// to canvas pixels. <see cref="KeyboardContent.SourceId"/> is not used.</summary>
@@ -147,7 +147,7 @@ namespace Prisc.VideoSDK.Composition
 
             var style = Style ?? new KeyboardContent();
             double size = style.FontSize > 0 ? style.FontSize : KeyboardContent.DefaultFontSize;
-            KeystrokeRenderer.Draw(canvas, rows, style, Entry, Exit, (float)(size * scale),
+            KeystrokeRenderer.Draw(canvas, rows, KeystrokeStyles.Resolve(style), Entry, Exit, (float)(size * scale),
                 anchorX, anchorY, wrapWidth, alignment, stacking, opacity);
         }
 

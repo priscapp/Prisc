@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Prisc.Config;
 using Prisc.Legacy;
+using Prisc.UI.Controls;
 using Prisc.UI.Helpers;
 using Prisc.UI.Services;
 using Prisc.VideoSDK.Composition;
@@ -430,13 +431,6 @@ namespace Prisc.UI.VideoEditor.Inspector
 
         public const double DefaultKeyboardPauseBreakMs = 1000;
 
-        /// <summary><see cref="KeyboardContent.DefaultTextColor"/> and
-        /// <see cref="KeyboardContent.DefaultBackgroundColor"/> as the hex the color wells (and
-        /// their reset dots, which are XAML strings) speak.</summary>
-        public const string DefaultKeyboardTextColorHex = "#FFFFFFFF";
-
-        public const string DefaultKeyboardBackColorHex = "#8C000000";
-
         /// <summary>The surround dials' range — the model's own bounds (<see cref="Surround"/>),
         /// repeated so a spinner cannot offer a number the project would refuse. Both dials are
         /// fractions of the item's drawn extent, so both are shown as percentages.</summary>
@@ -664,8 +658,6 @@ namespace Prisc.UI.VideoEditor.Inspector
         private double _keyboardLingerMs = DefaultKeyboardLingerMs;
         private double _keyboardPauseBreakMs = DefaultKeyboardPauseBreakMs;
         private KeystrokeFilter _keyboardFilter = KeystrokeFilter.None;
-        private string _keyboardTextColorHex = DefaultKeyboardTextColorHex;
-        private string _keyboardBackColorHex = DefaultKeyboardBackColorHex;
 
         private bool _rampEntryEnabled;
         private double _rampEntryMs = DefaultTransitionMs;
@@ -683,6 +675,7 @@ namespace Prisc.UI.VideoEditor.Inspector
 
         public SelectedItemViewModel()
         {
+            KeystrokeStyle = new KeystrokeStyleEditor(new KeyboardStyleHost(this));
             CommandUngroup = new RelayCommand
             {
                 Executed = _ => Ungroup(),
@@ -2902,7 +2895,7 @@ namespace Prisc.UI.VideoEditor.Inspector
 
         /// <summary>The highlight color as <c>#RRGGBB</c> or <c>#AARRGGBB</c> — the color well's
         /// face of <see cref="CursorClickColor"/>. Half-typed values stay in the box unwritten,
-        /// exactly as <see cref="KeyboardTextColorHex"/> does.</summary>
+        /// exactly as <see cref="TextColorHex"/> does.</summary>
         public string CursorClickColorHex
         {
             get => _cursorClickColorHex;
@@ -3006,35 +2999,29 @@ namespace Prisc.UI.VideoEditor.Inspector
             }
         }
 
-        /// <summary>Color of the typed text in the pill, as <c>#RRGGBB</c> or <c>#AARRGGBB</c>.
-        /// Half-typed values stay in the box unwritten, exactly as <see cref="TextColorHex"/>
-        /// does. The keycaps a special key draws keep their own fixed livery.</summary>
-        public string KeyboardTextColorHex
+        /// <summary>
+        /// The keystroke overlay's look — style, theme and the custom look — as the shared
+        /// <see cref="KeystrokeStylePicker"/>'s view model. It writes through
+        /// <see cref="EditKeyboard"/> like every other row of the section (row-wide, coalesced per
+        /// value, <c>origin: this</c>) and is re-read by <see cref="Sync"/>; it re-reads itself
+        /// after its own writes, whose echo the session hands back to us and we skip.
+        /// </summary>
+        public KeystrokeStyleEditor KeystrokeStyle { get; }
+
+        /// <summary>The selected keyboard row as the picker's host.</summary>
+        private sealed class KeyboardStyleHost : IKeystrokeStyleHost
         {
-            get => _keyboardTextColorHex;
-            set
-            {
-                if (!Set(ref _keyboardTextColorHex, value) || _syncing)
-                    return;
+            private readonly SelectedItemViewModel _owner;
 
-                if (TryParseArgb(value, out var argb))
-                    EditKeyboard("sel:keytextcolor", k => k.TextColor = argb);
-            }
-        }
+            public KeyboardStyleHost(SelectedItemViewModel owner) => _owner = owner;
 
-        /// <summary>Fill of the typing pill, alpha included — how translucent the block reads is
-        /// this color's own alpha.</summary>
-        public string KeyboardBackColorHex
-        {
-            get => _keyboardBackColorHex;
-            set
-            {
-                if (!Set(ref _keyboardBackColorHex, value) || _syncing)
-                    return;
+            public KeystrokeStyleState? Read() =>
+                _owner.SelectedItem?.Content is KeyboardContent k
+                    ? new KeystrokeStyleState(k.Style, k.Theme, k.Custom)
+                    : null;
 
-                if (TryParseArgb(value, out var argb))
-                    EditKeyboard("sel:keybackcolor", k => k.BackgroundColor = argb);
-            }
+            public void Edit(string coalesceKey, Action<KeyboardContent> edit) =>
+                _owner.EditKeyboard("sel:" + coalesceKey, edit);
         }
 
         /// <summary>The typing gap that ends a run and starts the next row.</summary>
@@ -3818,9 +3805,11 @@ namespace Prisc.UI.VideoEditor.Inspector
                     Set(ref _keyboardLingerMs, keyboard.LingerMs, nameof(KeyboardLingerMs));
                     Set(ref _keyboardPauseBreakMs, keyboard.PauseBreakMs, nameof(KeyboardPauseBreakMs));
                     Set(ref _keyboardFilter, keyboard.Filter, nameof(KeyboardFilter));
-                    Set(ref _keyboardTextColorHex, HexOfArgb(keyboard.TextColor), nameof(KeyboardTextColorHex));
-                    Set(ref _keyboardBackColorHex, HexOfArgb(keyboard.BackgroundColor), nameof(KeyboardBackColorHex));
                 }
+
+                // whatever is selected: a non-keyboard selection leaves the picker with nothing to
+                // edit (its section is hidden then)
+                KeystrokeStyle?.Refresh();
 
                 Set(ref _showEffect, isPicture && item.Content is MediaContent, nameof(ShowEffect));
 

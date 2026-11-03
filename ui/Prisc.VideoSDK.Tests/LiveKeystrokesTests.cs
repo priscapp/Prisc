@@ -149,7 +149,6 @@ namespace Prisc.VideoSDK.Tests
         public void Rows_grow_away_from_the_anchor_in_the_stacking_direction(KeystrokeStacking stacking)
         {
             var keys = NewKeys();
-            keys.Style.BackgroundColor = 0xFFFF0000;
             keys.Entry = null; // no slide: rows sit exactly on their slots
             Tap(keys, VkA, "a", 0);
             Tap(keys, VkB, "b", 1050); // past the new-row gap: its own row, the first still leaving
@@ -183,7 +182,6 @@ namespace Prisc.VideoSDK.Tests
         public void Lines_hang_off_the_anchor_on_their_alignment_side(KeystrokeAlignment alignment)
         {
             var keys = NewKeys();
-            keys.Style.BackgroundColor = 0xFFFF0000;
             keys.Entry = null;
             Tap(keys, VkA, "a", 0);
 

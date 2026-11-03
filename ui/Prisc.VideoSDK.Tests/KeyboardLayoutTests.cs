@@ -777,9 +777,10 @@ namespace Prisc.VideoSDK.Tests
 
         private const int BigW = 480, BigH = 260;
 
-        /// <summary>A big canvas carrying one keyboard item, with the pill in an opaque color so
+        /// <summary>A big canvas carrying one keyboard item in the Laptop shape (the original
+        /// look: 3D3D3D key tops on a black outer key), with the typing track in an opaque color so
         /// its extent is measurable. <paramref name="white"/> lays a white sheet underneath —
-        /// what the keycap's black seat needs to be visible at all.</summary>
+        /// what the keycap's black outer key needs to be visible at all.</summary>
         private static Project BigKeyboardProject(string capture, out Item item,
             out KeyboardContent content, bool white = false)
         {
@@ -796,8 +797,12 @@ namespace Prisc.VideoSDK.Tests
                 FontSize = 44,
                 LingerMs = 5000,
                 PauseBreakMs = 10_000,
-                TextColor = 0xFFFFFFFF,
-                BackgroundColor = 0xFFFF0000, // opaque red, so the pill is unmistakable
+                Style = KeystrokeStyles.Custom,
+                Custom = KeystrokeStyles.Preset(KeystrokeStyles.Laptop, KeystrokeStyles.Dark) with
+                {
+                    TypingTextColor = 0xFFFFFFFF,
+                    TypingTrackColor = 0xFFFF0000, // opaque red, so the pill is unmistakable
+                },
             };
             item = AddItem(p, AddTrack(p, TrackKind.Video, 0), content);
             item.Transform = new Transform { X = 0.5, Y = 0.75, Scale = 1.0 };
@@ -855,8 +860,8 @@ namespace Prisc.VideoSDK.Tests
         {
             var capture = WriteCapture("{\"type\":\"event\",\"t\":0,\"kind\":\"kd\",\"vk\":72,\"ch\":\"H\"}");
             var p = BigKeyboardProject(capture, out _, out var content);
-            content.BackgroundColor = 0xFF0000FF; // opaque blue
-            content.TextColor = 0xFF00FF00;       // green
+            content.Custom.TypingTrackColor = 0xFF0000FF; // opaque blue
+            content.Custom.TypingTextColor = 0xFF00FF00;  // green
 
             var px = RenderAt(p, (long)(0.1 * Sec), BigW, BigH);
 
@@ -864,7 +869,7 @@ namespace Prisc.VideoSDK.Tests
             Assert.NotNull(Bounds(px, BigW, BigH, (b, g, r) => g > 200 && r < 60 && b < 60));
 
             // half-transparent fill halves the drawn blue over the black canvas
-            content.BackgroundColor = 0x800000FF;
+            content.Custom.TypingTrackColor = 0x800000FF;
             px = RenderAt(p, (long)(0.1 * Sec), BigW, BigH);
             Assert.Null(Bounds(px, BigW, BigH, (b, g, r) => b > 200 && r < 60 && g < 60));
             Assert.NotNull(Bounds(px, BigW, BigH, (b, g, r) => b is > 100 and < 180 && r < 60 && g < 60));

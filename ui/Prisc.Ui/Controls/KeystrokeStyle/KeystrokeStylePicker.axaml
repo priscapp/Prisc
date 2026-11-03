@@ -1,0 +1,337 @@
+<UserControl
+    x:Class="Prisc.UI.Controls.KeystrokeStylePicker"
+    xmlns="https://github.com/avaloniaui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:colors="clr-namespace:Prisc.UI.Dialogs.ColorPicker"
+    xmlns:controls="clr-namespace:Prisc.UI.Controls"
+    xmlns:prisc="clr-namespace:Prisc">
+
+    <!--  The keystroke overlay's look, for any host: the 2x2 style tiles, the theme tiles (presets
+          only) and the custom editor (custom only). DataContext is a KeystrokeStyleEditor; the host
+          supplies it and sets IsModern. Every ink is styled here, in both chromes, so the control
+          reads the same in the editor's inspector (Compact or Modern) and on a settings page —
+          the values are the inspector's own, which the classes deliberately do not share names
+          with so neither restyles the other.  -->
+
+    <UserControl.Resources>
+        <!--  the inspector's PickerTile: a ring box borrowing the Semi radio's brushes  -->
+        <ControlTheme x:Key="KeystrokePickerTile" TargetType="ListBoxItem">
+            <Setter Property="Cursor" Value="Hand" />
+            <!--  the gutter between tiles, canceled at the grid's outer edge by the ListBox's own
+                  negative margin  -->
+            <Setter Property="Margin" Value="0,0,4,4" />
+            <Setter Property="Template">
+                <ControlTemplate>
+                    <Border
+                        Name="_box"
+                        Background="Transparent"
+                        BorderBrush="{DynamicResource RadioButtonUncheckIconDefaultBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4">
+                        <ContentPresenter
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Center"
+                            Content="{TemplateBinding Content}"
+                            ContentTemplate="{TemplateBinding ContentTemplate}" />
+                    </Border>
+                </ControlTemplate>
+            </Setter>
+
+            <Style Selector="^:pointerover /template/ Border#_box">
+                <Setter Property="BorderBrush" Value="{DynamicResource RadioButtonUncheckIconPointeroverBorderBrush}" />
+            </Style>
+            <Style Selector="^:selected /template/ Border#_box">
+                <Setter Property="BorderBrush" Value="{DynamicResource RadioButtonCheckIconDefaultBackground}" />
+                <Setter Property="BorderThickness" Value="2" />
+            </Style>
+            <Style Selector="^:disabled">
+                <Setter Property="Opacity" Value="0.45" />
+            </Style>
+        </ControlTheme>
+
+        <controls:ArgbToBrushConverter x:Key="argbToBrush" />
+    </UserControl.Resources>
+
+    <UserControl.Styles>
+        <!--  ===== Compact ===== the inspector's original hand-painted dark values  -->
+        <Style Selector="TextBlock.ksSection">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#9A9A9A" />
+        </Style>
+        <Style Selector="Rectangle.ksRule">
+            <Setter Property="Height" Value="1" />
+            <Setter Property="Fill" Value="#5C5C5C" />
+            <Setter Property="Margin" Value="8,1,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.ksLabel">
+            <Setter Property="MinWidth" Value="60" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="#CCCCCC" />
+        </Style>
+        <Style Selector="TextBlock.ksDim">
+            <Setter Property="Foreground" Value="#CCCCCC" />
+        </Style>
+        <Style Selector="Panel.ksDot">
+            <Setter Property="Width" Value="14" />
+        </Style>
+        <Style Selector="Panel.ksDot controls|ResetDefaultButton">
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+        </Style>
+        <Style Selector="Border.ksWell">
+            <Setter Property="Width" Value="120" />
+            <Setter Property="Height" Value="22" />
+            <Setter Property="Margin" Value="6,0,0,0" />
+            <Setter Property="HorizontalAlignment" Value="Right" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Background" Value="#454545" />
+            <Setter Property="BorderBrush" Value="#666666" />
+        </Style>
+        <Style Selector="controls|ThemedSpinner.ksSpinner">
+            <Setter Property="MinWidth" Value="120" />
+            <Setter Property="HorizontalAlignment" Value="Right" />
+            <Setter Property="Margin" Value="6,0,0,0" />
+        </Style>
+        <Style Selector="TextBlock.ksTile">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="#CCCCCC" />
+        </Style>
+        <Style Selector="ListBoxItem:selected TextBlock.ksTile">
+            <Setter Property="Foreground" Value="White" />
+        </Style>
+
+        <!--  ===== Modern ===== every ink restated from the theme  -->
+        <Style Selector="controls|KeystrokeStylePicker[IsModern=True] controls|ThemedSpinner">
+            <Setter Property="IsModern" Value="True" />
+        </Style>
+        <Style Selector="controls|KeystrokeStylePicker[IsModern=True] TextBlock.ksSection">
+            <Setter Property="Foreground" Value="{DynamicResource SemiColorText2}" />
+        </Style>
+        <Style Selector="controls|KeystrokeStylePicker[IsModern=True] Rectangle.ksRule">
+            <Setter Property="Fill" Value="{DynamicResource SemiColorBorder}" />
+        </Style>
+        <Style Selector="controls|KeystrokeStylePicker[IsModern=True] TextBlock.ksLabel">
+            <Setter Property="Foreground" Value="{DynamicResource SemiColorText1}" />
+        </Style>
+        <Style Selector="controls|KeystrokeStylePicker[IsModern=True] TextBlock.ksDim">
+            <Setter Property="Foreground" Value="{DynamicResource SemiColorText1}" />
+        </Style>
+        <Style Selector="controls|KeystrokeStylePicker[IsModern=True] Border.ksWell">
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Background" Value="{DynamicResource SemiColorFill0}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource SemiColorBorder}" />
+            <Setter Property="CornerRadius" Value="4" />
+        </Style>
+        <Style Selector="controls|KeystrokeStylePicker[IsModern=True] TextBlock.ksTile">
+            <Setter Property="Foreground" Value="{DynamicResource SemiColorText1}" />
+        </Style>
+        <Style Selector="controls|KeystrokeStylePicker[IsModern=True] ListBoxItem:selected TextBlock.ksTile">
+            <Setter Property="Foreground" Value="{DynamicResource SemiColorText0}" />
+        </Style>
+    </UserControl.Styles>
+
+    <UserControl.DataTemplates>
+        <!--  the custom editor's two kinds of row, in the inspector's row layout: a reset dot, a
+              label, and the editor filling the rest with its right edge on the panel's  -->
+        <DataTemplate DataType="controls:KeystrokeNumberRow">
+            <DockPanel LastChildFill="True" ToolTip.Tip="{Binding Description}">
+                <Panel Classes="ksDot" DockPanel.Dock="Left">
+                    <controls:ResetDefaultButton CurrentValue="{Binding Value, Mode=TwoWay}" DefaultValue="{Binding DefaultValue}" />
+                </Panel>
+                <TextBlock Classes="ksLabel" Text="{Binding Label}" />
+                <controls:ThemedSpinner
+                    Classes="ksSpinner"
+                    DisplayScale="100"
+                    Max="{Binding Max}"
+                    Min="0"
+                    SnapToWholeNumber="False"
+                    SpinAmount="{Binding Step}"
+                    Suffix="%"
+                    Value="{Binding Value, Mode=TwoWay}" />
+            </DockPanel>
+        </DataTemplate>
+
+        <DataTemplate DataType="controls:KeystrokeColorRow">
+            <DockPanel LastChildFill="True" ToolTip.Tip="{Binding Description}">
+                <Panel Classes="ksDot" DockPanel.Dock="Left">
+                    <controls:ResetDefaultButton CurrentValue="{Binding Hex, Mode=TwoWay}" DefaultValue="{Binding DefaultHex}" />
+                </Panel>
+                <TextBlock Classes="ksLabel" Text="{Binding Label}" />
+                <!--  the well opens the picker's own mini color dialog (code-behind)  -->
+                <Border Classes="ksWell">
+                    <StackPanel
+                        Margin="6,0,0,0"
+                        HorizontalAlignment="Left"
+                        Orientation="Horizontal"
+                        Spacing="6">
+                        <!--  the editor bar's swatch: the color over a checkerboard (so alpha and
+                              a transparent "none" show) inside a white then a black hairline, so
+                              white and black alike stand out on either chrome's well  -->
+                        <Border
+                            Width="16"
+                            Height="16"
+                            VerticalAlignment="Center"
+                            BorderBrush="Black"
+                            BorderThickness="1">
+                            <Border
+                                Background="{x:Static prisc:AppStyles.CheckerboardBrushSmall}"
+                                BorderBrush="White"
+                                BorderThickness="1">
+                                <Rectangle Fill="{Binding Argb, Converter={StaticResource argbToBrush}}" />
+                            </Border>
+                        </Border>
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            Classes="ksDim"
+                            Text="{Binding Hex}" />
+                    </StackPanel>
+                </Border>
+            </DockPanel>
+        </DataTemplate>
+    </UserControl.DataTemplates>
+
+    <Panel>
+        <StackPanel Spacing="6">
+            <DockPanel>
+                <TextBlock Classes="ksSection" Text="STYLE" />
+                <Rectangle Classes="ksRule" />
+            </DockPanel>
+
+            <!--  the four styles, 2x2: each tile is the overlay's own render of that style in the
+                  picked theme (Custom: the custom look, or what picking it would start from)  -->
+            <ListBox
+                x:Name="listStyle"
+                Margin="0,0,-4,-4"
+                Padding="0"
+                AutoScrollToSelectedItem="False"
+                Background="Transparent"
+                BorderThickness="0"
+                ItemContainerTheme="{StaticResource KeystrokePickerTile}"
+                ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                SelectedItem="{Binding SelectedStyle, Mode=TwoWay}"
+                SelectionMode="Single,AlwaysSelected">
+                <ListBox.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <UniformGrid Columns="2" />
+                    </ItemsPanelTemplate>
+                </ListBox.ItemsPanel>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel
+                            Margin="5,5,5,4"
+                            Spacing="4"
+                            ToolTip.Tip="{Binding Label}">
+                            <controls:KeystrokeStylePreview
+                                Height="48"
+                                CustomLook="{Binding $parent[ListBox].DataContext.CustomTileLook}"
+                                Sample="Style"
+                                StyleName="{Binding Value}"
+                                ThemeName="{Binding $parent[ListBox].DataContext.Theme}" />
+                            <TextBlock
+                                HorizontalAlignment="Center"
+                                Classes="ksTile"
+                                Text="{Binding Label}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!--  the presets' palettes: one tile per theme, the picked style drawn in it  -->
+            <StackPanel IsVisible="{Binding IsPreset}" Spacing="6">
+                <DockPanel Margin="0,2,0,0">
+                    <TextBlock Classes="ksSection" Text="THEME" />
+                    <Rectangle Classes="ksRule" />
+                </DockPanel>
+                <ListBox
+                    x:Name="listTheme"
+                    Margin="0,0,-4,-4"
+                    Padding="0"
+                    AutoScrollToSelectedItem="False"
+                    Background="Transparent"
+                    BorderThickness="0"
+                    ItemContainerTheme="{StaticResource KeystrokePickerTile}"
+                    ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                    SelectedItem="{Binding SelectedTheme, Mode=TwoWay}"
+                    SelectionMode="Single,AlwaysSelected">
+                    <ListBox.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <UniformGrid Columns="3" />
+                        </ItemsPanelTemplate>
+                    </ListBox.ItemsPanel>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel
+                                Margin="4,4,4,3"
+                                Spacing="3"
+                                ToolTip.Tip="{Binding Label}">
+                                <controls:KeystrokeStylePreview
+                                    Height="28"
+                                    Sample="Theme"
+                                    StyleName="{Binding $parent[ListBox].DataContext.PresetStyle}"
+                                    ThemeName="{Binding Value}" />
+                                <TextBlock
+                                    HorizontalAlignment="Center"
+                                    Classes="ksTile"
+                                    Text="{Binding Label}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </StackPanel>
+
+            <!--  the custom look, every value of it  -->
+            <StackPanel IsVisible="{Binding IsCustom}" Spacing="6">
+                <DockPanel Margin="0,2,0,0">
+                    <TextBlock Classes="ksSection" Text="KEY SHAPE" />
+                    <Rectangle Classes="ksRule" />
+                </DockPanel>
+                <ItemsControl ItemsSource="{Binding ShapeRows}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Spacing="6" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+
+                <DockPanel Margin="0,2,0,0">
+                    <TextBlock Classes="ksSection" Text="SPECIAL KEYS" />
+                    <Rectangle Classes="ksRule" />
+                </DockPanel>
+                <ItemsControl ItemsSource="{Binding KeyRows}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Spacing="6" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+
+                <DockPanel Margin="0,2,0,0">
+                    <TextBlock Classes="ksSection" Text="TYPING" />
+                    <Rectangle Classes="ksRule" />
+                </DockPanel>
+                <ItemsControl ItemsSource="{Binding TypingRows}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <StackPanel Spacing="6" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </StackPanel>
+        </StackPanel>
+
+        <Popup
+            x:Name="colorPopup"
+            HorizontalOffset="-5"
+            IsLightDismissEnabled="True"
+            Placement="Pointer"
+            VerticalOffset="-5">
+            <colors:MiniColorDialog
+                x:Name="miniColor"
+                Margin="10"
+                Realtime="True" />
+        </Popup>
+    </Panel>
+</UserControl>

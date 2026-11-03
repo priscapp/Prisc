@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Text.Json.Serialization;
 
 namespace Prisc.VideoSDK.Model;
@@ -619,14 +620,8 @@ public enum KeystrokeFilter
 /// unlike it, placement <b>is</b> the item's <see cref="Item.Transform"/> — X/Y anchor the
 /// block's bottom center and Scale is the wrap width as a fraction of the canvas, with rows
 /// stacking upward from the anchor.</summary>
-public sealed class KeyboardContent : ItemContent
+public sealed class KeyboardContent : ItemContent, IJsonOnDeserialized
 {
-    /// <summary>The typing pill's default fill: black at 55%. The translucency is <b>in</b> the
-    /// stored alpha, so a user who picks a color picks its opacity with it.</summary>
-    public const uint DefaultBackgroundColor = 0x8C000000;
-
-    public const uint DefaultTextColor = 0xFFFFFFFF;
-
     /// <summary>Keystrokes read at a glance or not at all, so the block starts big — the
     /// compositor falls back to this for a non-positive size too.</summary>
     public const double DefaultFontSize = 40;
@@ -649,13 +644,72 @@ public sealed class KeyboardContent : ItemContent
     /// <summary>Which keystrokes the overlay shows (see <see cref="KeystrokeFilter"/>).</summary>
     public KeystrokeFilter Filter { get; set; } = KeystrokeFilter.None;
 
-    /// <summary>Typed text color, packed ARGB. Styles the plain-typing pill's text only — the
-    /// special keys draw as keycaps with their own fixed livery.</summary>
-    public uint TextColor { get; set; } = DefaultTextColor;
+    /// <summary>One of <see cref="KeystrokeStyles.Styles"/>: a preset keycap shape, or
+    /// <c>custom</c> to draw <see cref="Custom"/>. Not validated — an unknown id draws the
+    /// default style, as <see cref="CursorContent.Style"/> does. Change it through
+    /// <see cref="KeystrokeStyles.SelectStyle"/> so entering <c>custom</c> seeds
+    /// <see cref="Custom"/>.</summary>
+    public string Style { get; set; } = KeystrokeStyles.DefaultStyle;
 
-    /// <summary>Typing pill fill, packed ARGB — alpha included (see
-    /// <see cref="DefaultBackgroundColor"/>).</summary>
-    public uint BackgroundColor { get; set; } = DefaultBackgroundColor;
+    /// <summary>One of <see cref="KeystrokeStyles.Themes"/>: the palette of both groups (typing
+    /// and keys) for the preset styles; kept but unused while <see cref="Style"/> is
+    /// <c>custom</c>. An unknown id draws the default theme.</summary>
+    public string Theme { get; set; } = KeystrokeStyles.DefaultTheme;
+
+    /// <summary>The <c>custom</c> style's whole look, or null until the user first picks
+    /// <c>custom</c> (<see cref="KeystrokeStyles.SelectStyle"/> seeds it then). Kept while a
+    /// preset is selected, so the user's own work survives trips through the presets.</summary>
+    public KeystrokeLook Custom { get; set; }
+
+    // ------------------------------------------------------------- legacy project files
+
+    /// <summary>The typing text color of a project written before styles existed — the only
+    /// look it had, which is <c>laptop</c>/<c>dark</c>'s. Read once on load (see
+    /// <see cref="OnDeserialized"/>) and never written; not for code to use.</summary>
+    [JsonPropertyName("TextColor")]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public uint? LegacyTextColor { get => null; set => _legacyTextColor = value; }
+
+    /// <summary>The typing pill color of a project written before styles existed. See
+    /// <see cref="LegacyTextColor"/>.</summary>
+    [JsonPropertyName("BackgroundColor")]
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public uint? LegacyBackgroundColor { get => null; set => _legacyBackgroundColor = value; }
+
+    private uint? _legacyTextColor, _legacyBackgroundColor;
+
+    /// <summary>What a pre-styles item's typing colors were when the user never changed them.</summary>
+    private const uint LegacyDefaultTextColor = 0xFFFFFFFF, LegacyDefaultBackgroundColor = 0x8C000000;
+
+    /// <summary>
+    /// Keeps a project written before styles existed looking as it did: such an item carries
+    /// "TextColor"/"BackgroundColor" and no style, and its only look was today's
+    /// <c>laptop</c>/<c>dark</c>. Untouched colors map to that preset; changed ones to a
+    /// <c>custom</c> look seeded from it with the user's typing colors.
+    /// </summary>
+    void IJsonOnDeserialized.OnDeserialized()
+    {
+        if (_legacyTextColor == null && _legacyBackgroundColor == null)
+            return;
+
+        uint text = _legacyTextColor ?? LegacyDefaultTextColor;
+        uint back = _legacyBackgroundColor ?? LegacyDefaultBackgroundColor;
+        _legacyTextColor = _legacyBackgroundColor = null;
+
+        Theme = KeystrokeStyles.Dark;
+        if (text == LegacyDefaultTextColor && back == LegacyDefaultBackgroundColor)
+        {
+            Style = KeystrokeStyles.Laptop;
+            return;
+        }
+
+        Style = KeystrokeStyles.Custom;
+        Custom = KeystrokeStyles.Preset(KeystrokeStyles.Laptop, KeystrokeStyles.Dark) with
+        {
+            TypingTextColor = text,
+            TypingTrackColor = back,
+        };
+    }
 
     public override ItemContent Clone() => new KeyboardContent
     {
@@ -664,7 +718,8 @@ public sealed class KeyboardContent : ItemContent
         LingerMs = LingerMs,
         PauseBreakMs = PauseBreakMs,
         Filter = Filter,
-        TextColor = TextColor,
-        BackgroundColor = BackgroundColor,
+        Style = Style,
+        Theme = Theme,
+        Custom = Custom?.Copy(),
     };
 }
