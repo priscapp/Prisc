@@ -68,6 +68,208 @@ namespace Prisc.VideoSDK.Tests
             Assert.False(runs[0].IsChord);
         }
 
+        // ------------------------------------------------------------- shortcuts and repeats
+
+        private static string[] Texts(IReadOnlyList<KeyRun> runs) => runs.Select(r => r.FullText).ToArray();
+
+        /// <summary>The modifiers that name a shortcut are the ones held when its key goes down:
+        /// letting go of one between two keys makes two different shortcuts.</summary>
+        [Fact]
+        public void Releasing_a_modifier_between_keys_makes_two_shortcuts()
+        {
+            var runs = KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 162),   // Ctrl
+                Kd(20, 160),  // Shift
+                Kd(50, 67),   // C
+                Ku(80, 67),
+                Ku(100, 160), // Shift up, Ctrl still held
+                Kd(150, 68),  // D
+                Ku(180, 68),
+                Ku(200, 162),
+            }, pauseBreakMs: 1000);
+
+            Assert.Equal(new[] { "Ctrl+Shift+C", "Ctrl+D" }, Texts(runs));
+            Assert.All(runs, r => Assert.True(r.IsChord));
+        }
+
+        [Fact]
+        public void Keys_under_unchanged_modifiers_build_one_shortcut_and_adding_one_starts_another()
+        {
+            // Ctrl held over K and Y: one shortcut
+            Assert.Equal(new[] { "Ctrl+K+Y" }, Texts(KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 162), Kd(50, 75), Ku(70, 75), Kd(100, 89), Ku(120, 89), Ku(150, 162),
+            }, pauseBreakMs: 1000)));
+
+            // Ctrl+K, then Shift joins and Y: two
+            Assert.Equal(new[] { "Ctrl+K", "Ctrl+Shift+Y" }, Texts(KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 162), Kd(50, 75), Ku(70, 75), Kd(90, 160), Kd(100, 89), Ku(120, 89), Ku(130, 160), Ku(150, 162),
+            }, pauseBreakMs: 1000)));
+
+            // a multi-key shortcut is not a repeat candidate: Ctrl+K+Y, then Ctrl+Y on its own
+            Assert.Equal(new[] { "Ctrl+K+Y", "Ctrl+Y" }, Texts(KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 162), Kd(50, 75), Kd(100, 89), Ku(150, 162), Kd(300, 162), Kd(350, 89), Ku(400, 162),
+            }, pauseBreakMs: 1000)));
+        }
+
+        [Fact]
+        public void A_repeated_special_key_counts_up_on_one_keycap()
+        {
+            var events = new List<InputEvent> { Kd(0, 65, "a"), Kd(50, 66, "b") };
+            for (int i = 0; i < 5; i++)
+                events.Add(Kd(100 + i * 50, 8)); // Bksp ×5
+
+            var run = Assert.Single(KeyboardLayout.Segment(events, pauseBreakMs: 1000));
+            Assert.Equal("ab Bksp ×5", run.FullText);
+            Assert.Equal(300, run.EndMs);
+
+            var atoms = KeyboardLayout.AtomsAt(run, double.MaxValue);
+            Assert.Equal(new[] { KeyAtomKind.Word, KeyAtomKind.Cap, KeyAtomKind.Repeat }, atoms.Select(a => a.Kind));
+            Assert.Equal("5", atoms[2].Text);
+
+            // the count is what has been pressed by then; a single press shows no badge at all
+            Assert.Equal("3", KeyboardLayout.AtomsAt(run, 200)[^1].Text);
+            Assert.Equal(KeyAtomKind.Cap, KeyboardLayout.AtomsAt(run, 120)[^1].Kind);
+        }
+
+        [Fact]
+        public void Pressing_something_else_breaks_the_count()
+        {
+            var run = Assert.Single(KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 8), Kd(50, 8), Kd(100, 65, "a"), Kd(150, 8), Kd(200, 37), Kd(250, 8),
+            }, pauseBreakMs: 1000));
+
+            Assert.Equal("Bksp ×2 a Bksp Left Bksp", run.FullText);
+        }
+
+        [Fact]
+        public void A_repeated_shortcut_counts_up_whether_or_not_the_modifier_was_released()
+        {
+            // held throughout
+            var held = KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 162), Kd(50, 90), Ku(60, 90), Kd(100, 90), Ku(110, 90), Kd(150, 90), Ku(160, 90), Ku(200, 162),
+            }, pauseBreakMs: 1000);
+            var run = Assert.Single(held);
+            Assert.True(run.IsChord);
+            Assert.Equal("Ctrl+Z ×3", run.FullText);
+            Assert.Equal(new[] { KeyAtomKind.Cap, KeyAtomKind.Plus, KeyAtomKind.Cap, KeyAtomKind.Repeat },
+                KeyboardLayout.AtomsAt(run, double.MaxValue).Select(a => a.Kind));
+
+            // released and pressed again: the closed run reopens
+            var tapped = KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 162), Kd(50, 90), Ku(60, 90), Ku(80, 162),
+                Kd(300, 162), Kd(350, 90), Ku(360, 90), Ku(380, 162),
+            }, pauseBreakMs: 1000);
+            run = Assert.Single(tapped);
+            Assert.Equal("Ctrl+Z ×2", run.FullText);
+            Assert.Equal(50, run.StartMs);
+            Assert.Equal(350, run.EndMs);
+
+            // a different shortcut in between breaks it
+            Assert.Equal(new[] { "Ctrl+Z", "Ctrl+Y", "Ctrl+Z" }, Texts(KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 162), Kd(50, 90), Ku(60, 162),
+                Kd(100, 162), Kd(110, 89), Ku(120, 162),
+                Kd(150, 162), Kd(160, 90), Ku(200, 162),
+            }, pauseBreakMs: 1000)));
+
+            // a count closes the shortcut: another key under the same Ctrl is a new one
+            Assert.Equal(new[] { "Ctrl+Z ×2", "Ctrl+Y" }, Texts(KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 162), Kd(50, 90), Kd(100, 90), Kd(150, 89), Ku(200, 162),
+            }, pauseBreakMs: 1000)));
+
+            // so does the same key under different modifiers
+            Assert.Equal(new[] { "Ctrl+Z", "Ctrl+Shift+Z" }, Texts(KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 162), Kd(50, 90), Kd(80, 160), Kd(100, 90), Ku(200, 160), Ku(210, 162),
+            }, pauseBreakMs: 1000)));
+        }
+
+        [Fact]
+        public void A_repeated_enter_counts_up_on_the_run_it_closed()
+        {
+            var runs = KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 72, "h"), Kd(50, 73, "i"), Kd(100, 13), Kd(150, 13), Kd(200, 13), Kd(300, 66, "b"),
+            }, pauseBreakMs: 1000);
+
+            Assert.Equal(new[] { "hi Enter ×3", "b" }, Texts(runs));
+        }
+
+        [Fact]
+        public void The_pause_break_ends_a_count()
+        {
+            Assert.Equal(new[] { "Bksp", "Bksp" }, Texts(KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 8), Kd(1500, 8),
+            }, pauseBreakMs: 1000)));
+        }
+
+        [Fact]
+        public void Filtered_typing_does_not_break_a_count()
+        {
+            var runs = KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 8), Kd(50, 65, "a"), Kd(100, 8),
+            }, pauseBreakMs: 1000, KeystrokeFilter.Special);
+
+            Assert.Equal("Bksp ×2", Assert.Single(runs).FullText);
+        }
+
+        [Fact]
+        public void The_repeat_badge_age_is_project_time_since_the_last_press()
+        {
+            var run = Assert.Single(KeyboardLayout.Segment(new List<InputEvent>
+            {
+                Kd(0, 8), Kd(100, 8), Kd(200, 8),
+            }, pauseBreakMs: 1000));
+
+            Assert.Equal(50, KeyboardLayout.AtomsAt(run, 250)[^1].AgeMs, 6);
+            Assert.Equal(25, KeyboardLayout.AtomsAt(run, 250, speed: 2)[^1].AgeMs, 6);
+            Assert.Equal(double.PositiveInfinity, KeyboardLayout.AtomsAt(run, 250)[0].AgeMs);
+        }
+
+        [Fact]
+        public void The_repeat_badge_pops_then_settles()
+        {
+            Assert.Equal(RepeatBadge.PopScale, RepeatBadge.PopAt(0), 5);
+            float mid = RepeatBadge.PopAt(RepeatBadge.PopMs / 2);
+            Assert.InRange(mid, 1.0001f, RepeatBadge.PopScale - 0.0001f);
+            Assert.Equal(1f, RepeatBadge.PopAt(RepeatBadge.PopMs));
+            Assert.Equal(1f, RepeatBadge.PopAt(double.PositiveInfinity));
+        }
+
+        /// <summary>The badge wears the keycap's own colors — key top pill, legend-colored count,
+        /// outer key shadow — in every preset.</summary>
+        [Fact]
+        public void The_repeat_badge_wears_the_keycap_colors_in_every_preset()
+        {
+            foreach (var style in KeystrokeStyles.PresetStyles)
+            {
+                foreach (var theme in KeystrokeStyles.Themes)
+                {
+                    var look = KeystrokeStyles.Preset(style, theme);
+                    Assert.Equal(look.KeyTopColor, RepeatBadge.FillColor(look));
+                    Assert.Equal(look.KeyOuterColor, RepeatBadge.ShadowColor(look));
+                    Assert.Equal(look.KeyTextColor, RepeatBadge.InkColor(look));
+                }
+            }
+
+            // a custom look whose legends match the caps still gets a readable count
+            var flat = KeystrokeStyles.Preset(KeystrokeStyles.Default, KeystrokeStyles.Dark) with
+            {
+                KeyTextColor = 0xFF808080, KeyTopColor = 0xFF808080, KeyOuterColor = 0xFF808080,
+            };
+            Assert.True(KeystrokeRenderer.Contrast(RepeatBadge.InkColor(flat), RepeatBadge.FillColor(flat)) >= 3);
+        }
+
         [Fact]
         public void Pause_gap_splits_runs()
         {
@@ -486,6 +688,26 @@ namespace Prisc.VideoSDK.Tests
         private static KeyAtom Word(string text) => new KeyAtom(KeyAtomKind.Word, text);
 
         private static KeyAtom Cap(string text) => new KeyAtom(KeyAtomKind.Cap, text);
+
+        /// <summary>A repeat badge never starts a line of its own: when it would overflow, the
+        /// keycap it counts moves down with it.</summary>
+        [Fact]
+        public void Wrap_keeps_a_repeat_badge_with_its_keycap()
+        {
+            // "aaaa Bksp" measures 5 + 40 + 5 + 30 = 80; the badge would take it to 95
+            var atoms = new[] { Word("aaaa"), Cap("Bksp"), new KeyAtom(KeyAtomKind.Repeat, "2") };
+
+            var lines = KeyboardLayout.WrapAtoms(atoms, new FakeMetrics(), 85);
+
+            Assert.Equal(2, lines.Count);
+            Assert.Equal(new[] { "aaaa" }, lines[0].Select(a => a.Text));
+            Assert.Equal(new[] { KeyAtomKind.Cap, KeyAtomKind.Repeat }, lines[1].Select(a => a.Kind));
+
+            // on a line of its own the badge just stays put, overflow and all
+            var alone = KeyboardLayout.WrapAtoms(new[] { Cap("Bksp"), new KeyAtom(KeyAtomKind.Repeat, "2") },
+                new FakeMetrics(), 35);
+            Assert.Equal(2, Assert.Single(alone).Count);
+        }
 
         [Fact]
         public void Wrap_breaks_between_atoms()
@@ -1016,6 +1238,55 @@ namespace Prisc.VideoSDK.Tests
             }
 
             Assert.Equal(3, runs);
+        }
+
+        /// <summary>A repeated key draws one cap and, beside it and clear of it, the count badge:
+        /// a key-top gray pill shorter than the cap, not a second full-height key face.</summary>
+        [Fact]
+        public void A_repeated_key_draws_one_keycap_and_a_count_badge()
+        {
+            var capture = WriteCapture(
+                "{\"type\":\"event\",\"t\":0,\"kind\":\"kd\",\"vk\":8}",
+                "{\"type\":\"event\",\"t\":50,\"kind\":\"kd\",\"vk\":8}",
+                "{\"type\":\"event\",\"t\":100,\"kind\":\"kd\",\"vk\":8}");
+            var p = BigKeyboardProject(capture, out _, out _);
+
+            var px = RenderAt(p, (long)(1.0 * Sec), BigW, BigH);
+            static bool Face(byte b, byte g, byte r) => b is > 0x30 and < 0x4A && g == b && r == b;
+            var face = Bounds(px, BigW, BigH, Face);
+            Assert.NotNull(face);
+
+            // one gray face across the cap's top edge (above the shorter badge, also key top gray)
+            int y = face.Value.Top + 3, faces = 0, faceRight = -1;
+            bool inside = false;
+            for (int x = 0; x < BigW; x++)
+            {
+                int i = (y * BigW + x) * 4;
+                bool gray = Face(px[i], px[i + 1], px[i + 2]);
+                if (gray && !inside)
+                    faces++;
+                if (gray)
+                    faceRight = x;
+                inside = gray;
+            }
+            Assert.Equal(1, faces);
+
+            // and the pill to its right, past a clear gap, on the row's midline
+            int mid = (face.Value.Top + face.Value.Bottom) / 2, pillLeft = -1, pill = 0;
+            bool MidGray(int x) { int i = (mid * BigW + x) * 4; return Face(px[i], px[i + 1], px[i + 2]); }
+            while (faceRight + 1 < BigW && MidGray(faceRight + 1))
+                faceRight++; // the face is a touch wider at its midline than under its top corners
+            for (int x = faceRight + 1; x < BigW; x++)
+            {
+                int i = (mid * BigW + x) * 4;
+                if (!Face(px[i], px[i + 1], px[i + 2]))
+                    continue;
+                if (pillLeft < 0)
+                    pillLeft = x;
+                pill++;
+            }
+            Assert.True(pill > 4, $"expected the badge's key top fill right of the cap, saw {pill}px");
+            Assert.True(pillLeft - faceRight > 8, $"badge starts {pillLeft - faceRight}px after the cap face");
         }
 
         // ------------------------------------------------------------------- per-row animation

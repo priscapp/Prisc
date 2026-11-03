@@ -116,7 +116,8 @@ namespace Prisc.VideoSDK.Composition
             using var font = new SKFont(typeface, fontPx) { Subpixel = true };
             var metrics = new KeyboardMetrics(fontPx, font.Spacing);
             using var caps = new Keycap(typeface, fontPx, metrics.RowHeight, look);
-            var atomMetrics = new AtomMetrics(font, caps, fontPx, metrics, look);
+            using var badge = new RepeatBadge(typeface, caps, look);
+            var atomMetrics = new AtomMetrics(font, caps, badge, fontPx, metrics, look);
             // the wrap box is the caller's box outright: the tracks' padding is measured inside
             // the line, so subtracting it here would reserve it twice
             wrapWidth = Math.Max(fontPx, wrapWidth);
@@ -157,7 +158,7 @@ namespace Prisc.VideoSDK.Composition
                     var rect = new SKRect(left + dx, top + dy, left + width + dx, top + metrics.RowHeight + dy);
 
                     if (alpha > 0)
-                        DrawLine(target, atoms, atomMetrics, font, caps, metrics, rect, look, alpha);
+                        DrawLine(target, atoms, atomMetrics, font, caps, badge, metrics, rect, look, alpha);
 
                     edge += (stacking == KeystrokeStacking.Up ? -1 : 1) * advance * step;
                 }
@@ -202,27 +203,34 @@ namespace Prisc.VideoSDK.Composition
         {
             private readonly SKFont _font;
             private readonly Keycap _caps;
+            private readonly RepeatBadge _badge;
             private readonly float _space;
             private readonly float _capGap;
             private readonly float _plusGap;
+            private readonly float _badgeGap;
             private readonly float _typingPad;
             private readonly float _trackPad;
 
-            public AtomMetrics(SKFont font, Keycap caps, float fontPx, KeyboardMetrics metrics,
-                KeystrokeLook look)
+            public AtomMetrics(SKFont font, Keycap caps, RepeatBadge badge, float fontPx,
+                KeyboardMetrics metrics, KeystrokeLook look)
             {
                 _font = font;
                 _caps = caps;
+                _badge = badge;
                 _space = font.MeasureText(" ");
                 _capGap = fontPx * 0.16f;
                 _plusGap = fontPx * 0.05f;
+                _badgeGap = fontPx * 0.16f;
                 _typingPad = (float)(look.TypingPadding * metrics.RowHeight);
                 _trackPad = caps.TrackPadding;
             }
 
-            public float Width(KeyAtom atom) => atom.Kind == KeyAtomKind.Cap
-                ? _caps.Width(atom.Text)
-                : _font.MeasureText(atom.Text);
+            public float Width(KeyAtom atom) => atom.Kind switch
+            {
+                KeyAtomKind.Cap => _caps.Width(atom.Text),
+                KeyAtomKind.Repeat => _badge.Width(atom.Text),
+                _ => _font.MeasureText(atom.Text),
+            };
 
             public float Gap(KeyAtom left, KeyAtom right)
             {
@@ -231,15 +239,23 @@ namespace Prisc.VideoSDK.Composition
                     return _space;
 
                 // one track ends and the other begins here, so both paddings are part of the gap
+                // (a repeat badge's pop room rides in its Edge)
                 if (leftWord != rightWord)
                     return Edge(left) + Edge(right) + _capGap;
 
-                // neighbors on the same key track
+                // neighbors on the same key track; a repeat badge also keeps its popped size clear
+                // of them on both sides
+                if (left.Kind == KeyAtomKind.Repeat || right.Kind == KeyAtomKind.Repeat)
+                    return _badgeGap + Overhang(left) + Overhang(right);
                 bool plus = left.Kind == KeyAtomKind.Plus || right.Kind == KeyAtomKind.Plus;
                 return plus ? _plusGap : _capGap;
             }
 
-            public float Edge(KeyAtom atom) => atom.Kind == KeyAtomKind.Word ? _typingPad : _trackPad;
+            public float Edge(KeyAtom atom) =>
+                atom.Kind == KeyAtomKind.Word ? _typingPad : _trackPad + Overhang(atom);
+
+            private float Overhang(KeyAtom atom) =>
+                atom.Kind == KeyAtomKind.Repeat ? _badge.Overhang(atom.Text) : 0f;
         }
 
         /// <summary>
@@ -257,8 +273,8 @@ namespace Prisc.VideoSDK.Composition
         /// centers on the row's midline by the font's real metrics.
         /// </summary>
         private static void DrawLine(SKCanvas target, IReadOnlyList<KeyAtom> atoms,
-            IKeyAtomMetrics atomMetrics, SKFont font, Keycap caps, KeyboardMetrics metrics,
-            SKRect rect, KeystrokeLook look, double alpha)
+            IKeyAtomMetrics atomMetrics, SKFont font, Keycap caps, RepeatBadge badge,
+            KeyboardMetrics metrics, SKRect rect, KeystrokeLook look, double alpha)
         {
             var pen = new float[atoms.Count];
             float x = rect.Left + atomMetrics.Edge(atoms[0]);
@@ -312,6 +328,9 @@ namespace Prisc.VideoSDK.Composition
                         break;
                     case KeyAtomKind.Plus:
                         DrawPlus(target, atom.Text, pen[i], baseline, font, look, alpha);
+                        break;
+                    case KeyAtomKind.Repeat:
+                        badge.Draw(target, atom.Text, atom.AgeMs, pen[i], rect.MidY, alpha);
                         break;
                     default:
                         paint.Color = ink;
@@ -425,7 +444,8 @@ namespace Prisc.VideoSDK.Composition
             using var font = new SKFont(typeface, fontPx) { Subpixel = true };
             var metrics = new KeyboardMetrics(fontPx, font.Spacing);
             using var caps = new Keycap(typeface, fontPx, metrics.RowHeight, look);
-            var atomMetrics = new AtomMetrics(font, caps, fontPx, metrics, look);
+            using var badge = new RepeatBadge(typeface, caps, look);
+            var atomMetrics = new AtomMetrics(font, caps, badge, fontPx, metrics, look);
             return new SKSize(KeyboardLayout.LineWidth(atoms, atomMetrics), metrics.RowHeight);
         }
 
@@ -443,10 +463,11 @@ namespace Prisc.VideoSDK.Composition
             using var font = new SKFont(typeface, fontPx) { Subpixel = true };
             var metrics = new KeyboardMetrics(fontPx, font.Spacing);
             using var caps = new Keycap(typeface, fontPx, metrics.RowHeight, look);
-            var atomMetrics = new AtomMetrics(font, caps, fontPx, metrics, look);
+            using var badge = new RepeatBadge(typeface, caps, look);
+            var atomMetrics = new AtomMetrics(font, caps, badge, fontPx, metrics, look);
             float width = KeyboardLayout.LineWidth(atoms, atomMetrics);
             var rect = new SKRect(left, top, left + width, top + metrics.RowHeight);
-            DrawLine(target, atoms, atomMetrics, font, caps, metrics, rect, look, alpha);
+            DrawLine(target, atoms, atomMetrics, font, caps, badge, metrics, rect, look, alpha);
         }
     }
 }

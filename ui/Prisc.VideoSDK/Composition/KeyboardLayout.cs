@@ -11,12 +11,13 @@ namespace Prisc.VideoSDK.Composition
     /// uses, and the key-down time that revealed it.</summary>
     internal readonly struct KeyToken
     {
-        public KeyToken(double timeMs, string text, string label, bool isCap)
+        public KeyToken(double timeMs, string text, string label, bool isCap, bool isRepeat = false)
         {
             TimeMs = timeMs;
             Text = text;
             Label = label;
             IsCap = isCap;
+            IsRepeat = isRepeat;
         }
 
         public double TimeMs { get; }
@@ -30,14 +31,23 @@ namespace Prisc.VideoSDK.Composition
         /// <summary>Drawn as a keycap rather than as text: every non-printable key, and every
         /// member of a chord.</summary>
         public bool IsCap { get; }
+
+        /// <summary>Another press of the key (or, in a chord run, the whole shortcut) the tokens
+        /// before it stand for: it adds no keycap, it counts up the one already showing — the row
+        /// draws <c>Bksp ×3</c>, not three Bksp caps. The count is how many repeats follow the
+        /// key, so a repeat's <see cref="Text"/> is empty.</summary>
+        public bool IsRepeat { get; }
     }
 
     /// <summary>
     /// One run of consecutive keystrokes — the unit the keyboard overlay displays as a row (or
     /// several, once wrapped). A run ends on a typing gap, on Enter/Esc (included, then closed),
-    /// or when a chord starts; a chord (non-shift modifier + keys, rendered <c>Ctrl+K+Y</c>) is
-    /// its own run, closed when the modifiers release. <see cref="EndMs"/> is the last key-down's
-    /// time — runs never overlap, so both bounds are monotonic across a capture's run list.
+    /// or when a shortcut starts; a shortcut (non-shift modifiers + keys, rendered
+    /// <c>Ctrl+K+Y</c>) is its own run, ended by any change to the modifiers held. Pressing the
+    /// same special key or the same single-key shortcut
+    /// again, with nothing else in between, counts it up instead (<c>Ctrl+Z ×3</c>; see
+    /// <see cref="KeyToken.IsRepeat"/>). <see cref="EndMs"/> is the last key-down's time — runs
+    /// never overlap, so both bounds are monotonic across a capture's run list.
     /// </summary>
     internal sealed class KeyRun
     {
@@ -66,10 +76,23 @@ namespace Prisc.VideoSDK.Composition
         public string TextAt(double timeMs)
         {
             var sb = new StringBuilder();
+            int count = 1, suffix = -1;
             foreach (var token in Tokens)
             {
                 if (token.TimeMs > timeMs)
                     break;
+                if (token.IsRepeat)
+                {
+                    // each repeat rewrites the count before it: "Bksp ×2" becomes "Bksp ×3"
+                    count++;
+                    if (suffix >= 0)
+                        sb.Length = suffix;
+                    suffix = sb.Length;
+                    sb.Append(" ×").Append(count.ToString(CultureInfo.InvariantCulture));
+                    continue;
+                }
+                count = 1;
+                suffix = -1;
                 sb.Append(token.Text);
             }
             return sb.ToString();
@@ -77,27 +100,36 @@ namespace Prisc.VideoSDK.Composition
     }
 
     /// <summary>What a drawn row is made of: runs of typed text broken into words, one keycap per
-    /// special key or chord member, and the "+" a chord puts between its caps.</summary>
+    /// special key or chord member, the "+" a chord puts between its caps, and the repeat badge
+    /// (<c>×3</c>) counting further presses of the key or shortcut just before it.</summary>
     internal enum KeyAtomKind
     {
         Word,
         Cap,
         Plus,
+        Repeat,
     }
 
     /// <summary>One indivisible piece of a keyboard row — the unit the wrap moves between lines
     /// and the drawing lays out left to right.</summary>
     internal readonly struct KeyAtom
     {
-        public KeyAtom(KeyAtomKind kind, string text)
+        public KeyAtom(KeyAtomKind kind, string text, double ageMs = double.PositiveInfinity)
         {
             Kind = kind;
             Text = text;
+            AgeMs = ageMs;
         }
 
         public KeyAtomKind Kind { get; }
 
+        /// <summary>The word, the keycap legend, "+", or — for <see cref="KeyAtomKind.Repeat"/>
+        /// — the press count in invariant digits ("2", "3", …).</summary>
         public string Text { get; }
+
+        /// <summary>Project-time ms since the press that last changed this atom, which drives
+        /// the repeat badge's count-up pop; infinite (settled) for everything else.</summary>
+        public double AgeMs { get; }
     }
 
     /// <summary>
@@ -190,7 +222,18 @@ namespace Prisc.VideoSDK.Composition
         /// alone render nothing; shift never starts a chord (it is already folded into the
         /// translated character); printable keys use the captured character, everything else its
         /// key name as a keycap token (Enter, Esc, Tab, Bksp, Left, F5, …). Mouse events are
-        /// ignored. <paramref name="filter"/> drops runs before they form:
+        /// ignored.
+        ///
+        /// A shortcut is named by the modifiers held when its first key goes down, and keeps
+        /// collecting keys only while exactly those modifiers stay held: Ctrl held over K and Y is
+        /// Ctrl+K+Y, but Ctrl+Shift+C, then Shift up and D, is Ctrl+Shift+C and then Ctrl+D, and
+        /// Ctrl+K then Shift+Y is Ctrl+K and then Ctrl+Shift+Y. Pressing the same special key or
+        /// single-key shortcut again with nothing else pressed in between (and within the pause
+        /// break) is a repeat: it counts up the key already showing instead of adding another
+        /// (<c>Ctrl+Z ×3</c>, held or re-pressed), even after Enter/Esc or a modifier release
+        /// closed its run — the run is reopened.
+        ///
+        /// <paramref name="filter"/> drops runs before they form:
         /// <see cref="KeystrokeFilter.Shortcuts"/> keeps only chords,
         /// <see cref="KeystrokeFilter.Special"/> chords plus the non-printable keys that draw as
         /// keycaps — the skipped keys neither extend a run's clock nor break one, so two special
@@ -212,7 +255,12 @@ namespace Prisc.VideoSDK.Composition
             var tokens = new List<KeyToken>();
             double startMs = 0, endMs = 0;
             bool isChord = false, lastWasSpecial = false;
-            int modifiers = 0;
+            int modifiers = 0, chordModifiers = 0;
+
+            // the last visible key, for repeat counting: which it was (a shortcut's modifiers and
+            // code, or a special key's code; null after typing) and when it went down
+            string lastKey = null;
+            double lastKeyMs = 0;
 
             void Close()
             {
@@ -255,15 +303,66 @@ namespace Prisc.VideoSDK.Composition
                 if (tokens.Count > 0 && e.TimeMs - endMs > pauseBreakMs)
                     Close();
 
-                if ((modifiers & ChordMask) != 0)
+                bool chord = (modifiers & ChordMask) != 0;
+                string ch = chord ? null : Printable(e.Char);
+                bool special = ch == null;
+
+                // filtered-out keys vanish outright: they never open, extend or break a run, nor
+                // a repeat count
+                if (!chord && (filter == KeystrokeFilter.Shortcuts || (filter == KeystrokeFilter.Special && !special)))
+                    continue;
+
+                string key = chord
+                    ? "c" + modifiers.ToString(CultureInfo.InvariantCulture) + ":" + e.Code.ToString(CultureInfo.InvariantCulture)
+                    : special ? "k" + e.Code.ToString(CultureInfo.InvariantCulture) : null;
+
+                if (key != null && key == lastKey && e.TimeMs - lastKeyMs <= pauseBreakMs)
                 {
-                    if (!isChord)
+                    // the same key again: count it on the run showing it, reopening that run when
+                    // Enter/Esc or a modifier release has already closed it
+                    if (tokens.Count == 0 && runs.Count > 0)
+                    {
+                        var reopened = runs[^1];
+                        runs.RemoveAt(runs.Count - 1);
+                        tokens.AddRange(reopened.Tokens);
+                        startMs = reopened.StartMs;
+                        isChord = reopened.IsChord;
+                        chordModifiers = modifiers;
+                        lastWasSpecial = true;
+                    }
+                    if (tokens.Count > 0)
+                    {
+                        tokens.Add(new KeyToken(e.TimeMs, "", tokens[^1].Label, isCap: true, isRepeat: true));
+                        endMs = lastKeyMs = e.TimeMs;
+                        if (!isChord && ClosesRun(e.Code, platform))
+                            Close();
+                        continue;
+                    }
+                }
+
+                lastKey = key;
+                lastKeyMs = e.TimeMs;
+
+                if (chord)
+                {
+                    // the open shortcut grows while the very same modifiers stay held (Ctrl+K+Y);
+                    // any change to them, or a count already on it, starts the next one
+                    bool extend = isChord && tokens.Count > 0 && chordModifiers == modifiers
+                        && !tokens[^1].IsRepeat;
+                    if (!extend)
                     {
                         Close();
                         startMs = e.TimeMs;
                         isChord = true;
+                        chordModifiers = modifiers;
                         foreach (var name in ModifierNames(modifiers, platform))
                             AddChordCap(e.TimeMs, name);
+                    }
+                    else
+                    {
+                        // a multi-key shortcut is not a repeat candidate: Ctrl+K+Y then Ctrl+Y
+                        // is a new shortcut, not Ctrl+K+Y twice
+                        lastKey = null;
                     }
                     AddChordCap(e.TimeMs, KeyName(e.Code, platform));
                     endMs = e.TimeMs;
@@ -274,13 +373,6 @@ namespace Prisc.VideoSDK.Composition
                 // starts a fresh text run
                 if (isChord)
                     Close();
-
-                string ch = Printable(e.Char);
-                bool special = ch == null;
-
-                // filtered-out keys vanish outright: they never open, extend or break a run
-                if (filter == KeystrokeFilter.Shortcuts || (filter == KeystrokeFilter.Special && !special))
-                    continue;
 
                 if (tokens.Count == 0)
                     startMs = e.TimeMs;
@@ -411,9 +503,12 @@ namespace Prisc.VideoSDK.Composition
         /// <summary>
         /// The row's atoms at <paramref name="timeMs"/> — only the keys pressed by then. Typed
         /// characters gather into words (a typed space ends one; the layout puts the gap back),
-        /// every special key becomes its own keycap, and a chord's caps are joined by "+".
+        /// every special key becomes its own keycap, a chord's caps are joined by "+", and the
+        /// repeats of a key or shortcut become one badge after it holding the press count. The
+        /// badge's age is project time — the capture-time delta divides by
+        /// <paramref name="speed"/>, as the row windows do.
         /// </summary>
-        internal static List<KeyAtom> AtomsAt(KeyRun run, double timeMs)
+        internal static List<KeyAtom> AtomsAt(KeyRun run, double timeMs, double speed = 1.0)
         {
             var atoms = new List<KeyAtom>();
             if (run == null)
@@ -428,10 +523,27 @@ namespace Prisc.VideoSDK.Composition
                 word.Clear();
             }
 
+            if (speed <= 0)
+                speed = 1.0;
+
             foreach (var token in run.Tokens)
             {
                 if (token.TimeMs > timeMs)
                     break;
+
+                if (token.IsRepeat)
+                {
+                    FlushWord();
+                    int count = 2;
+                    if (atoms.Count > 0 && atoms[^1].Kind == KeyAtomKind.Repeat)
+                    {
+                        count = int.Parse(atoms[^1].Text, CultureInfo.InvariantCulture) + 1;
+                        atoms.RemoveAt(atoms.Count - 1);
+                    }
+                    atoms.Add(new KeyAtom(KeyAtomKind.Repeat, count.ToString(CultureInfo.InvariantCulture),
+                        (timeMs - token.TimeMs) / speed));
+                    continue;
+                }
 
                 if (token.IsCap)
                 {
@@ -526,7 +638,7 @@ namespace Prisc.VideoSDK.Composition
                         out double entryRaw, out double exitRaw))
                     break; // EndMs is monotonic: every earlier run has left at least as far
 
-                var atoms = AtomsAt(runs[i], sourceMs);
+                var atoms = AtomsAt(runs[i], sourceMs, speed);
                 if (atoms.Count > 0)
                     rows.Add(new KeyboardRow(atoms, runs[i].IsChord, entryRaw, exitRaw));
             }
@@ -577,6 +689,23 @@ namespace Prisc.VideoSDK.Composition
             foreach (var atom in atoms)
             {
                 float atomWidth = metrics.Width(atom);
+
+                // a repeat badge never starts a line: it belongs to the key before it. When it
+                // overflows, a lone keycap (not a chord's last member) moves down with it.
+                if (atom.Kind == KeyAtomKind.Repeat && current.Count > 0)
+                {
+                    if (WidthWith(atom, atomWidth) > maxWidth && current.Count >= 2
+                        && current[^1].Kind == KeyAtomKind.Cap && current[^2].Kind != KeyAtomKind.Plus)
+                    {
+                        var cap = current[^1];
+                        current.RemoveAt(current.Count - 1);
+                        body = LineWidth(current, metrics) - metrics.Edge(current[0]) - metrics.Edge(current[^1]);
+                        Break();
+                        Append(cap, metrics.Width(cap));
+                    }
+                    Append(atom, atomWidth);
+                    continue;
+                }
 
                 if (current.Count > 0 && WidthWith(atom, atomWidth) > maxWidth)
                     Break();

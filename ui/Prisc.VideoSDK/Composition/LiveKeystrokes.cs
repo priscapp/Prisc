@@ -118,7 +118,7 @@ namespace Prisc.VideoSDK.Composition
                         out double entryRaw, out double exitRaw))
                     break; // EndMs is monotonic: every earlier run has left too
 
-                if (entryRaw < 1 || exitRaw < 1)
+                if (entryRaw < 1 || exitRaw < 1 || RepeatPopping(run, nowMs))
                     return nowMs;
 
                 double leaves = run.EndMs + lingerMs;
@@ -126,6 +126,19 @@ namespace Prisc.VideoSDK.Composition
             }
 
             return next;
+        }
+
+        /// <summary>Whether a repeat badge in <paramref name="run"/> is still playing its count-up
+        /// pop at <paramref name="nowMs"/>.</summary>
+        private static bool RepeatPopping(KeyRun run, double nowMs)
+        {
+            var tokens = run.Tokens;
+            for (int i = tokens.Count - 1; i >= 0 && nowMs - tokens[i].TimeMs < RepeatBadge.PopMs; i--)
+            {
+                if (tokens[i].IsRepeat && tokens[i].TimeMs <= nowMs)
+                    return true;
+            }
+            return false;
         }
 
         /// <summary>
