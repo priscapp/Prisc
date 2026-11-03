@@ -1,5 +1,5 @@
 //! macOS app integration: the activation policy, which is how Prisc's dock icon appears and
-//! disappears (README section 4.5).
+//! disappears (README section 4.5), and the process-wide tracking-area fix for Avalonia's windows.
 //!
 //! Prisc is tray resident: on macOS the dock icon should exist only while a real window is open.
 //! Avalonia reads `ShowInDock` once at startup, so the policy is flipped at runtime instead,
@@ -7,6 +7,8 @@
 
 #[cfg(target_os = "macos")]
 use crate::platform::macos::app;
+#[cfg(target_os = "macos")]
+use crate::platform::macos::tracking;
 
 use crate::error::Result;
 use crate::panic;
@@ -56,10 +58,46 @@ fn set_activation_policy(policy: i32, activate_if_regular: u8) -> Result {
     }
 }
 
+/// macOS: stops Avalonia's windows from resetting the cursor on tracking areas they do not own.
+/// Avalonia.Native sets the arrow on every mouse-exited event a window dispatches, whichever view's
+/// tracking area sent it, and macOS 26 leaves a stale window-edge area behind on every resize, so
+/// the pointer crossing one of those edges loses the cursor its control asked for (see
+/// `platform/macos/tracking.rs`). Replaces `-[AvnWindow sendEvent:]`, for the process, with a
+/// filter that hands enter and exit events of other views' areas to NSWindow directly. Call once
+/// at startup, after Avalonia's platform is up; a second call is a no-op. Owns nothing.
+///
+/// Status: `PRISC_OK` (installed, or already installed); `PRISC_S_NONE` when Avalonia.Native is
+/// not loaded or its window has no `sendEvent:` of its own (nothing to fix); `PRISC_E_STATE` off
+/// the main thread; `PRISC_E_UNSUPPORTED` off macOS.
+///
+/// Thread: must be the macOS main thread.
+#[no_mangle]
+pub unsafe extern "C" fn prisc_app_install_tracking_area_fix_macos() -> i32 {
+    panic::guard("prisc_app_install_tracking_area_fix_macos", install_tracking_area_fix)
+}
+
+fn install_tracking_area_fix() -> Result {
+    #[cfg(target_os = "macos")]
+    {
+        tracking::install()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(crate::error::Error::unsupported("the tracking-area fix exists only on macOS"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ffi::status::PriscInteropStatus as S;
+
+    /// libtest never runs on the process main thread; the installed path is main_thread_macapp's.
+    #[test]
+    fn the_tracking_area_fix_is_refused_off_the_main_thread() {
+        let expected = if cfg!(target_os = "macos") { S::State } else { S::Unsupported };
+        assert_eq!(unsafe { prisc_app_install_tracking_area_fix_macos() }, expected as i32);
+    }
 
     #[test]
     fn an_unknown_policy_is_invalid_arg_on_every_thread_and_os() {

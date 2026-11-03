@@ -229,7 +229,7 @@ C#) gives "stale bindings: run cargo codegen" at load instead of undefined behav
 
 ## Exports by area
 
-90 exports. Each area's C# wrapper is `ui/Prisc.Interop/<Area>.cs`.
+91 exports. Each area's C# wrapper is `ui/Prisc.Interop/<Area>.cs`.
 
 Every export has a production caller except two that exist for tests, kept on purpose:
 `prisc_interop_selftest` (the boundary self-test the C# and probe suites drive) and
@@ -244,7 +244,7 @@ the crate's own tests.
 | `screens`, `pixels`, `idle`, `system`, `cursor` | 11 | the monitor list, screen grab and pixel read, idle time, animation preference, cursor position (screens and grab: prisc_rust_core::desktop) |
 | `window` | 11 | overlay setup, click-through, capture exclusion, foreground, bounds, the foreground watch |
 | `ipc`, `process` | 5 | the stdout guard, the kill-on-close job, the foreground grant, FFmpeg preparation, package identity |
-| `app`, `services`, `permissions` | 4 | activation policy, the NSServices provider, permission state and request (prisc_platform) |
+| `app`, `services`, `permissions` | 5 | activation policy, the tracking-area fix for Avalonia's windows, the NSServices provider, permission state and request (prisc_platform) |
 | `devices`, `audio_output`, `audio_input` | 10 | camera and audio device lists, CoreAudio output and microphone input |
 | `gpu` | 19 | the D3D12 or Metal device, the readback ring, the NV12 converter and its textures |
 | `hotkeys` | 9 | the supervised keyboard hook (prisc_hotkeys) |

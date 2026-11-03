@@ -47,6 +47,24 @@ namespace Prisc.Interop
         internal static extern int prisc_app_set_activation_policy_macos(int policy, byte activate_if_regular);
 
         /// <summary>
+        ///  macOS: stops Avalonia's windows from resetting the cursor on tracking areas they do not own.
+        ///  Avalonia.Native sets the arrow on every mouse-exited event a window dispatches, whichever view's
+        ///  tracking area sent it, and macOS 26 leaves a stale window-edge area behind on every resize, so
+        ///  the pointer crossing one of those edges loses the cursor its control asked for (see
+        ///  `platform/macos/tracking.rs`). Replaces `-[AvnWindow sendEvent:]`, for the process, with a
+        ///  filter that hands enter and exit events of other views' areas to NSWindow directly. Call once
+        ///  at startup, after Avalonia's platform is up; a second call is a no-op. Owns nothing.
+        ///
+        ///  Status: `PRISC_OK` (installed, or already installed); `PRISC_S_NONE` when Avalonia.Native is
+        ///  not loaded or its window has no `sendEvent:` of its own (nothing to fix); `PRISC_E_STATE` off
+        ///  the main thread; `PRISC_E_UNSUPPORTED` off macOS.
+        ///
+        ///  Thread: must be the macOS main thread.
+        /// </summary>
+        [DllImport(__DllName, EntryPoint = "prisc_app_install_tracking_area_fix_macos", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        internal static extern int prisc_app_install_tracking_area_fix_macos();
+
+        /// <summary>
         ///  Opens the input device with the UTF-8 `device_uid` (empty, or a UID that no longer resolves,
         ///  is the system default input) for interleaved float32 at `sample_rate_hz` in buffers of about
         ///  `buffer_ms`, with three buffers queued; delivery starts with `prisc_audio_input_start`. Reads the
