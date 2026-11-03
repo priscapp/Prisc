@@ -155,6 +155,7 @@ namespace Prisc
                 if (IsHarnessLaunch(args) && Prisc.Interop.InteropLibrary.IsAvailable)
                 {
                     await SetupSettings();
+                    DiscoverUploadProviders();
                     ApplyTheme();
                 }
 
@@ -207,6 +208,18 @@ namespace Prisc
 
                 bool firstRun = await SetupSettings() || Program.IsVelopackFirstRun;
 
+                // must run before anything resolves a string. An empty Language setting keeps the
+                // OS UI language, which Loc captured on first touch just now.
+                Loc.ApplyCulture(SettingsRoot.Current.General.Language);
+
+                // the hotkeys come first: until the hook is in, a PrintScreen pressed right after
+                // launch goes to the OS (the Snipping Tool) instead. They need only the settings
+                // and the culture; every action they fire is posted to this thread, so none runs
+                // before the rest of this method has set the app up.
+                SetupGlobalHotkeys();
+
+                DiscoverUploadProviders();
+
                 ApplyTheme();
 
                 // the accent the user picked drives the whole app, not only the capture surfaces:
@@ -217,10 +230,6 @@ namespace Prisc
                 // keeps the windows the user chose out of screen capture, from the first one shown
                 // (General > Behavior; see CaptureExclusion)
                 CaptureExclusion.Install();
-
-                // must run before anything resolves a string. An empty Language setting keeps the
-                // OS UI language, which Loc captured on first touch just now.
-                Loc.ApplyCulture(SettingsRoot.Current.General.Language);
 
                 // the pre-rename app's login item, verbs and shell extension are replaced by ours
                 // below; the package removal spawns PowerShell, so it runs in the background.
@@ -289,8 +298,6 @@ namespace Prisc
                 // same mechanism for the language: the tray menu is native and cannot be bound, so
                 // it is rebuilt in place whenever the UI culture changes.
                 Loc.CultureChanged += (s, e) => Dispatcher.UIThread.Post(SetupTrayIcon);
-
-                SetupGlobalHotkeys();
 
                 // macOS: Finder right-click → "Upload with Prisc" (NSServices) delivers the
                 // selection here in-process — background handoff, same as forwarded CLI args.
@@ -430,12 +437,17 @@ namespace Prisc
                 }
             }
 
-            // formerly a hidden side effect of settings deserialization; now an explicit startup step.
+            return firstRun;
+        }
+
+        /// <summary>Fills in the upload providers (formerly a hidden side effect of settings
+        /// deserialization). A separate step from <see cref="SetupSettings"/> because it scans every
+        /// loaded type (~200 ms), which startup runs only once the global hotkeys are in.</summary>
+        private static void DiscoverUploadProviders()
+        {
             // DiscoverProviders scans loaded assemblies, so Prisc.Upload must be pulled in first.
             _ = typeof(Upload.MimeProvider).Assembly;
             SettingsRoot.Current.Uploads.DiscoverProviders();
-
-            return firstRun;
         }
 
         private async Task SetupMutex(string[] args)
