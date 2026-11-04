@@ -1,7 +1,7 @@
 name: Recorder payload for the video tests
 description: >
   Puts a recorder payload (the recorder-<rid>.zip build-recorder.yml stages) in
-  dist/ for ci.yml's test-video job, which needs only its FFmpeg natives and
+  dist/ for ci.yml's dotnet-test job, whose video suite needs only its FFmpeg natives and
   layout, never the recorder executables themselves. It does not wait for this
   run's recorder build when it can avoid it:
 

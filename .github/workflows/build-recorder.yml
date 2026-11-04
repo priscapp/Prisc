@@ -35,7 +35,7 @@ on:
         type: string
         required: true
       natives-fingerprint:
-        description: tools/ci/fingerprint.sh recorder-natives, from ci.yml's plan job (the payload cache key leads with it so test-video can find a payload with the same natives).
+        description: tools/ci/fingerprint.sh recorder-natives, from ci.yml's plan job (the payload cache key leads with it so ci.yml's dotnet-test can find a payload with the same natives).
         type: string
         required: true
 
@@ -81,7 +81,7 @@ jobs:
         id: toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # The key leads with the natives fingerprint so ci.yml's test-video can find a payload with
+      # The key leads with the natives fingerprint so ci.yml's dotnet-test can find a payload with
       # the same FFmpeg natives (.github/actions/recorder-payload).
       - name: Look up a payload built from these inputs
         id: payload

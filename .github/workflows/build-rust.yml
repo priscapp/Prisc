@@ -12,11 +12,17 @@ name: Build rust
 # sit at the archive root and unpack straight into the package directory. A zip
 # rather than the loose tree because upload-artifact does not preserve unix file
 # modes, and the macOS executables need theirs.
+#
+# Each Windows RID has a job of its own (this is the package's critical path,
+# and Windows runners are plentiful); the two macOS RIDs share one job, the
+# arm64 runner building x64 as a cross target, because the plan runs at most
+# five macOS jobs at once across all of CI. Building them back to back in one
+# job also compiles the build scripts and proc macros once for both.
 on:
   workflow_call:
     inputs:
       version:
-        description: The nbgv version ci.yml's version job computed, stamped into the Sentry release name (crates/prisc_rust_core/src/telemetry.rs) and the MSIX manifest.
+        description: The nbgv version ci.yml's plan job computed, stamped into the Sentry release name (crates/prisc_rust_core/src/telemetry.rs) and the MSIX manifest.
         type: string
         required: true
     secrets:
@@ -28,7 +34,7 @@ env:
 
 jobs:
   build:
-    name: rust (${{ matrix.rid }})
+    name: rust (${{ matrix.name }})
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -41,21 +47,22 @@ jobs:
           # stay on macos-15, where they were pinned on purpose. Only the
           # recorder runs on macos-26, because OBS 32.2.2 needs Xcode 26.5
           # (build-recorder.yml). Moving the app jobs over is untested.
-          - rid: win-x64
+          - name: win-x64
             os: windows-latest
-            target: x86_64-pc-windows-msvc
-            msix-arch: x64
-          - rid: win-arm64
+            rids: [win-x64]
+            targets: x86_64-pc-windows-msvc
+          - name: win-arm64
             os: windows-latest
-            target: aarch64-pc-windows-msvc
-            msix-arch: arm64
-          - rid: osx-x64
+            rids: [win-arm64]
+            targets: aarch64-pc-windows-msvc
+          - name: macos
             os: macos-15
-            target: x86_64-apple-darwin
-          - rid: osx-arm64
-            os: macos-15
-            target: aarch64-apple-darwin
+            rids: [osx-arm64, osx-x64]
+            targets: aarch64-apple-darwin, x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     # Lifted to the job so the Sentry step can test the token in an `if:`, where secrets are unavailable but env is; no SENTRY_ORG because an org token carries the slug itself.
     env:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
@@ -63,7 +70,7 @@ jobs:
       # The Rust build has no nbgv hook, so the version ci.yml computed once is stamped into the
       # Sentry release name (crates/prisc_rust_core/src/telemetry.rs) and the MSIX manifest.
       PRISC_VERSION: ${{ inputs.version }}
-      OUT: target/${{ matrix.target }}/release
+      RIDS: ${{ join(matrix.rids, ' ') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -71,114 +78,132 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.targets }}
 
-      # Keyed per rid (two rids share each runner OS). rust-cache already hashes every Cargo.toml,
-      # Cargo.lock and .cargo/config.toml into the key, and a changed one still restores the
-      # previous entry as a starting point (cargo rebuilds whatever it invalidated, flags
-      # included), so they stay out of `key`: there they made any manifest edit a cold build.
-      # Saved from master only, so branch runs restore master's entries instead of evicting them.
+      # Keyed per leg (the Windows legs share a runner OS). rust-cache already hashes every
+      # Cargo.toml, Cargo.lock and .cargo/config.toml into the key, and a changed one still
+      # restores the previous entry as a starting point (cargo rebuilds whatever it invalidated,
+      # flags included), so they stay out of `key`: there they made any manifest edit a cold
+      # build. Saved from master only, so branch runs restore master's entries instead of
+      # evicting them.
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.rid }}
+          key: ${{ matrix.name }}
           save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/claude/ci-speedup' }}
 
-      # One invocation rather than one per crate, so codegen and the LTO links overlap instead of leaving the runner idle.
-      # Explicit packages: the workspace also holds the recorder crates, which build-recorder.yml builds.
-      # The ort crate's build downloads pyke's prebuilt ONNX Runtime for the target and links prisc_ai statically.
+      # Per RID: the packages in one invocation rather than one per crate, so codegen and the LTO
+      # links overlap instead of leaving the runner idle. Explicit packages: the workspace also
+      # holds the recorder crates, which build-recorder.yml builds. The ort crate's build downloads
+      # pyke's prebuilt ONNX Runtime for the target and links prisc_ai statically.
+      #
+      # Then the in-process library in a cargo invocation of its own: built beside the packages
+      # above, cargo would unify features across them and hand it prisc_rust_core's `telemetry`
+      # (Sentry) from prisc_capture. Fails on cargo's "`default-features` is ignored for X" warning
+      # (cargo wraps the key in backticks), which means a dependency line silently enables more
+      # than it asks for, and on ld64's "duplicate symbol" warning. The check behind it is on the
+      # artifact: exports only prisc_*, no Sentry symbol, only OS libraries as dependencies (and
+      # the @rpath install name on macOS).
       - name: Build rust binaries
-        shell: bash
         run: |
-          # shellcheck disable=SC2046 # word-split `-p <crate>` pairs
-          cargo build --release --target ${{ matrix.target }} $(tools/staging/stage-app.sh packages ${{ matrix.rid }})
-
-      # The in-process library gets a cargo invocation of its own: built beside the packages above,
-      # cargo would unify features across them and hand it prisc_rust_core's `telemetry` (Sentry)
-      # from prisc_capture. Fails on cargo's "`default-features` is ignored for X" warning (cargo wraps
-      # the key in backticks), which means a dependency line silently enables more than it asks for,
-      # and on ld64's "duplicate symbol" warning.
-      - name: Build isolated rust libraries
-        shell: bash
-        run: |
-          log="$RUNNER_TEMP/isolated-build.log"
-          : > "$log"
-          while read -r args; do
-            echo "==> cargo build --release --target ${{ matrix.target }} $args"
-            # shellcheck disable=SC2086 # word-split `-p <crate>`
-            cargo build --release --target ${{ matrix.target }} $args 2>&1 | tee -a "$log"
-          done < <(tools/staging/stage-app.sh packages-isolated ${{ matrix.rid }})
-          if grep -E ".?default-features.? is ignored|duplicate symbol" "$log"; then
-            echo "::error::the isolated build printed a default-features or duplicate symbol warning"
-            exit 1
-          fi
-
-      # The artifact check behind the isolated build: exports only prisc_*, no Sentry symbol, only OS
-      # libraries as dependencies (and the @rpath install name on macOS).
-      - name: Verify isolated rust libraries
-        shell: bash
-        run: tools/staging/stage-app.sh verify-isolated ${{ matrix.rid }} "$OUT"
+          . tools/staging/shipped.sh
+          for rid in $RIDS; do
+            triple=$(rid_triple "$rid")
+            echo "::group::$rid: packages"
+            # shellcheck disable=SC2046 # word-split `-p <crate>` pairs
+            cargo build --release --target "$triple" $(tools/staging/stage-app.sh packages "$rid")
+            echo "::endgroup::"
+            echo "::group::$rid: isolated libraries"
+            log="$RUNNER_TEMP/isolated-build-$rid.log"
+            : > "$log"
+            while read -r args; do
+              echo "==> cargo build --release --target $triple $args"
+              # shellcheck disable=SC2086 # word-split `-p <crate>`
+              cargo build --release --target "$triple" $args 2>&1 | tee -a "$log"
+            done < <(tools/staging/stage-app.sh packages-isolated "$rid")
+            if grep -E ".?default-features.? is ignored|duplicate symbol" "$log"; then
+              echo "::error::the isolated $rid build printed a default-features or duplicate symbol warning"
+              exit 1
+            fi
+            tools/staging/stage-app.sh verify-isolated "$rid" "target/$triple/release"
+            echo "::endgroup::"
+          done
 
       # Without these an LTO'd release build reports mangled frames with no file or line; skipped rather than failed when the token is absent (forks).
       # The recorder has no Sentry integration, so it uploads no debug files.
       - name: Upload debug files to Sentry
         if: env.SENTRY_AUTH_TOKEN != ''
-        shell: bash
         run: |
+          . tools/staging/shipped.sh
           npm install -g @sentry/cli
-          tools/staging/stage-app.sh debug-files ${{ matrix.rid }} "$OUT" | while IFS=$'\t' read -r dif bin; do
-            sentry-cli debug-files upload "$dif" "$bin"
+          for rid in $RIDS; do
+            tools/staging/stage-app.sh debug-files "$rid" "target/$(rid_triple "$rid")/release" | while IFS=$'\t' read -r dif bin; do
+              sentry-cli debug-files upload "$dif" "$bin"
+            done
           done
 
-      # stage/ unpacks into the package directory beside Prisc.Ui: the overlay, the scrolling
-      # capture driver, the interop library and prisc_ai with its
-      # license, DirectML.dll and (Windows) the VC++ runtime it alone imports. release.yml signs them with the rest: vpk's
+      # stage-<rid>/ unpacks into the package directory beside Prisc.Ui: the overlay, the scrolling
+      # capture driver, the interop library and prisc_ai with its license, DirectML.dll and
+      # (Windows) the VC++ runtime it alone imports. release.yml signs them with the rest: vpk's
       # Trusted Signing pass covers every dll in the pack dir, and the macOS app signing and
       # notarization cover every Mach-O in the bundle.
       - name: Stage rust binaries
-        shell: bash
-        run: tools/staging/stage-app.sh stage ${{ matrix.rid }} "$OUT" stage
+        run: |
+          . tools/staging/shipped.sh
+          for rid in $RIDS; do
+            tools/staging/stage-app.sh stage "$rid" "target/$(rid_triple "$rid")/release" "stage-$rid"
+          done
 
       # The version in the filename means a changed extension arrives under a fresh name that a lock on the old copy cannot block.
-      - name: Stage shell extension (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          EXT_VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "prisc_shell_ext") | .version')
-          echo "PRISC_EXT_VERSION=$EXT_VERSION" >> "$GITHUB_ENV"
-          cp "$OUT/prisc_shell_ext.dll" "stage/PriscShellExt_${EXT_VERSION}.dll"
-        shell: bash
-
       # Sparse package: the msix holds only the manifest + logos and /nv skips the payload validation that would reject its references to the external dll.
-      - name: Build shell extension MSIX (Windows)
+      - name: Stage shell extension + MSIX (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          $staging = Join-Path $env:RUNNER_TEMP msix-staging
-          New-Item -ItemType Directory -Path $staging | Out-Null
-          Copy-Item -Recurse crates/prisc_shell_ext/msix/Assets (Join-Path $staging Assets)
-          $manifest = (Get-Content crates/prisc_shell_ext/msix/AppxManifest.template.xml -Raw)
-          $manifest = $manifest.Replace('{{VERSION}}', "$env:PRISC_VERSION.0").Replace('{{ARCH}}', '${{ matrix.msix-arch }}').Replace('{{EXTVERSION}}', $env:PRISC_EXT_VERSION)
-          Set-Content -Path (Join-Path $staging AppxManifest.xml) -Value $manifest -Encoding utf8
+          $extVersion = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq prisc_shell_ext | Select-Object -ExpandProperty version
           $makeappx = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\makeappx.exe' | Select-Object -Last 1
-          & $makeappx.FullName pack /d $staging /p stage/PriscShellExt.msix /nv /o
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        shell: pwsh
+          foreach ($rid in $env:RIDS -split ' ') {
+            $arch = $rid -replace '^win-', ''
+            $triple = @{ x64 = 'x86_64-pc-windows-msvc'; arm64 = 'aarch64-pc-windows-msvc' }[$arch]
+            Copy-Item "target/$triple/release/prisc_shell_ext.dll" "stage-$rid/PriscShellExt_$extVersion.dll"
+            $staging = Join-Path $env:RUNNER_TEMP "msix-staging-$rid"
+            New-Item -ItemType Directory -Path $staging | Out-Null
+            Copy-Item -Recurse crates/prisc_shell_ext/msix/Assets (Join-Path $staging Assets)
+            $manifest = (Get-Content crates/prisc_shell_ext/msix/AppxManifest.template.xml -Raw)
+            $manifest = $manifest.Replace('{{VERSION}}', "$env:PRISC_VERSION.0").Replace('{{ARCH}}', $arch).Replace('{{EXTVERSION}}', $extVersion)
+            Set-Content -Path (Join-Path $staging AppxManifest.xml) -Value $manifest -Encoding utf8
+            & $makeappx.FullName pack /d $staging /p "stage-$rid/PriscShellExt.msix" /nv /o
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
 
-      - name: Archive stage (Windows)
-        if: runner.os == 'Windows'
-        run: Compress-Archive -Path stage/* -DestinationPath rust-${{ matrix.rid }}.zip
-        shell: pwsh
+      - name: Archive stage
+        run: |
+          for rid in $RIDS; do
+            if [ "$RUNNER_OS" = Windows ]; then
+              pwsh -NoProfile -Command "Compress-Archive -Path 'stage-$rid/*' -DestinationPath 'rust-$rid.zip'"
+            else
+              (cd "stage-$rid" && zip -qry "../rust-$rid.zip" .)
+            fi
+          done
 
-      - name: Archive stage (macOS)
-        if: runner.os == 'macOS'
-        run: cd stage && zip -qry "../rust-${{ matrix.rid }}.zip" .
-
-      # Only ci.yml's package job reads this, later in the same run.
-      - name: Upload stage
+      # Only ci.yml's package job reads these, later in the same run.
+      - name: Upload ${{ matrix.rids[0] }}
         uses: actions/upload-artifact@v7
         with:
-          name: rust-${{ matrix.rid }}
-          path: rust-${{ matrix.rid }}.zip
+          name: rust-${{ matrix.rids[0] }}
+          path: rust-${{ matrix.rids[0] }}.zip
           if-no-files-found: error
           # Already a zip; re-deflating it only costs time.
+          compression-level: 0
+          retention-days: 1
+
+      - name: Upload ${{ matrix.rids[1] }}
+        if: matrix.rids[1]
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-${{ matrix.rids[1] }}
+          path: rust-${{ matrix.rids[1] }}.zip
+          if-no-files-found: error
           compression-level: 0
           retention-days: 1

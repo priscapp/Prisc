@@ -7,7 +7,7 @@
 #
 #   tools/ci/fingerprint.sh recorder          the recorder stack (build-recorder*.yml)
 #   tools/ci/fingerprint.sh recorder-natives  what decides the payload's FFmpeg/libobs
-#                                             natives and layout (test-video's fallback)
+#                                             natives and layout (dotnet-test's fallback)
 #   tools/ci/fingerprint.sh rust-test         ci.yml's rust-test gate
 #
 # It hashes `git ls-files -s` (mode, blob id and path of each file, the pinned
@@ -32,7 +32,7 @@ crate_closure() {
         end;
       closure($ARGS.positional; [])[]
     | $pkgs[.].manifest_path[$root + 1:] | gsub("\\\\"; "/") | sub("/Cargo.toml$"; "")
-  ' "$@"
+  ' "$@" | tr -d '\r' # jq on Windows ends its lines with CRLF
 }
 
 # The FFmpeg/libobs natives (the obs-studio pin and the crates that build and

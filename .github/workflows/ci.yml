@@ -21,9 +21,9 @@ name: CI
 #   rust-test                                  Rust gate: fmt, clippy + tests per crate, crate
 #                                              boundaries, the interop library's link checks
 #   dotnet-test                                native-interop check, Interop/Shared/Drawing/Ipc
-#                                              dotnet tests, interop probe
-#   test-video                                 the video editor suite against a recorder payload,
-#                                              GPU on WARP (Windows) against tools/warp-baseline.txt
+#                                              dotnet tests, interop probe, then the video editor
+#                                              suite against a recorder payload and GPU on WARP
+#                                              (Windows) against tools/warp-baseline.txt
 #   package         needs recorder, rust, ui   -> prisc-<rid>
 #
 # Skipping what did not change: tools/ci/fingerprint.sh hashes each component's inputs.
@@ -177,7 +177,7 @@ jobs:
             echo "RUN=true" >> "$GITHUB_ENV"
           fi
 
-      # The debug entry dotnet-test and test-video restore too; only this job saves it.
+      # The debug entry dotnet-test restores too; only this job saves it.
       - name: Cache cargo build
         if: env.RUN == 'true'
         uses: Swatinem/rust-cache@v2
@@ -286,15 +286,31 @@ jobs:
           path: .ci-pass
           key: ${{ steps.passed.outputs.cache-primary-key }}
 
+  # The dotnet suites, then the video editor's: Prisc.VideoSDK.Tests covers the playback engine,
+  # the compositor, the render/encode path, the audio clock and the editor model. Tests that need
+  # something the runner has not got (FFmpeg, the prisc_ai binary, another platform) skip rather
+  # than fail. One job per OS rather than two, as the plan runs at most five macOS jobs at once.
   dotnet-test:
     name: dotnet-test (${{ matrix.os }})
+    needs: plan
+    # actions: read lets .github/actions/recorder-payload wait for this run's recorder artifact.
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
-        # macos-15, not the recorder's macos-26: see build-rust.yml.
-        os: [windows-latest, macos-15]
+        include:
+          # macos-15, not the recorder's macos-26: see build-rust.yml.
+          - os: windows-latest
+            rid: win-x64
+            exe: .exe
+          - os: macos-15
+            rid: osx-arm64
+            exe: ""
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # Can include waiting for a cold recorder build (see the payload step).
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash
@@ -332,7 +348,7 @@ jobs:
       - name: Build prisc_interop (debug)
         run: cargo build -p prisc_interop
 
-      # Prisc.VideoSDK.Tests runs in test-video, which needs a recorder payload.
+      # Prisc.VideoSDK.Tests runs below, once the recorder payload is in place.
       # PRISC_INTEROP_REQUIRED turns a missing or stale library into a failure instead of a skip.
       - name: "UI gate: dotnet tests"
         env:
@@ -381,64 +397,14 @@ jobs:
           path: probe-out/probe.json
           if-no-files-found: warn
 
-  # Prisc.VideoSDK.Tests is the video editor's suite — the playback engine, the compositor,
-  # the render/encode path, the audio clock and the editor model. Tests that need something the
-  # runner has not got (FFmpeg, the prisc_ai binary, another platform) skip rather than fail.
-  test-video:
-    name: test-video (${{ matrix.os }})
-    needs: plan
-    # actions: read lets .github/actions/recorder-payload wait for this run's recorder artifact.
-    permissions:
-      contents: read
-      actions: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # macos-15, not the recorder's macos-26: see build-rust.yml.
-          - os: windows-latest
-            rid: win-x64
-            exe: .exe
-          - os: macos-15
-            rid: osx-arm64
-            exe: ""
-    runs-on: ${{ matrix.os }}
-    # Can include waiting for a cold recorder build (see the payload step).
-    timeout-minutes: 120
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          # nbgv needs full history to compute the version height.
-          fetch-depth: 0
-
-      # SDK 10 is required: Avalonia 12's XAML generators target Roslyn 4.14, and older SDKs skip them as CS9057 so the x:Name fields go missing.
-      - name: Install .NET SDK
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 10.0.x
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: debug
-          save-if: false
-
-      # The interop library is built here (debug, seconds warm) rather than taken from the rust job,
-      # so this job does not wait for the release builds and their Sentry upload. PRISC_INTEROP_PATH
-      # is authoritative and inherited by the Prisc.VideoRender children the render tests spawn;
-      # PRISC_INTEROP_REQUIRED turns a missing or stale library into a failure instead of a skip.
-      # WARP stays off in the main suite: its GPU tests skip without hardware; only the filtered
-      # WARP step below admits the software adapter.
-      - name: Build prisc_interop (debug)
+      # From here on the video editor's suite. PRISC_INTEROP_PATH is authoritative and inherited by
+      # the Prisc.VideoRender children the render tests spawn; PRISC_INTEROP_REQUIRED turns a
+      # missing or stale library into a failure instead of a skip. Set only now, so the suites above
+      # keep finding the library through the dev walk-up. WARP stays off in the main suite: its GPU
+      # tests skip without hardware; only the filtered WARP step below admits the software adapter.
+      - name: Point the video tests at the interop library
+        if: ${{ !cancelled() }}
         run: |
-          cargo build -p prisc_interop
           lib="$PWD/target/debug/$(. tools/staging/shipped.sh && rid_cdylib ${{ matrix.rid }} prisc_interop)"
           [ -f "$lib" ] || { echo "::error::$lib was not built"; exit 1; }
           if [ "$RUNNER_OS" = Windows ]; then lib=$(cygpath -w "$lib"); fi
@@ -457,6 +423,7 @@ jobs:
       # Deliberately non-fatal: if no payload turns up (the recorder build failed), the variable
       # stays unset, those tests skip, and the other ~3300 still run.
       - name: Recorder payload
+        if: ${{ !cancelled() }}
         id: payload
         uses: ./.github/actions/recorder-payload
         with:
@@ -465,6 +432,7 @@ jobs:
           natives-fingerprint: ${{ needs.plan.outputs.recorder-natives }}
 
       - name: Recorder payload for the video editor tests
+        if: ${{ !cancelled() }}
         run: |
           zip="dist/recorder-${{ matrix.rid }}.zip"
           if [ -f "$zip" ]; then
@@ -479,13 +447,14 @@ jobs:
           fi
 
       - name: "UI gate: video editor tests"
+        if: ${{ !cancelled() }}
         run: dotnet test ui/Prisc.VideoSDK.Tests/Prisc.VideoSDK.Tests.csproj -c Release --nologo
 
       # The runner has no GPU, so the D3D12 paths only run on WARP, the software adapter, which
       # PRISC_GPU_ALLOW_WARP admits for this step alone. Only these filtered tests run on it (never
       # the whole suite): WARP is slow and lacks features, and NV12 answering E_CAPABILITY there is
-      # a skip with a printed reason, never a pass. Here rather than in dotnet-test because the
-      # D3D11EncodeBridge rigs need the FFmpeg payload above, and they would all skip without it.
+      # a skip with a printed reason, never a pass. Here, after the payload, because the D3D11EncodeBridge
+      # rigs need its FFmpeg natives, and they would all skip without them.
       # Test failures do not fail the run itself: the GPU code was never written for a software
       # adapter, so the set that must pass is the set recorded in tools/warp-baseline.txt, and
       # check-warp-baseline.sh fails on a test that passed there and no longer does (or a new test
