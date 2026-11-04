@@ -249,7 +249,8 @@ namespace Prisc.Ipc
         /// <paramref name="isReply"/> accepts. Fails with <see cref="HelperCommandException"/> when a
         /// non-fatal <c>bad_command</c>, <c>rejected</c> or <c>failed</c> error arrives first (commands
         /// are answered in order, so it belongs to this command), with
-        /// <see cref="InvalidOperationException"/> when the run ends first, and with
+        /// <see cref="InvalidOperationException"/> when the run ends first (a
+        /// <see cref="HelperEndedException"/> carrying the terminal event when one ended it), and with
         /// <see cref="TimeoutException"/> after <paramref name="timeout"/>. The reply is still written
         /// to <see cref="Events"/>. At most one may be outstanding; use it only for commands the
         /// catalog guarantees a reply to.
@@ -262,7 +263,9 @@ namespace Prisc.Ipc
             {
                 if (_pending != null)
                     throw new InvalidOperationException("A command is already waiting for its reply.");
-                if (_ended || _terminal != null)
+                if (_terminal != null)
+                    throw new HelperEndedException(_terminal);
+                if (_ended)
                     throw new InvalidOperationException("The helper has already ended.");
                 // registered before the write, so a reply faster than this thread cannot be missed
                 _pending = pending;
@@ -507,7 +510,7 @@ namespace Prisc.Ipc
                     _terminal = ev;
                     if (_pending != null)
                     {
-                        _pending.TrySetException(new InvalidOperationException("The helper ended before it answered."));
+                        _pending.TrySetException(new HelperEndedException(ev));
                         _pending = null;
                     }
                 }

@@ -1573,22 +1573,42 @@ impl Recorder {
         self.audio_tracks = plan;
     }
 
-    /// Starts the output; on failure emits `done{failed}` code -4 with the
-    /// output's last error and exits 1 (joining the levels thread first so
-    /// `done` stays the last protocol line).
+    /// Starts the output, retrying once on x264 when a hardware video encoder
+    /// refuses to initialize (see `encoder_config::create_software_video_encoder`
+    /// for how a registered encoder can still be unusable); on failure emits
+    /// `done{failed}` code -4 with the output's last error and exits 1
+    /// (joining the levels thread first so `done` stays the last protocol
+    /// line).
     fn start_output(
-        &self,
+        &mut self,
         status_stop: &Arc<AtomicBool>,
         levels_handle: &mut Option<std::thread::JoinHandle<()>>,
     ) {
         self.frame_clock.reset(self.settings.fps);
+        // Armed once, before the first attempt: a failed start opens no file
+        // and sends no packet (encoders initialize before the output's file),
+        // so the sidecar headers stay valid for the retry, and arming twice
+        // would write a second header line.
         if let Some(ref ic) = self.input_capture {
             ic.on_output_started(self.settings.fps);
         }
         if let Some(ref wc) = self.window_capture {
             wc.on_output_started(self.settings.fps);
         }
-        if let Err(e) = self.output.start() {
+        let mut result = self.output.start();
+        if let Err(ref e) = result {
+            let failed_id = self.video_encoder.id();
+            if failed_id != encoder_config::X264_ID {
+                prisc_ipc::log!(
+                    "Failed to start recording with video encoder '{failed_id}' ({e}); retrying with x264"
+                );
+                if self.fall_back_to_software_encoder() {
+                    self.frame_clock.reset(self.settings.fps);
+                    result = self.output.start();
+                }
+            }
+        }
+        if let Err(e) = result {
             prisc_ipc::log!("Failed to start recording: {e}");
             status_stop.store(true, Ordering::Relaxed);
             if let Some(handle) = levels_handle.take() {
@@ -1613,6 +1633,37 @@ impl Recorder {
                 window_capture: self.window_capture_path(),
             });
             prisc_ipc::lifetime::exit(prisc_ipc::exit::FAILED);
+        }
+    }
+
+    /// Swaps the screen encoder for x264 at the current settings. Pre-start
+    /// only (libobs refuses encoder changes on an active output). False, with
+    /// the reason logged, when x264 itself cannot be created.
+    fn fall_back_to_software_encoder(&mut self) -> bool {
+        let (out_w, out_h) = region::compute_output_size(
+            self.canvas,
+            self.settings.max_width,
+            self.settings.max_height,
+        );
+        let config = EncoderConfig {
+            hw_accel: false,
+            crf: self.settings.crf,
+            low_cpu: self.settings.low_cpu,
+            width: out_w,
+            height: out_h,
+            fps: self.settings.fps,
+        };
+        match encoder_config::create_software_video_encoder(&config) {
+            Ok(encoder) => {
+                encoder.set_video(self.context.get_video());
+                self.output.set_video_encoder(&encoder);
+                self.video_encoder = encoder;
+                true
+            }
+            Err(e) => {
+                prisc_ipc::log!("Failed to create the x264 fallback encoder: {e}");
+                false
+            }
         }
     }
 

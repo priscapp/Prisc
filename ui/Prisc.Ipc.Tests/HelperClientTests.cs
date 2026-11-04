@@ -179,6 +179,27 @@ namespace Prisc.Ipc.Tests
         }
 
         [Fact]
+        public async Task A_terminal_answering_a_wait_fails_it_with_that_terminal()
+        {
+            var (client, child) = await StartRecorderAsync();
+            child.OnCommand = _ => child.WriteStdout(
+                """{"type":"done","result":"failed","code":-4,"message":"start failed","detail":"encoder"}""");
+
+            var ex = await Assert.ThrowsAsync<HelperEndedException>(() =>
+                client.SendAndWaitAsync(new RecorderCommand.Start(), e => e is RecorderEvent.StartedRecording, Generous));
+            var done = Assert.IsType<RecorderEvent.Done>(ex.Terminal);
+            Assert.Equal("encoder", done.Detail);
+
+            // a later wait names the same terminal rather than a bare "already ended"
+            var again = await Assert.ThrowsAsync<HelperEndedException>(() =>
+                client.SendAndWaitAsync(new RecorderCommand.Start(), e => e is RecorderEvent.StartedRecording, Generous));
+            Assert.Same(done, again.Terminal);
+
+            child.Exit(1);
+            await client.DisposeAsync();
+        }
+
+        [Fact]
         public async Task A_fatal_error_is_the_terminal_and_maps_to_FatalError()
         {
             var (client, child) = await StartRecorderAsync();

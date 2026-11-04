@@ -285,17 +285,34 @@ pub fn create_video_encoder(
     config: &EncoderConfig,
 ) -> Result<ObsEncoder, ObsError> {
     let encoder_id = select_encoder(available, config.hw_accel);
+    create_video_encoder_by_id(&encoder_id, config)
+}
+
+/// The x264 encoder for `config`, whatever `config.hw_accel` says: the
+/// recorder's fallback when a hardware encoder fails to initialize.
+///
+/// "Registered" does not mean "usable on our adapter": the obs-*-test.exe
+/// probes register an encoder when ANY adapter supports it, but the texture
+/// encoders only run on the adapter libobs renders on. A desktop with an AMD
+/// discrete GPU (libobs' adapter) plus an AMD iGPU gets AMF registered from
+/// the iGPU's caps, then `obs_output_start` fails with "Wrong adapter" (and
+/// the rerouted fallback with AMF_NOT_FOUND) when the dGPU has no usable AMF.
+pub fn create_software_video_encoder(config: &EncoderConfig) -> Result<ObsEncoder, ObsError> {
+    create_video_encoder_by_id(X264_ID, config)
+}
+
+fn create_video_encoder_by_id(encoder_id: &str, config: &EncoderConfig) -> Result<ObsEncoder, ObsError> {
     let caps = EncoderCaps::probe();
-    let settings = encoder_settings(&encoder_id, config, &caps);
+    let settings = encoder_settings(encoder_id, config, &caps);
     eprintln!(
         "Using video encoder '{encoder_id}' ({}; requested crf={}, low_cpu={})",
-        describe_settings(&encoder_id, &settings),
+        describe_settings(encoder_id, &settings),
         config.crf,
         config.low_cpu
     );
     // The encoder name becomes the mp4 track name (mp4_output writes it into
     // the track's udta box), so it is user-visible in players.
-    ObsEncoder::create_video(&encoder_id, "Screen", Some(&settings))
+    ObsEncoder::create_video(encoder_id, "Screen", Some(&settings))
 }
 
 /// AAC bitrate (kbps) per audio track. 192 rather than the previous 128:

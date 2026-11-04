@@ -70,6 +70,17 @@ impl ObsEncoder {
         unsafe { prisc_obs_sys::obs_encoder_update(self.ptr, settings.ptr) };
     }
 
+    /// The encoder type id the encoder was created with (e.g. `obs_x264`).
+    pub fn id(&self) -> String {
+        let ptr = unsafe { prisc_obs_sys::obs_encoder_get_id(self.ptr) };
+        if ptr.is_null() {
+            return String::new();
+        }
+        unsafe { std::ffi::CStr::from_ptr(ptr) }
+            .to_string_lossy()
+            .into_owned()
+    }
+
     pub fn as_ptr(&self) -> *mut prisc_obs_sys::obs_encoder_t {
         self.ptr
     }

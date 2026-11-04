@@ -90,4 +90,21 @@ namespace Prisc.Ipc
 
         public IIpcError Error { get; }
     }
+
+    /// <summary>The run's terminal event (a final <c>done</c>, a fatal error) arrived while a command
+    /// was still waiting for its reply. <see cref="Terminal"/> is that event, so a caller can report
+    /// why the helper ended (a <c>done{failed}</c> carries the reason) instead of only that it did.</summary>
+    public sealed class HelperEndedException : InvalidOperationException
+    {
+        public HelperEndedException(object terminal)
+            : base(terminal is IIpcError error && !String.IsNullOrEmpty(error.Message)
+                ? error.Message
+                : "The helper ended before it answered.")
+        {
+            Terminal = terminal;
+        }
+
+        /// <summary>The terminal event, as the helper's event type.</summary>
+        public object Terminal { get; }
+    }
 }

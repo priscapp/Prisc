@@ -316,6 +316,12 @@ namespace Prisc.UI
                 throw client.Log.Attach(new TimeoutException(
                     $"The recording process did not send '{expected}' within {timeout.TotalSeconds:0} s."));
             }
+            catch (HelperEndedException ex) when (ex.Terminal is RecorderEvent.Done done)
+            {
+                // a done{failed} answering the command (e.g. the output refused to start) says why;
+                // report that, the same text CriticalError carries, not just that the run ended
+                throw client.Log.Attach(new InvalidOperationException(Describe(done), ex));
+            }
             catch (Exception ex)
             {
                 client.Log.Attach(ex);
