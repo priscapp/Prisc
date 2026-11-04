@@ -27,8 +27,9 @@ namespace Prisc.UI
     ///
     /// Requesting is one-shot by OS design. The system prompt shows only until the user answers it
     /// once; every later request just returns the stored answer without showing anything. So the
-    /// settings button asks first and, once asking has stopped working, sends the user to System
-    /// Settings instead: a button that silently does nothing is the worst of the three options.
+    /// settings buttons always end in System Settings rather than relying on a prompt: a button that
+    /// silently does nothing is the worst of the options. Asking still matters there, because only
+    /// an app that has asked gets a row in the pane (see <see cref="OpenSettings"/>).
     ///
     /// Screen Recording cannot be picked up by a running process: macOS hands the app that TCC answer
     /// at launch, so granting it takes effect on the next start, and callers say so rather than
@@ -114,10 +115,22 @@ namespace Prisc.UI
 
         /// <summary>Opens the System Settings pane for <paramref name="permission"/>, where the user
         /// can grant it by hand.</summary>
+        /// <remarks>
+        /// Both panes only list apps that have asked for the permission, and have no row to flip
+        /// until one has: the user is left adding Prisc.app with the '+' button (#136). So the
+        /// permission is requested first. The request writes the row (off) before the pane draws,
+        /// even while the OS prompt it may show is still on screen; that prompt only routes to this
+        /// same pane, so it can sit over it. Accessibility is usually listed already
+        /// (<see cref="AccessibilityPrompt"/>), but not when no hotkey has started the hook, or when
+        /// the user removed the row; its alert may show again with the pane, a fair price for a row
+        /// that is always there.
+        /// </remarks>
         public static void OpenSettings(MacPermission permission)
         {
             if (!IsRelevant)
                 return;
+
+            EnsureListed(ToKind(permission));
 
             var pane = permission switch
             {
@@ -165,6 +178,22 @@ namespace Prisc.UI
             MacPermission.Accessibility => PermissionKind.Accessibility,
             _ => throw new ArgumentOutOfRangeException(nameof(permission), permission, null),
         };
+
+        /// <summary>Asks for <paramref name="kind"/> so the OS records Prisc in its pane. A no-op
+        /// once granted (<see cref="Permissions.Ensure"/> does not touch the prompt then); a failure
+        /// only costs the row, so it is logged and the pane still opens.</summary>
+        private static void EnsureListed(PermissionKind kind)
+        {
+            try
+            {
+                Permissions.Ensure(kind);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[MacPermissions] requesting " + kind + " before opening System Settings failed: " + ex);
+                SentryConfig.CaptureHandled(ex, "macperm.ensure-listed");
+            }
+        }
 
         private static bool IsUsable(PermissionKind kind, string sentryOperation)
         {

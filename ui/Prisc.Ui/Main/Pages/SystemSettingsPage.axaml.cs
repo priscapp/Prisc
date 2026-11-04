@@ -273,12 +273,9 @@ namespace Prisc.UI.Pages
             status.Classes.Set("Missing", !granted);
 
             // the button stays even once granted: revoking happens in System Settings too, and a
-            // control that vanishes on success leaves no way back in. It always goes straight to the
-            // pane rather than trying the OS prompt first — macOS only offers each prompt once ever,
-            // so a button that sometimes prompts and sometimes doesn't is unpredictable, and the
-            // first-run prompts are already covered where they belong: Screen Recording on the
-            // first capture attempt, Accessibility when a hotkey hook first finds it missing
-            // (AccessibilityPrompt).
+            // control that vanishes on success leaves no way back in. It always ends at the pane;
+            // OpenSettings asks the OS first so Prisc has a row there to flip (the panes list only
+            // apps that have asked).
             button.Content = "Open System Settings";
 
             // only Screen Recording waits for a restart: the hotkeys pick Accessibility up live
