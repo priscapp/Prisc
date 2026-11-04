@@ -122,8 +122,10 @@ as_cargo_args() {
 copy_vc_runtime() {
   local rid=$1 dest=$2 arch crt f
   arch=${rid#win-}
-  crt=$(find "/c/Program Files/Microsoft Visual Studio" -type d \
-    -path "*/VC/Redist/MSVC/*/$arch/Microsoft.VC*.CRT" 2>/dev/null | sort | tail -1 || true)
+  # A glob over <version>/<edition> installs, not a find: walking the whole
+  # Visual Studio tree took most of a minute on the CI runners.
+  crt=$(ls -d "/c/Program Files/Microsoft Visual Studio"/*/*/VC/Redist/MSVC/*/"$arch"/Microsoft.VC*.CRT \
+    2>/dev/null | sort | tail -1 || true)
   if [ -z "$crt" ]; then
     if [ "${VCRT_OPTIONAL:-0}" = 1 ]; then
       echo "warning: VC++ redist ($arch) not found; $dest needs msvcp140/vcruntime140 at runtime" >&2

@@ -8,20 +8,35 @@ name: CI
 # upstream ONNX Runtime no longer supports) also carries the prisc_ai inference binary
 # (OCR, matting, denoising) with its execution-provider dylibs.
 #
-# The three builds run in parallel and package only merges their outputs, so the app
-# build no longer waits behind the recorder's.
+# The three builds run in parallel and package only merges their outputs. The tests
+# run beside them and gate the run, not the package.
 #
 # Job graph:
-#   version                                    -> artifact `version` (release.yml reads it), output `version`
+#   plan                                       version (artifact `version`, which release.yml
+#                                              reads) and the input fingerprints below
 #   recorder        build-recorder.yml         -> recorder-<rid>, Windows + macOS
 #   recorder-linux  build-recorder-linux.yml   check only, nothing consumes it
-#   rust            build-rust.yml             -> rust-<rid>, needs version (stamps it)
+#   rust            build-rust.yml             -> rust-<rid>, needs plan (stamps the version)
 #   ui              build-ui.yml               -> ui-<rid>
-#   test                                       Rust gate, native-interop check, Interop/Shared/Drawing/Ipc
-#                                              dotnet tests, interop probe (no needs)
-#   test-video      needs recorder             runs even if it fails; the FFmpeg tests then skip;
+#   rust-test                                  Rust gate: fmt, clippy + tests per crate, crate
+#                                              boundaries, the interop library's link checks
+#   dotnet-test                                native-interop check, Interop/Shared/Drawing/Ipc
+#                                              dotnet tests, interop probe
+#   test-video                                 the video editor suite against a recorder payload,
 #                                              GPU on WARP (Windows) against tools/warp-baseline.txt
 #   package         needs recorder, rust, ui   -> prisc-<rid>
+#
+# Skipping what did not change: tools/ci/fingerprint.sh hashes each component's inputs.
+# A recorder leg whose inputs, toolchain included, built and passed before reuses that
+# payload from the cache instead of building libobs and the recorder again, and
+# rust-test skips when the same inputs already passed on that OS and toolchain. The
+# version-stamped builds (rust, ui) and the dotnet suites run every time.
+#
+# Caching: the repository's Actions cache is 10 GB, and once over it GitHub evicts the
+# least recently used entries, which turned warm builds cold at random. So every
+# rust-cache saves from master only (branch runs restore master's entries), the debug
+# jobs share one entry per OS (saved by rust-test), and the debug profile keeps line
+# tables only.
 
 on:
   push:
@@ -33,16 +48,26 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CARGO_TERM_COLOR: always
+  # Line tables still give file:line backtraces, at a fraction of the full debug info's size
+  # and link time. The same in every debug job, so all of them share the rust-cache entry
+  # (rust-cache hashes CARGO_* variables into its key).
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
 jobs:
-  # release.yml downloads this from a completed run and trusts it as that run's version.
-  # The one place CI computes the version: build-rust.yml takes it as an input rather than
-  # installing .NET and nbgv to compute it again (the .NET builds stamp it through nbgv's
+  # release.yml downloads the version artifact from a completed run and trusts it as that run's
+  # version. The one place CI computes the version: build-rust.yml takes it as an input rather
+  # than installing .NET and nbgv to compute it again (the .NET builds stamp it through nbgv's
   # MSBuild integration, from the same version.json and history).
-  version:
+  plan:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
       version: ${{ steps.nbgv.outputs.version }}
+      recorder: ${{ steps.fingerprint.outputs.recorder }}
+      recorder-natives: ${{ steps.fingerprint.outputs.recorder-natives }}
+      rust-test: ${{ steps.fingerprint.outputs.rust-test }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -65,101 +90,142 @@ jobs:
           path: version.txt
           if-no-files-found: error
 
+      - name: Fingerprint inputs
+        id: fingerprint
+        run: |
+          for component in recorder recorder-natives rust-test; do
+            fingerprint=$(tools/ci/fingerprint.sh "$component")
+            echo "$component: $fingerprint"
+            echo "$component=$fingerprint" >> "$GITHUB_OUTPUT"
+          done
+
   # The recorder stack (libobs via CMake, 20-40 min cold) builds in these two calls, the
-  # only jobs that check out the obs-studio submodule.
+  # only jobs that check out the obs-studio submodule, and only when no earlier run built
+  # the same inputs.
   recorder:
+    needs: plan
     uses: ./.github/workflows/build-recorder.yml
+    with:
+      fingerprint: ${{ needs.plan.outputs.recorder }}
+      natives-fingerprint: ${{ needs.plan.outputs.recorder-natives }}
 
   # Linux has no app package yet; this proves the recorder still builds, tests and runs
   # there (bundle + portability checks). Nothing consumes its artifacts. A workflow of its
   # own so that package, which needs `recorder` as a whole, never waits on it.
   recorder-linux:
+    needs: plan
     uses: ./.github/workflows/build-recorder-linux.yml
+    with:
+      fingerprint: ${{ needs.plan.outputs.recorder }}
 
   rust:
-    needs: version
+    needs: plan
     uses: ./.github/workflows/build-rust.yml
     with:
-      version: ${{ needs.version.outputs.version }}
+      version: ${{ needs.plan.outputs.version }}
     secrets:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
   ui:
     uses: ./.github/workflows/build-ui.yml
 
-  test:
-    name: test (${{ matrix.os }})
+  rust-test:
+    name: rust-test (${{ matrix.os }})
+    needs: plan
     strategy:
       fail-fast: false
       matrix:
-        # macos-15, not the recorder's macos-26: see build-rust.yml.
-        os: [windows-latest, macos-15]
+        include:
+          # macos-15, not the recorder's macos-26: see build-rust.yml.
+          - os: windows-latest
+            # For the Linux cross-check.
+            targets: x86_64-unknown-linux-gnu
+          - os: macos-15
+            targets: ""
     runs-on: ${{ matrix.os }}
-    # Three more Rust crates, the Prisc.Ui Release build and the probe run on top of the previous 60.
-    timeout-minutes: 90
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          # nbgv needs full history to compute the version height.
-          fetch-depth: 0
-
-      # C# reaches natives only through ui/Prisc.Interop (generated from crates/prisc_interop);
-      # every other site is a line in tools/native-interop-allowlist. Cheap, so it runs first.
-      - name: Native interop check
-        run: tools/check-native-interop.sh
-        shell: bash
 
       - name: Install Rust toolchain
+        id: toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: ${{ matrix.targets }}
 
-      - name: Cache cargo build
-        uses: Swatinem/rust-cache@v2
-
-      # SDK 10 is required: Avalonia 12's XAML generators target Roslyn 4.14, and older SDKs skip them as CS9057 so the x:Name fields go missing.
-      - name: Install .NET SDK
-        uses: actions/setup-dotnet@v6
+      # The marker is saved at the end of a passing run (the last step), so a hit means this
+      # exact gate already passed for these inputs on this OS and toolchain.
+      - name: Look up an earlier pass
+        id: passed
+        uses: actions/cache/restore@v6
         with:
-          dotnet-version: 10.0.x
+          path: .ci-pass
+          key: rust-test-${{ runner.os }}-${{ needs.plan.outputs.rust-test }}-${{ steps.toolchain.outputs.cachekey }}
+          lookup-only: true
+
+      - name: Run only on a miss
+        run: |
+          if [ "${{ steps.passed.outputs.cache-hit }}" = true ]; then
+            echo "RUN=false" >> "$GITHUB_ENV"
+            echo "::notice title=rust-test (${{ matrix.os }})::skipped: these inputs already passed on this OS and toolchain"
+          else
+            echo "RUN=true" >> "$GITHUB_ENV"
+          fi
+
+      # The debug entry dotnet-test and test-video restore too; only this job saves it.
+      - name: Cache cargo build
+        if: env.RUN == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: debug
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+
+      # Covers the whole workspace (the imported recorder crates opt out of formatting through
+      # their own rustfmt.toml). Formatting does not depend on the OS, so one leg checks it.
+      - name: "Rust gate: format"
+        if: env.RUN == 'true' && runner.os == 'Windows'
+        run: cargo fmt --check
 
       # App crates only. The recorder crates build libobs from their build scripts, so they
       # are built and tested in build-recorder.yml (their clippy is not gated yet).
-      # `cargo fmt --check` covers the whole workspace; the imported recorder crates opt out
-      # of formatting through their own rustfmt.toml.
       # One call per crate, never several -p together: that would unify dependency features
       # across them, so a crate that only compiles because a sibling enables a feature would pass.
-      - name: "Rust gate: format + lint + tests"
+      - name: "Rust gate: lint + tests"
+        if: env.RUN == 'true'
         run: |
-          cargo fmt --check
-          cargo clippy -p prisc_ipc --all-targets -- -D warnings
-          cargo test -p prisc_ipc
-          cargo clippy -p prisc_rust_core --all-targets -- -D warnings
-          cargo test -p prisc_rust_core
-          cargo clippy -p prisc_hotkeys --all-targets -- -D warnings
-          cargo test -p prisc_hotkeys
+          gate() {
+            local pkg=$1
+            shift
+            echo "::group::$pkg"
+            cargo clippy -p "$pkg" "$@" -- -D warnings
+            cargo test -p "$pkg"
+            echo "::endgroup::"
+          }
+          gate prisc_ipc --all-targets
+          gate prisc_rust_core --all-targets
+          gate prisc_hotkeys --all-targets
           # prisc_capture has always been gated without --all-targets; widening that is a change of its own.
-          cargo clippy -p prisc_capture -- -D warnings
-          cargo test -p prisc_capture
-          cargo clippy -p prisc_scroll_driver --all-targets -- -D warnings
-          cargo test -p prisc_scroll_driver
-          cargo clippy -p prisc_ai --all-targets -- -D warnings
-          cargo test -p prisc_ai
-          cargo clippy -p prisc_platform --all-targets -- -D warnings
-          cargo test -p prisc_platform
-          cargo clippy -p prisc_interop --all-targets -- -D warnings
+          gate prisc_capture
+          gate prisc_scroll_driver --all-targets
+          gate prisc_ai --all-targets
+          gate prisc_platform --all-targets
           # Includes the harness = false main_thread_* targets, which run on the real main thread on macOS.
-          cargo test -p prisc_interop
-          cargo clippy -p prisc_codegen --all-targets -- -D warnings
+          gate prisc_interop --all-targets
           # Fails on a stale, missing or orphaned generated file and on any prisc_interop crate rule.
-          cargo test -p prisc_codegen
-        shell: bash
+          gate prisc_codegen --all-targets
+          # The shell extension is a Windows COM dll and an empty crate elsewhere.
+          if [ "$RUNNER_OS" = Windows ]; then gate prisc_shell_ext; fi
 
       # The in-process library and the code generator must never link Sentry (prisc_interop only)
       # or anything GPL or from the recorder stack. The cheap early signal; build-rust.yml checks
-      # the shipped artifact itself.
+      # the shipped artifact itself. `--target all` makes it the same on every OS, so one leg runs it.
       - name: "Rust gate: crate boundaries"
+        if: env.RUN == 'true' && runner.os == 'Windows'
         run: |
           gpl='prisc_recorder|prisc_share_region|prisc_obs[a-z0-9_]*|prisc_vid2gif|prisc_ffmpeg_sys|prisc_build_support|prisc_ai'
           # Captured first: inside an `if` condition a failing cargo tree would just read as "no match".
@@ -173,38 +239,28 @@ jobs:
             echo "::error::prisc_codegen depends on a GPL or recorder-stack crate (listed above)"
             exit 1
           fi
-        shell: bash
 
-      # prisc_hotkeys has no Linux backend yet, but Key/Gesture still build there, and this job
-      # has no Linux leg. prisc_platform and prisc_interop prove every unsupported arm compiles;
+      # prisc_hotkeys has no Linux backend yet, but Key/Gesture still build there, and CI has no
+      # Linux app leg. prisc_platform and prisc_interop prove every unsupported arm compiles;
       # prisc_rust_core without features is what the Linux recorder now depends on
       # unconditionally. Plain Rust on Linux, so clippy needs no linker. One call per crate.
       - name: "Rust gate: Linux cross-check"
-        if: runner.os == 'Windows'
+        if: env.RUN == 'true' && runner.os == 'Windows'
         run: |
-          rustup target add x86_64-unknown-linux-gnu
           cargo clippy -p prisc_hotkeys --target x86_64-unknown-linux-gnu -- -D warnings
           cargo clippy -p prisc_platform --target x86_64-unknown-linux-gnu -- -D warnings
           cargo clippy -p prisc_interop --target x86_64-unknown-linux-gnu -- -D warnings
           cargo clippy -p prisc_rust_core --no-default-features --target x86_64-unknown-linux-gnu -- -D warnings
-        shell: bash
 
-      # The shell extension is a Windows COM dll and an empty crate elsewhere.
-      - name: "Rust gate: shell extension (Windows)"
-        if: runner.os == 'Windows'
-        run: |
-          cargo clippy -p prisc_shell_ext -- -D warnings
-          cargo test -p prisc_shell_ext
-        shell: bash
-
-      # The library the dotnet tests load: the loader finds target/debug by walking up from the
-      # test binaries. Fails on cargo's "`default-features` is ignored for X" warning (a dependency
-      # line silently enabling more than it asks for; cargo wraps the key in backticks) and on
-      # ld64's "duplicate symbol" warning (a dependency's #[no_mangle] colliding with an export;
-      # ld64 keeps one and only warns). On macOS it also fails on any exported symbol other than
-      # _prisc_* (an #[export_name] static, such as objc2's define_class! emits), the same check
-      # stage-app.sh makes on the release artifact, so it shows up here first.
-      - name: Build prisc_interop (debug)
+      # The library the dotnet tests load (dotnet-test builds it again from this job's cache).
+      # Fails on cargo's "`default-features` is ignored for X" warning (a dependency line silently
+      # enabling more than it asks for; cargo wraps the key in backticks) and on ld64's "duplicate
+      # symbol" warning (a dependency's #[no_mangle] colliding with an export; ld64 keeps one and
+      # only warns). On macOS it also fails on any exported symbol other than _prisc_* (an
+      # #[export_name] static, such as objc2's define_class! emits), the same check stage-app.sh
+      # makes on the release artifact, so it shows up here first.
+      - name: "Rust gate: prisc_interop library"
+        if: env.RUN == 'true'
         run: |
           cargo build -p prisc_interop 2>&1 | tee "$RUNNER_TEMP/interop-build.log"
           if grep -E ".?default-features.? is ignored|duplicate symbol" "$RUNNER_TEMP/interop-build.log"; then
@@ -218,9 +274,65 @@ jobs:
               exit 1
             fi
           fi
-        shell: bash
 
-      # Prisc.VideoSDK.Tests runs in test-video, which waits for this run's recorder payload.
+      - name: Record the pass
+        if: env.RUN == 'true'
+        run: date -u > .ci-pass
+
+      - name: Save the pass marker
+        if: env.RUN == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: .ci-pass
+          key: ${{ steps.passed.outputs.cache-primary-key }}
+
+  dotnet-test:
+    name: dotnet-test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15, not the recorder's macos-26: see build-rust.yml.
+        os: [windows-latest, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # nbgv needs full history to compute the version height.
+          fetch-depth: 0
+
+      # C# reaches natives only through ui/Prisc.Interop (generated from crates/prisc_interop);
+      # every other site is a line in tools/native-interop-allowlist. A scan of the sources, the
+      # same on every OS, so one leg runs it.
+      - name: Native interop check
+        if: runner.os == 'Windows'
+        run: tools/check-native-interop.sh
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: debug
+          save-if: false
+
+      # SDK 10 is required: Avalonia 12's XAML generators target Roslyn 4.14, and older SDKs skip them as CS9057 so the x:Name fields go missing.
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      # The library the dotnet tests load: the loader finds target/debug by walking up from the
+      # test binaries. rust-test gates its build warnings and exports.
+      - name: Build prisc_interop (debug)
+        run: cargo build -p prisc_interop
+
+      # Prisc.VideoSDK.Tests runs in test-video, which needs a recorder payload.
       # PRISC_INTEROP_REQUIRED turns a missing or stale library into a failure instead of a skip.
       - name: "UI gate: dotnet tests"
         env:
@@ -230,14 +342,13 @@ jobs:
           dotnet test ui/Prisc.Shared.Tests/Prisc.Shared.Tests.csproj -c Release --nologo
           dotnet test ui/Prisc.Drawing.Tests/Prisc.Drawing.Tests.csproj -c Release --nologo
           dotnet test ui/Prisc.Ipc.Tests/Prisc.Ipc.Tests.csproj -c Release --nologo
-        shell: bash
 
       # Runs every kept C# facade and every wrapper once in the real app (a small real window on the
       # UI thread, then again from a thread-pool thread) and writes one JSON result per item. The
       # exit code counts `error` results only (a broken contract: a wrong status for a documented
       # case, a panic, a layout mismatch); `unavailable` and `denied` (the OS said no, as it does
       # for screen recording on a runner) never fail the step. Never requests a permission.
-      # Runs even when an earlier test step failed, so every run yields the probe JSON (on BASE it is
+      # Runs even when the dotnet tests failed, so every run yields the probe JSON (on BASE it is
       # the Windows baseline of the old C# paths).
       - name: Interop probe smoke
         if: ${{ !cancelled() }}
@@ -246,9 +357,6 @@ jobs:
           PRISC_INTEROP_REQUIRED: "1"
           PRISC_DISABLE_TELEMETRY: "1"
         run: |
-          # Built here too (a no-op after the step above), so a failure in an earlier gate step
-          # still leaves the probe a library to load instead of a cascade of "not available".
-          cargo build -p prisc_interop
           dotnet build ui/Prisc.Ui/Prisc.Ui.csproj -c Release --nologo
           mkdir -p probe-out
           # The app takes a native path; the file checks below use the shell's.
@@ -264,7 +372,6 @@ jobs:
             echo "::error::the interop probe reported broken contracts (exit code $status); see the error results above"
             exit 1
           fi
-        shell: bash
 
       - name: Upload interop probe results
         if: ${{ !cancelled() }}
@@ -279,10 +386,11 @@ jobs:
   # runner has not got (FFmpeg, the prisc_ai binary, another platform) skip rather than fail.
   test-video:
     name: test-video (${{ matrix.os }})
-    needs: [recorder]
-    # Also runs when a recorder build failed: the FFmpeg-backed tests then skip (see below)
-    # and the rest of the suite still gates.
-    if: ${{ !cancelled() }}
+    needs: plan
+    # actions: read lets .github/actions/recorder-payload wait for this run's recorder artifact.
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -295,8 +403,11 @@ jobs:
             rid: osx-arm64
             exe: ""
     runs-on: ${{ matrix.os }}
-    # The filtered WARP run and the Rust ring harness (Windows) on top of the previous 45.
-    timeout-minutes: 60
+    # Can include waiting for a cold recorder build (see the payload step).
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -315,6 +426,9 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: debug
+          save-if: false
 
       # The interop library is built here (debug, seconds warm) rather than taken from the rust job,
       # so this job does not wait for the release builds and their Sentry upload. PRISC_INTEROP_PATH
@@ -330,28 +444,29 @@ jobs:
           if [ "$RUNNER_OS" = Windows ]; then lib=$(cygpath -w "$lib"); fi
           echo "PRISC_INTEROP_PATH=$lib" >> "$GITHUB_ENV"
           echo "PRISC_INTEROP_REQUIRED=1" >> "$GITHUB_ENV"
-        shell: bash
 
       # The video editor's suite needs FFmpeg 8.1 natives to run its decode/encode/render tests;
-      # without them ~100 of them skip. Take them from the recorder payload this run built, the
-      # same one a shipped build carries, so what CI exercises is what users get, including
-      # HelperLocator's own resolution of it: this points PRISC_HELPERS_DIR at the directory
-      # holding recorder/, exactly the release layout, rather than PRISC_FFMPEG_PATH at a library
-      # directory, because the layout differs per platform (beside the exe on Windows, Frameworks/
-      # on macOS) and working that out is the thing under test.
+      # without them ~100 of them skip. They come from a recorder payload, the same one a shipped
+      # build carries, so what CI exercises is what users get, including HelperLocator's own
+      # resolution of it: this points PRISC_HELPERS_DIR at the directory holding recorder/, exactly
+      # the release layout, rather than PRISC_FFMPEG_PATH at a library directory, because the
+      # layout differs per platform (beside the exe on Windows, Frameworks/ on macOS) and working
+      # that out is the thing under test. The action takes a cached payload with the same natives
+      # when it can, so this job does not wait for a recorder rebuild (see its description).
       #
-      # Deliberately non-fatal: if the recorder build failed, the variable stays unset, those
-      # tests skip, and the other ~3300 still run.
-      - name: Download recorder payload
-        continue-on-error: true
-        uses: actions/download-artifact@v8
+      # Deliberately non-fatal: if no payload turns up (the recorder build failed), the variable
+      # stays unset, those tests skip, and the other ~3300 still run.
+      - name: Recorder payload
+        id: payload
+        uses: ./.github/actions/recorder-payload
         with:
-          name: recorder-${{ matrix.rid }}
-          path: recorder-artifact
+          rid: ${{ matrix.rid }}
+          fingerprint: ${{ needs.plan.outputs.recorder }}
+          natives-fingerprint: ${{ needs.plan.outputs.recorder-natives }}
 
       - name: Recorder payload for the video editor tests
         run: |
-          zip="recorder-artifact/recorder-${{ matrix.rid }}.zip"
+          zip="dist/recorder-${{ matrix.rid }}.zip"
           if [ -f "$zip" ]; then
             mkdir -p recorder
             unzip -q "$zip" -d recorder
@@ -362,16 +477,14 @@ jobs:
           else
             echo "::warning::recorder payload unavailable; the FFmpeg-backed tests will skip"
           fi
-        shell: bash
 
       - name: "UI gate: video editor tests"
         run: dotnet test ui/Prisc.VideoSDK.Tests/Prisc.VideoSDK.Tests.csproj -c Release --nologo
-        shell: bash
 
       # The runner has no GPU, so the D3D12 paths only run on WARP, the software adapter, which
       # PRISC_GPU_ALLOW_WARP admits for this step alone. Only these filtered tests run on it (never
       # the whole suite): WARP is slow and lacks features, and NV12 answering E_CAPABILITY there is
-      # a skip with a printed reason, never a pass. Here rather than in the test job because the
+      # a skip with a printed reason, never a pass. Here rather than in dotnet-test because the
       # D3D11EncodeBridge rigs need the FFmpeg payload above, and they would all skip without it.
       # Test failures do not fail the run itself: the GPU code was never written for a software
       # adapter, so the set that must pass is the set recorded in tools/warp-baseline.txt, and
@@ -392,7 +505,6 @@ jobs:
             --logger "trx;LogFileName=warp.trx" --results-directory warp-results || status=$?
           echo "dotnet test exited $status; the baseline check below decides"
           tools/check-warp-baseline.sh warp-results/warp.trx tools/warp-baseline.txt warp-results/warp-baseline.txt
-        shell: bash
 
       # warp-baseline.txt in this artifact is this run's outcomes in the baseline format, the file
       # to copy over tools/warp-baseline.txt when the recorded set changes.
@@ -417,11 +529,10 @@ jobs:
           cargo test -p prisc_interop --test ring_harness
           cargo test -p prisc_interop --lib platform::windows::gpu -- --show-output 2>&1 | tee gpu-unit.log
           grep -h "^skipping " gpu-unit.log | sort -u | sed 's/^/::notice title=Skipped on WARP::/' || true
-        shell: bash
 
       # The FFmpeg dylib closure prisc_interop loads ahead of FFmpeg.AutoGen, against the real
       # payload: the closure test and the Mach-O reader's otool parity over every shipped dylib.
-      # The test job runs them too, but without a payload, so there they only cover fixtures.
+      # rust-test runs them too, but without a payload, so there they only cover fixtures.
       - name: FFmpeg closure over the payload (macOS)
         if: ${{ !cancelled() && runner.os == 'macOS' }}
         run: |
@@ -435,7 +546,6 @@ jobs:
             exit 1
           fi
           cargo test -p prisc_interop --lib platform::macos::dylib
-        shell: bash
 
   # Merges the three builds for one rid: the UI publish is the package directory, the Rust
   # binaries go beside Prisc.Ui, and the recorder goes in recorder/. Pure file shuffling, so it

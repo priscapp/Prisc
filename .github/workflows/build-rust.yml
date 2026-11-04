@@ -73,11 +73,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # rust-cache already hashes Cargo.toml, but .cargo/config.toml is named explicitly so a rustflags-only edit cannot restore a cache built with the previous flags.
+      # Keyed per rid (two rids share each runner OS). rust-cache already hashes every Cargo.toml,
+      # Cargo.lock and .cargo/config.toml into the key, and a changed one still restores the
+      # previous entry as a starting point (cargo rebuilds whatever it invalidated, flags
+      # included), so they stay out of `key`: there they made any manifest edit a cold build.
+      # Saved from master only, so branch runs restore master's entries instead of evicting them.
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.rid }}-${{ hashFiles('Cargo.toml', '.cargo/config.toml') }}
+          key: ${{ matrix.rid }}
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
       # One invocation rather than one per crate, so codegen and the LTO links overlap instead of leaving the runner idle.
       # Explicit packages: the workspace also holds the recorder crates, which build-recorder.yml builds.

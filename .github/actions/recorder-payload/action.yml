@@ -1,0 +1,96 @@
+name: Recorder payload for the video tests
+description: >
+  Puts a recorder payload (the recorder-<rid>.zip build-recorder.yml stages) in
+  dist/ for ci.yml's test-video job, which needs only its FFmpeg natives and
+  layout, never the recorder executables themselves. It does not wait for this
+  run's recorder build when it can avoid it:
+
+  1. the cached payload of these exact recorder inputs (an earlier run built it);
+  2. else the newest cached payload with the same natives fingerprint
+     (tools/ci/fingerprint.sh recorder-natives: the same FFmpeg/libobs build
+     and staging, so the same files under test, with only the recorder's own
+     code changed);
+  3. else (the natives themselves changed) this run's recorder-<rid> artifact,
+     waiting for the recorder job to upload it.
+
+  If none of them turns up (the recorder build failed), the found output is
+  false and the FFmpeg-backed tests skip.
+
+inputs:
+  rid:
+    description: The payload's RID (win-x64, osx-arm64, ...).
+    required: true
+  fingerprint:
+    description: tools/ci/fingerprint.sh recorder, from ci.yml's plan job.
+    required: true
+  natives-fingerprint:
+    description: tools/ci/fingerprint.sh recorder-natives, from ci.yml's plan job.
+    required: true
+
+outputs:
+  found:
+    description: Whether dist/recorder-<rid>.zip is in place.
+    value: ${{ steps.cache.outputs.cache-matched-key != '' || steps.wait.outputs.found == 'true' }}
+
+runs:
+  using: composite
+  steps:
+    # The payload keys are recorder-<rid>-<natives>-<recorder>-<toolchain> (build-recorder.yml);
+    # the primary key here never exists, so the two prefixes below decide.
+    - name: Restore a cached payload
+      id: cache
+      uses: actions/cache/restore@v6
+      with:
+        path: dist/recorder-${{ inputs.rid }}.zip
+        key: recorder-${{ inputs.rid }}-${{ inputs.natives-fingerprint }}-${{ inputs.fingerprint }}-lookup
+        restore-keys: |
+          recorder-${{ inputs.rid }}-${{ inputs.natives-fingerprint }}-${{ inputs.fingerprint }}-
+          recorder-${{ inputs.rid }}-${{ inputs.natives-fingerprint }}-
+
+    - name: Report the payload source
+      if: steps.cache.outputs.cache-matched-key != ''
+      shell: bash
+      env:
+        MATCHED: ${{ steps.cache.outputs.cache-matched-key }}
+        CURRENT: recorder-${{ inputs.rid }}-${{ inputs.natives-fingerprint }}-${{ inputs.fingerprint }}-
+      run: |
+        if [[ "$MATCHED" == "$CURRENT"* ]]; then
+          echo "Using the cached payload of these recorder inputs ($MATCHED)."
+        else
+          echo "::notice title=Recorder payload::The recorder changed in this commit but its FFmpeg natives did not, so the video tests use an earlier build's payload ($MATCHED); this run's recorder job still builds and tests the new one."
+        fi
+
+    # Artifacts are listed as soon as they are uploaded, before the run ends. The recorder job's
+    # name is "recorder / recorder (<rid>)" (ci.yml's caller job / build-recorder.yml's).
+    - name: Wait for this run's recorder build
+      id: wait
+      if: steps.cache.outputs.cache-matched-key == ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        NAME: recorder-${{ inputs.rid }}
+        JOB: recorder / recorder (${{ inputs.rid }})
+      run: |
+        api="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        echo "No cached payload has these FFmpeg natives; waiting for this run's $NAME artifact."
+        has_artifact() { [ "$(gh api "$api/artifacts?name=$NAME" -q .total_count)" -gt 0 ]; }
+        # Up to the recorder jobs' own 120-minute timeout, and 5 minutes for the job to show up at all.
+        for ((i = 0; i < 360; i++)); do
+          if has_artifact; then echo "found=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          status=$(gh api "$api/jobs?per_page=100" --paginate -q ".jobs[] | select(.name == env.JOB) | .status")
+          if [ "$status" = completed ] || { [ -z "$status" ] && [ "$i" -ge 15 ]; }; then
+            # It may have uploaded between the two calls.
+            if has_artifact; then echo "found=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+            echo "::warning::$JOB ${status:+finished}${status:-is not in this run}, and $NAME was not uploaded, so the FFmpeg-backed tests will skip"
+            exit 0
+          fi
+          sleep 20
+        done
+        echo "::warning::gave up waiting for $NAME, so the FFmpeg-backed tests will skip"
+
+    - name: Download this run's payload
+      if: steps.wait.outputs.found == 'true'
+      uses: actions/download-artifact@v8
+      with:
+        name: recorder-${{ inputs.rid }}
+        path: dist

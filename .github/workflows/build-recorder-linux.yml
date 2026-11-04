@@ -4,11 +4,19 @@ name: Build recorder (Linux)
 # recorder-linux-x64 and recorder-linux-arm64 plus the portability checks. Linux
 # has no app package yet, so this is a check only and nothing consumes it.
 #
-# These jobs and build-recorder.yml's are the only CI jobs that check out the
-# submodules; the shared OBS cache and checkout steps live in
-# .github/actions/setup-obs-build.
+# As in build-recorder.yml, each leg first looks up the bundle an earlier run
+# built and verified from the same inputs and, on a hit, uploads it again
+# without building; only a leg that builds checks out the submodules
+# (.github/actions/setup-obs-build). Nothing waits on this workflow, so it gets
+# no Docker layer cache either: the image is rebuilt from scratch whenever a
+# leg builds, and the cache budget goes to the jobs that gate the package.
 on:
   workflow_call:
+    inputs:
+      fingerprint:
+        description: tools/ci/fingerprint.sh recorder, from ci.yml's plan job.
+        type: string
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -29,8 +37,8 @@ jobs:
   # The job runs on a plain ubuntu runner and executes each build step in the
   # image through tools/linux-build/run-in-image.sh (checkout bind-mounted at
   # the same path), so actions/cache and the artifact actions work on the host
-  # as in the Windows and macOS builds. cargo is the image's own toolchain,
-  # so no dtolnay/rust-toolchain here. Staging and the end-to-end checks live
+  # as in the Windows and macOS builds. cargo is the image's own toolchain.
+  # Staging and the end-to-end checks live
   # in scripts (stage-recorder.sh, which runs stage-bundle.sh, and
   # verify-bundle.sh) that also run by hand in the image, and the
   # linux-portability job re-runs verify-bundle.sh on stock Ubuntu runners
@@ -59,29 +67,41 @@ jobs:
     env:
       IMAGE: prisc-recorder-linux-${{ matrix.arch }}
     steps:
-      - name: Checkout (recursive submodules)
+      - name: Checkout
         uses: actions/checkout@v7
-        with:
-          # See the Windows job: disabled plugin submodule dirs must exist.
-          submodules: recursive
 
-      # The image is rebuilt from the Dockerfile every run, with its layers
-      # cached in the GitHub Actions cache, so a Dockerfile edit takes effect
-      # immediately and an unchanged one costs only the cache restore.
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      # Builds use the image's own cargo. The host toolchain is for rust-cache (in
+      # setup-obs-build), which keys on and prunes with the host's cargo, and its
+      # cachekey stands in for the image's stable toolchain in the payload key
+      # (the image installs the current stable whenever it is rebuilt).
+      - name: Install host Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Look up a bundle built from these inputs
+        id: payload
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            dist/recorder-linux-${{ matrix.arch }}.tar.gz
+            dist/test-tools/ffprobe
+          key: recorder-linux-${{ matrix.arch }}-${{ inputs.fingerprint }}-${{ steps.toolchain.outputs.cachekey }}
+
+      - name: Build only on a miss
+        run: |
+          if [ "${{ steps.payload.outputs.cache-hit }}" = true ]; then
+            echo "BUILD=false" >> "$GITHUB_ENV"
+            echo "::notice title=recorder (linux-${{ matrix.arch }})::reusing the bundle an earlier run built and verified from the same inputs"
+          else
+            echo "BUILD=true" >> "$GITHUB_ENV"
+          fi
 
       - name: Build the Linux build image
-        uses: docker/build-push-action@v6
-        with:
-          context: tools/linux-build
-          build-args: BASE=${{ matrix.base }}
-          tags: ${{ env.IMAGE }}
-          load: true
-          cache-from: type=gha,scope=recorder-linux-build-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=recorder-linux-build-${{ matrix.arch }}
+        if: env.BUILD == 'true'
+        run: docker build --build-arg BASE=${{ matrix.base }} -t "$IMAGE" tools/linux-build
 
       - name: Toolchain diagnostics
+        if: env.BUILD == 'true'
         run: |
           # shellcheck disable=SC2016 # expanded inside the image, not here
           tools/linux-build/run-in-image.sh '
@@ -108,6 +128,7 @@ jobs:
       # against.
       - name: Resolve native dependency pins
         id: pins
+        if: env.BUILD == 'true'
         run: |
           ffmpeg=$(grep -oP 'dir_name: "\K[^"]+' crates/prisc_build_support/src/linux.rs | sort | paste -sd+ || true)
           x264=$(grep -oP 'const X264_COMMIT: &str = "\K[0-9a-f]+' crates/prisc_obs_sys/build.rs || true)
@@ -128,13 +149,8 @@ jobs:
       # build dir) and .deps (FFmpeg bundle, x264 / Mbed TLS prefixes, SIMDe)
       # are cached together. The build runs as root in the image; the cache
       # steps run on the host and only need to read those files.
-      # rust-cache (in setup-obs-build) keys on and prunes with the host's
-      # cargo, which nothing else in this job uses, so install it explicitly
-      # rather than rely on the runner image shipping one.
-      - name: Install host Rust toolchain (for the cargo cache)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Set up the OBS build caches
+      - name: Set up the OBS build
+        if: env.BUILD == 'true'
         uses: ./.github/actions/setup-obs-build
         with:
           arch: ${{ matrix.arch }}
@@ -146,9 +162,11 @@ jobs:
       # is a compile_error! on Linux), so every Linux cargo invocation names its
       # packages explicitly rather than using --workspace.
       - name: Build (release)
+        if: env.BUILD == 'true'
         run: tools/linux-build/run-in-image.sh cargo build --release -p prisc_recorder -p prisc_vid2gif
 
       - name: Test (release, unit tests only)
+        if: env.BUILD == 'true'
         run: |
           # No LD_LIBRARY_PATH needed (unlike Windows' PATH): every test
           # executable in target/release/deps carries absolute RUNPATHs to the
@@ -165,12 +183,14 @@ jobs:
       # needs a graphics context, hence Xvfb). This is the transform Wayland
       # picker mode depends on, and portal capture itself cannot run in CI.
       - name: Test canvas-reset placement (Xvfb)
+        if: env.BUILD == 'true'
         run: tools/linux-build/run-in-image.sh xvfb-run -a -s "'-screen 0 1280x720x24'" cargo test --release -p prisc_recorder --test canvas_reset -- --ignored
 
       # Copies the runtime tree out of target/release, strips the build-tree
       # RUNPATH entries, and enforces the relocation, glibc-ceiling and
       # no-forbidden-library rules (see tools/linux-build/stage-bundle.sh).
       - name: Stage artifact (self-contained bundle)
+        if: env.BUILD == 'true'
         run: tools/linux-build/run-in-image.sh tools/staging/stage-recorder.sh "linux-${{ matrix.arch }}" target/release "dist/recorder-linux-${{ matrix.arch }}"
 
       # ldd -r of every ELF file, real X11 recordings under Xvfb through xshm
@@ -179,6 +199,7 @@ jobs:
       # The ffprobe is the pinned FFmpeg archive's own (the image has no
       # FFmpeg of its own).
       - name: Verify relocated bundle (ldd + Xvfb smoke recording + prisc_vid2gif)
+        if: env.BUILD == 'true'
         run: |
           # shellcheck disable=SC2016 # expanded inside the image, not here
           tools/linux-build/run-in-image.sh '
@@ -191,6 +212,7 @@ jobs:
       # expect. Members sit at the archive root, matching the zips. Runs in the
       # image because dist/ was created there, as root.
       - name: Archive bundle
+        if: env.BUILD == 'true'
         run: |
           # shellcheck disable=SC2016 # expanded inside the image, not here
           tools/linux-build/run-in-image.sh '
@@ -207,6 +229,16 @@ jobs:
             mkdir -p dist/test-tools
             cp crates/obs-studio/.deps/ffmpeg-*/bin/ffprobe dist/test-tools/
           '
+
+      # Saved from any branch (it is small), and only here, after the checks passed.
+      - name: Cache the bundle
+        if: env.BUILD == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            dist/recorder-linux-${{ matrix.arch }}.tar.gz
+            dist/test-tools/ffprobe
+          key: ${{ steps.payload.outputs.cache-primary-key }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -229,7 +261,7 @@ jobs:
       # rust-cache's post step prunes them with host-side cargo, so hand them
       # back to the runner user first or its cleanup and save can fail.
       - name: Return the cargo caches to the runner user
-        if: always()
+        if: always() && env.BUILD == 'true'
         run: sudo chown -R "$(id -u):$(id -g)" "$HOME/.cargo/registry" "$HOME/.cargo/git"
 
   # ---------------------------------------------------------------------------
