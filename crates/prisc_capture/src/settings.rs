@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use clap::{ArgAction, Parser};
+use clap::Parser;
 
 use crate::filename_pattern::DEFAULT_FILENAME_PATTERN;
 use crate::ui::components::panel::model::{ButtonStyle, PanelFeatures};
@@ -190,35 +190,17 @@ impl Default for CapturerSettings {
 #[derive(Debug, Clone, Parser)]
 #[command(version, about = "Prisc screen capturer")]
 pub struct CliArgs {
-    /// Wait for one of the global screenshot hotkeys (or a stdin capture
-    /// request) before initializing the capture stack. Each trigger runs one
+    /// Wait for a stdin capture request (a tray click or one of the shell's
+    /// screenshot hotkeys) before initializing the capture stack. Each runs one
     /// normal capture cycle, then the process returns to waiting; it exits
-    /// only on stdin EOF or a fatal error (CAPTURE_PROTOCOL.md). This process
-    /// owns the hotkeys — via a low-level keyboard hook, not RegisterHotKey —
-    /// so a paged-out shell cannot delay the trigger, and the key is
-    /// suppressed before OS handlers like Windows 11's PrintScreen-opens-
-    /// Snipping-Tool can steal it.
+    /// only on stdin EOF or a fatal error (CAPTURE_PROTOCOL.md). The shell owns
+    /// the hotkeys and sends a `capture` request for each press.
     #[arg(long, requires = "session_root")]
     pub standby: bool,
 
     /// Parent directory in which standby mode creates a unique capture session.
     #[arg(long, value_name = "PATH", requires = "standby")]
     pub session_root: Option<PathBuf>,
-
-    /// Global hotkey for a region capture, in the settings gesture form
-    /// (`Control+Shift+PrintScreen`), parsed by prisc_hotkeys. Repeatable: one
-    /// occurrence per gesture, in the shell's list order, which is also the
-    /// order the per-gesture statuses come back in. No occurrence = no hotkey.
-    #[arg(long, value_name = "GESTURE", requires = "standby", action = ArgAction::Append)]
-    pub hk_main: Vec<String>,
-
-    /// Global hotkey for an active-window capture. Repeatable, like `--hk-main`.
-    #[arg(long, value_name = "GESTURE", requires = "standby", action = ArgAction::Append)]
-    pub hk_window: Vec<String>,
-
-    /// Global hotkey for an active-monitor capture. Repeatable, like `--hk-main`.
-    #[arg(long, value_name = "GESTURE", requires = "standby", action = ArgAction::Append)]
-    pub hk_monitor: Vec<String>,
 
     /// Directory to write the session payload into. When set, the
     /// EDIT/UPLOAD/SELECT-COLOR actions write their payload here and

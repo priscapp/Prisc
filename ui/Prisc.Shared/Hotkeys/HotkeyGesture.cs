@@ -9,8 +9,7 @@ namespace Prisc
     /// <summary>
     /// A global hotkey: a <see cref="HotkeyKey"/> and the <see cref="HotkeyModifiers"/> held with
     /// it. The key names and the serialized form are the prisc_hotkeys crate's, so the settings
-    /// file, the standby capturer's <c>--hk-*</c> flags and its status echo all carry the same
-    /// text, and nothing translates between them. In-app shortcuts are a different type
+    /// file carries the same text the hook parses, and nothing translates between them. In-app shortcuts are a different type
     /// (<see cref="SimpleKeyGesture"/>, on Avalonia keys); the only bridge is the display-only
     /// <see cref="ToKeyGestureOrNull"/>.
     /// </summary>
@@ -104,7 +103,7 @@ namespace Prisc
         /// <summary>
         /// True for the combinations the OS needs for itself, which are never bound: recording one
         /// is treated as a cancel (<c>GestureField</c>), and one already in the settings is refused
-        /// at registration (<c>HotkeyManager</c>) and left off the standby capturer's command line.
+        /// at registration (<c>HotkeyManager</c>).
         /// The recorder's hook swallows the key it records, so these are exactly what a user
         /// presses to get away from a field that is listening, and a binding would then swallow
         /// them in every app. On Windows that is task switching (Alt+Tab, Alt+Shift+Tab, Alt+Esc,

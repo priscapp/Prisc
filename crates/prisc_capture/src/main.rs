@@ -20,7 +20,6 @@ mod settings;
 #[allow(dead_code)]
 mod shader_bindings;
 mod standby;
-mod standby_hotkeys;
 mod sync;
 mod system;
 mod telemetry;
@@ -251,10 +250,8 @@ fn build_event_loop() -> anyhow::Result<winit::event_loop::EventLoop<()>> {
     };
     #[cfg(not(target_os = "macos"))]
     let event_loop = winit::event_loop::EventLoop::new()?;
-    // winit takes the process's keyboard and mouse raw input when the loop is built, and Windows
-    // gives a process one raw-input target per device. Nothing here reads DeviceEvents, and the
-    // standby hotkey hook's watchdog (prisc_hotkeys) needs keyboard raw input to notice a hook
-    // Windows removed silently — so hand it back before the hook starts.
+    // winit takes the process's keyboard and mouse raw input when the loop is built. Nothing here
+    // reads DeviceEvents, so hand it back rather than wake the loop on every key and mouse move.
     event_loop.listen_device_events(winit::event_loop::DeviceEvents::Never);
     Ok(event_loop)
 }

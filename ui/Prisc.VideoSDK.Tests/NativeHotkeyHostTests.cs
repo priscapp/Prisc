@@ -23,10 +23,6 @@ namespace Prisc.VideoSDK.Tests
     /// </summary>
     public class NativeHotkeyHostTests
     {
-        /// <summary>A capturer <c>settings_status</c> line, decoded as the supervisor receives it.</summary>
-        private static CaptureStandbySupervisor.StandbyHotkeyStatus StandbyStatus(string line) =>
-            CaptureStandbySupervisor.ReadHotkeyStatus(((Prisc.Ipc.CaptureEvent.SettingsStatus)Prisc.Ipc.CaptureCodec.DecodeEvent(line)).Hotkeys);
-
         private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
         private static readonly HotkeyGesture ShiftA = new(HotkeyKey.A, HotkeyModifiers.Shift);
         private static readonly HotkeyGesture CtrlB = new(HotkeyKey.B, HotkeyModifiers.Control);
@@ -118,45 +114,6 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(a.Error, error);
             // held by the hook for when it comes back
             Assert.Equal(2, rig.Native.Registered.Count);
-        }
-
-        [Fact]
-        public void The_shell_and_the_standby_capturer_share_one_prompt()
-        {
-            using var rig = new Rig(HookState.PermissionMissing);
-            var permission = StandbyStatus("""
-                {"type":"settings_status","hotkeys":{"main":[{"gesture":"F12","active":false,"error":"x","error_code":"permission"}],
-                            "window":[],"monitor":[]}}
-                """);
-
-            // warm capture with no shell-owned gesture: the capturer's report is the only cue
-            CaptureStandbySupervisor.PromptIfNeeded(permission, rig.Prompt);
-            rig.RunUi();
-            Assert.Equal(1, rig.Prompts);
-
-            CaptureStandbySupervisor.PromptIfNeeded(permission, rig.Prompt);
-            rig.Host.RegisterTrigger(ShiftA, () => { });
-            rig.RunUi();
-            Assert.Equal(1, rig.Prompts);
-        }
-
-        [Theory]
-        [InlineData("duplicate")]
-        [InlineData("stale_grant")]
-        public void Only_a_permission_status_from_the_capturer_prompts(string code)
-        {
-            // a stale grant included: the prompt would show nothing, yet spend this run's only one,
-            // which the grant missing for real (once the user removes Prisc from the list) still needs
-            using var rig = new Rig();
-            var other = StandbyStatus($$$"""
-                {"type":"settings_status","hotkeys":{"main":[{"gesture":"F12","active":false,"error":"x","error_code":"{{{code}}}"}],
-                            "window":[],"monitor":[]}}
-                """);
-
-            CaptureStandbySupervisor.PromptIfNeeded(other, rig.Prompt);
-            rig.RunUi();
-
-            Assert.Equal(0, rig.Prompts);
         }
 
         [Fact]

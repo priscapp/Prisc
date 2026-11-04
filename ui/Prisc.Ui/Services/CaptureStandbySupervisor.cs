@@ -1,8 +1,6 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -15,11 +13,12 @@ using IpcCaptureMode = Prisc.Ipc.CaptureMode;
 namespace Prisc.UI
 {
     /// <summary>
-    /// Runs the capturer in its lightweight hotkey-waiting standby mode over the <c>capture</c>
-    /// catalog (HELPER_PROTOCOL.md §4.5).
+    /// Runs the capturer in its lightweight request-waiting standby mode over the <c>capture</c>
+    /// catalog (HELPER_PROTOCOL.md §4.5). The screenshot hotkeys stay with the shell: a press,
+    /// like a tray click, reaches the standby through <see cref="TryCapture"/>.
     /// Exists only while warm capture is in effect: created and disposed by
-    /// <c>App.ConfigureCaptureHotkeys</c>, which owns the choice between this and the classic
-    /// in-process hotkeys + one-shot path. When standby cannot work — missing permission or binary,
+    /// <c>App.ConfigureCaptureStandby</c>, which owns the choice between this and the classic
+    /// one-shot path. When standby cannot work — missing permission or binary,
     /// permission-revoked exit, repeated crashes — the supervisor calls the fallback delegate
     /// exactly once and stops; the shell then reverts to one-shot capture for the rest of its
     /// process lifetime without touching the saved setting.
@@ -42,11 +41,6 @@ namespace Prisc.UI
 
         private static CaptureStandbySupervisor _current;
 
-        // whether the standby capturer's hook should be paused: true while the shell records a
-        // gesture (HotkeyManager.IsRecording), so the combination being recorded is not caught
-        // there as well. Re-sent after every `ready`, since a restarted capturer starts unpaused.
-        private static volatile bool s_hotkeysPaused;
-
         /// <summary>True while the standby capturer's overlay is on screen (or an accepted
         /// request is about to put it there) — merged into ScreenCapturePage.IsCaptureActive
         /// for the IdleMonitor update gate.</summary>
@@ -68,7 +62,6 @@ namespace Prisc.UI
             _onFallback = onFallback;
             _current = this;
             SettingsRoot.Current.Capture.PropertyChanged += OnSettingsChanged;
-            SettingsRoot.Current.Hotkeys.PropertyChanged += OnSettingsChanged;
             SettingsRoot.Current.General.PropertyChanged += OnSettingsChanged;
             // the recording, upload and share modes decide the strip's VIDEO, UPLOAD and SHARE
             // buttons (--no-video / --no-upload / --no-share); everything else on those pages is
@@ -80,9 +73,8 @@ namespace Prisc.UI
         }
 
         /// <summary>
-        /// Routes a shell-initiated capture (tray, menu) to the waiting standby process.
-        /// True: handled, either sent or dropped because an overlay is already up (matching
-        /// how the capturer treats its own hotkeys). False: standby cannot take it right now
+        /// Routes a shell-initiated capture (hotkey, tray, menu) to the waiting standby process.
+        /// True: handled, either sent or dropped because an overlay is already up. False: standby cannot take it right now
         /// (no supervisor, faulted, or between a capture and the next <c>ready</c>), so the
         /// caller must run the classic one-shot capture instead. Nothing is ever queued: a request that cannot be
         /// satisfied promptly is either dropped as a duplicate or taken over by the fallback.
@@ -178,7 +170,7 @@ namespace Prisc.UI
                         _client = client;
                     // Dekker pair with Dispose (Cancel then Kill-via-_client): a Dispose that ran
                     // before the publish above saw null and killed nothing, so re-check here;
-                    // otherwise this child leaks alive, holding the native hotkey registrations.
+                    // otherwise this child leaks alive.
                     if (_stop.IsCancellationRequested)
                     {
                         client.Kill();
@@ -198,11 +190,7 @@ namespace Prisc.UI
                                 Volatile.Write(ref _ready, 1);
                                 // off the reader: a write that blocks on a full stdin pipe must
                                 // never stall the loop that drains the child's stdout
-                                _ = Task.Run(() =>
-                                {
-                                    SendSettings(force: true);
-                                    SendPause();
-                                });
+                                _ = Task.Run(() => SendSettings(force: true));
                                 break;
 
                             case CaptureEvent.Session session:
@@ -224,10 +212,6 @@ namespace Prisc.UI
                                 IdleMonitor.NotifyCaptureActivity();
                                 var dir = finished.Dir;
                                 Dispatcher.UIThread.Post(async () => await ScreenCapturePage.ProcessStandbySessionAsync(dir));
-                                break;
-
-                            case CaptureEvent.SettingsStatus status:
-                                ApplyHotkeyStatus(status.Hotkeys);
                                 break;
 
                             case CaptureEvent.Error { Fatal: false } error:
@@ -370,103 +354,6 @@ namespace Prisc.UI
             }
         }
 
-        /// <summary>A capturer <c>settings_status</c>: each capture action's gesture statuses, and
-        /// whether any of them is down for want of Accessibility.</summary>
-        internal readonly record struct StandbyHotkeyStatus(
-            (HotkeyId Id, ExternalGestureStatus[] Gestures)[] Actions, bool NeedsAccessibility);
-
-        /// <summary>
-        /// Reads a <c>settings_status</c>: each action has one status per <c>--hk-*</c> occurrence it
-        /// received, in order, the gesture echoed exactly as sent. The shell acts on
-        /// <c>error_code</c>, never on the display text, which prisc_hotkeys is free to reword.
-        /// </summary>
-        internal static StandbyHotkeyStatus ReadHotkeyStatus(CaptureHotkeys hotkeys)
-        {
-            var actions = new[]
-            {
-                Read(hotkeys?.Main, HotkeyId.CaptureRegion),
-                Read(hotkeys?.Window, HotkeyId.CaptureActive),
-                Read(hotkeys?.Monitor, HotkeyId.CaptureFullscreen),
-            };
-            return new StandbyHotkeyStatus(actions,
-                actions.Any(a => a.Gestures.Any(g => g.ErrorCode == HotkeyErrorCodes.Permission)));
-
-            static (HotkeyId Id, ExternalGestureStatus[] Gestures) Read(IReadOnlyList<CaptureHotkeyStatus> statuses, HotkeyId id) =>
-                (id, (statuses ?? Array.Empty<CaptureHotkeyStatus>())
-                    .Select(status => new ExternalGestureStatus(status.Gesture, status.Active, status.Error ?? "", status.ErrorCode))
-                    .ToArray());
-        }
-
-        /// <summary>Asks for Accessibility when the capturer reports a gesture down for want of it
-        /// (<see cref="HotkeyErrorCodes.Permission"/>): in warm-capture mode the shell may own no
-        /// gesture at all, so its own hook never gets to ask. The capturer runs inside Prisc.app, so
-        /// the grant covers it; it retries its hook by itself and reports again once the grant
-        /// lands. A stale grant (<see cref="HotkeyErrorCodes.StaleGrant"/>, which the capturer's
-        /// supervisor tells apart itself) never asks: the prompt would show nothing yet spend this
-        /// run's one, which the grant missing for real (once the user removes Prisc from the list)
-        /// still needs.</summary>
-        internal static void PromptIfNeeded(StandbyHotkeyStatus status, AccessibilityPrompt prompt)
-        {
-            if (status.NeedsAccessibility)
-                prompt.RequestOnce();
-        }
-
-        /// <summary>
-        /// Applies a <c>settings_status</c> (see <see cref="ReadHotkeyStatus"/>), which may also
-        /// arrive unasked when the capturer's hook comes up or goes down. The manager matches
-        /// statuses back to its own gestures by the echoed string, so a report for a snapshot that
-        /// has since been superseded simply finds nothing to update for the gestures it did not
-        /// know about.
-        /// </summary>
-        private void ApplyHotkeyStatus(CaptureHotkeys hotkeys)
-        {
-            try
-            {
-                var status = ReadHotkeyStatus(hotkeys);
-                Dispatcher.UIThread.Post(() =>
-                {
-                    // a status drained from a dead process's pipe after fallback (or from a
-                    // superseded supervisor after a warm toggle) must not stomp the statuses
-                    // of whoever owns the hotkeys now
-                    if (!ReferenceEquals(Volatile.Read(ref _current), this))
-                        return;
-                    // in warm mode the shell registers none of the screenshot gestures itself, so
-                    // this report is its only sign that it should ask for Accessibility
-                    PromptIfNeeded(status, AccessibilityPrompt.Shared);
-                    var manager = HotkeyManager.Current;
-                    if (manager == null)
-                        return;
-                    foreach (var (id, gestures) in status.Actions)
-                        manager.ApplyExternalStatus(id, gestures);
-                });
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("Failed to apply standby hotkey status: " + ex);
-            }
-        }
-
-        /// <summary>Pauses or resumes the standby capturer's hotkeys (best-effort: a capturer that
-        /// is busy or restarting gets the current value with its next <c>ready</c>). Any thread.</summary>
-        public static void SetHotkeysPaused(bool paused)
-        {
-            s_hotkeysPaused = paused;
-            Volatile.Read(ref _current)?.SendPause();
-        }
-
-        private void SendPause()
-        {
-            try
-            {
-                lock (_stdinGate)
-                    SendLocked(new CaptureCommand.Pause(s_hotkeysPaused));
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("Failed to send standby pause: " + ex);
-            }
-        }
-
         private void SendSettings(bool force = false)
         {
             try
@@ -549,7 +436,6 @@ namespace Prisc.UI
         public void Dispose()
         {
             SettingsRoot.Current.Capture.PropertyChanged -= OnSettingsChanged;
-            SettingsRoot.Current.Hotkeys.PropertyChanged -= OnSettingsChanged;
             SettingsRoot.Current.General.PropertyChanged -= OnSettingsChanged;
             SettingsRoot.Current.Recording.PropertyChanged -= OnSettingsChanged;
             SettingsRoot.Current.Uploads.PropertyChanged -= OnSettingsChanged;

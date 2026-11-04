@@ -752,10 +752,11 @@ namespace Prisc
         {
             _hotkeys = new HotkeyManager(new NativeHotkeyHost(), SettingsRoot.Current.Hotkeys);
 
-            // while the settings page records a gesture, the standby capturer's own hook must not
-            // catch the combination being pressed (it would take a screenshot instead)
-            _hotkeys.RecordingChanged += (_, _) => CaptureStandbySupervisor.SetHotkeysPaused(_hotkeys?.IsRecording == true);
-
+            // the screenshot hotkeys are this process's too, warm or not: StartCapture hands the
+            // press to the standby capturer when one is waiting, else spawns a one-shot capturer
+            _hotkeys.SetAction(HotkeyId.CaptureRegion, () => StartCapture(CaptureMode.Region));
+            _hotkeys.SetAction(HotkeyId.CaptureFullscreen, () => StartCapture(CaptureMode.Screen));
+            _hotkeys.SetAction(HotkeyId.CaptureActive, () => StartCapture(CaptureMode.Window));
             _hotkeys.SetAction(HotkeyId.FileUpload, () => UploadFilePrompt());
             _hotkeys.SetAction(HotkeyId.ClipboardUpload, () => UploadClipboard());
             _hotkeys.SetAction(HotkeyId.StartStopRecording, ToggleRecording);
@@ -768,19 +769,19 @@ namespace Prisc
 
             // rebuild the tray menu whenever a gesture or its registration status changes, so the
             // shortcut text beside each item stays current (decision table #48 / §6). Statuses
-            // change on their own schedule — the hook failing to start, the standby capturer
-            // reporting back — and one edit rebinds several actions, so the rebuilds are coalesced.
+            // change on their own schedule — the hook failing to start or coming back — and one
+            // edit rebinds several actions, so the rebuilds are coalesced.
             _hotkeys.Changed += (s, e) => QueueTrayRebuild();
 
             HotkeyManager.Current = _hotkeys;
             ApplyFeatureHotkeys();
-            ConfigureCaptureHotkeys();
+            ConfigureCaptureStandby();
             QueueTrayRebuild();
 
             SettingsRoot.Current.Capture.PropertyChanged += (s, e) =>
             {
                 if (e.PropertyName == nameof(SettingsCapture.KeepCapturerWarm))
-                    Dispatcher.UIThread.Post(ConfigureCaptureHotkeys);
+                    Dispatcher.UIThread.Post(ConfigureCaptureStandby);
             };
         }
 
@@ -805,15 +806,13 @@ namespace Prisc
         }
 
         /// <summary>
-        /// The screenshot hotkeys have exactly one owner at a time. Warm: the standby capturer
-        /// hooks them itself (its own prisc_hotkeys hook — see standby_hotkeys.rs for why they
-        /// must live in that process), and this process must stay out so two hooks never race to
-        /// suppress and handle the same press. Not warm — setting off, or overridden after
-        /// standby faulted — this process's hook drives the classic one-shot path. Called at startup and
-        /// again on every ownership change (setting toggled, supervisor fallback), always on
-        /// the UI thread.
+        /// Starts or stops the standby capturer: running while warm capture is on and has not
+        /// faulted. It only changes how a capture starts (see <see cref="StartCapture"/>); the
+        /// hotkeys stay registered here throughout, so no press falls through to the OS while
+        /// the standby comes or goes. Called at startup, when the setting is toggled and on
+        /// supervisor fallback, always on the UI thread.
         /// </summary>
-        private void ConfigureCaptureHotkeys()
+        private void ConfigureCaptureStandby()
         {
             if (_hotkeys == null)
                 return; // shutdown already ran; nothing left to (re)wire
@@ -829,9 +828,6 @@ namespace Prisc
                     _captureStandby = null;
                 }
             }
-            _hotkeys.SetAction(HotkeyId.CaptureRegion, warm ? null : () => StartCapture(CaptureMode.Region));
-            _hotkeys.SetAction(HotkeyId.CaptureFullscreen, warm ? null : () => StartCapture(CaptureMode.Screen));
-            _hotkeys.SetAction(HotkeyId.CaptureActive, warm ? null : () => StartCapture(CaptureMode.Window));
         }
 
         /// <summary>The supervisor's give-up signal (missing permission/binary, repeated
@@ -840,7 +836,7 @@ namespace Prisc
         private void OnCaptureStandbyFallback() => Dispatcher.UIThread.Post(() =>
         {
             _captureWarmFaulted = true;
-            ConfigureCaptureHotkeys();
+            ConfigureCaptureStandby();
         });
 
         private void ShutdownGlobalHotkeys()

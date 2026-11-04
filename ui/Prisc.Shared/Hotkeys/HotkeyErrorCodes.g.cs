@@ -5,8 +5,8 @@
 namespace Prisc
 {
     /// <summary>The machine-readable hotkey status codes (prisc_hotkeys <c>Error::code()</c>, the
-    /// supervisor's <c>stale_grant</c> and the capturer's <c>invalid_gesture</c>), as the capturer's
-    /// <c>settings_status</c> event carries them.</summary>
+    /// supervisor's <c>stale_grant</c> and <c>invalid_gesture</c>), which the user-visible hotkey
+    /// texts are keyed on.</summary>
     public static class HotkeyErrorCodes
     {
         public const string Unsupported = "unsupported";

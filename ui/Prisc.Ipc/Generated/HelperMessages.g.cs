@@ -1321,17 +1321,12 @@ namespace Prisc.Ipc
 
     public enum CaptureResult { Unknown, Finished, Cancelled, Stopped }
 
-    public sealed record CaptureHotkeys(IReadOnlyList<CaptureHotkeyStatus> Main, IReadOnlyList<CaptureHotkeyStatus> Window, IReadOnlyList<CaptureHotkeyStatus> Monitor);
-
-    public sealed record CaptureHotkeyStatus(string Gesture, bool Active, string Error, string ErrorCode);
-
     /// <summary>What <c>capture</c> helpers write.</summary>
     public abstract record CaptureEvent
     {
         public sealed record Ready : CaptureEvent;
         public sealed record Session(string Dir) : CaptureEvent;
         public sealed record CaptureFinished(string Dir) : CaptureEvent;
-        public sealed record SettingsStatus(CaptureHotkeys Hotkeys) : CaptureEvent;
         public sealed record Done(CaptureResult Result, string Dir) : CaptureEvent;
         public sealed record Error(string Code, string Message, bool Fatal) : CaptureEvent, IIpcError;
     }
@@ -1341,7 +1336,6 @@ namespace Prisc.Ipc
     {
         public sealed record Settings(IReadOnlyList<string> Args) : CaptureCommand;
         public sealed record Capture(CaptureMode Mode) : CaptureCommand;
-        public sealed record Pause(bool Paused) : CaptureCommand;
     }
 
     public static class CaptureCodec
@@ -1385,20 +1379,6 @@ namespace Prisc.Ipc
                         }
                     }
                     return new CaptureEvent.CaptureFinished(_dir);
-                }
-                case "settings_status":
-                {
-                    var r = IpcJson.Open(utf8);
-                    CaptureHotkeys _hotkeys = default;
-                    while (IpcJson.NextProperty(ref r, out var name))
-                    {
-                        switch (name)
-                        {
-                            case "hotkeys": _hotkeys = ReadCaptureHotkeys(ref r); break;
-                            default: r.Skip(); break;
-                        }
-                    }
-                    return new CaptureEvent.SettingsStatus(_hotkeys);
                 }
                 case "done":
                 {
@@ -1454,10 +1434,6 @@ namespace Prisc.Ipc
                     w.WriteString("type", "capture_finished");
                     w.WritePropertyName("dir"); w.WriteStringValue(m.Dir ?? "");
                     break;
-                case CaptureEvent.SettingsStatus m:
-                    w.WriteString("type", "settings_status");
-                    w.WritePropertyName("hotkeys"); WriteCaptureHotkeys(w, m.Hotkeys);
-                    break;
                 case CaptureEvent.Done m:
                     w.WriteString("type", "done");
                     w.WritePropertyName("result"); w.WriteStringValue(CaptureResultName(m.Result));
@@ -1508,20 +1484,6 @@ namespace Prisc.Ipc
                     }
                     return new CaptureCommand.Capture(_mode);
                 }
-                case "pause":
-                {
-                    var r = IpcJson.Open(utf8);
-                    bool _paused = default;
-                    while (IpcJson.NextProperty(ref r, out var name))
-                    {
-                        switch (name)
-                        {
-                            case "paused": _paused = IpcJson.ReadBool(ref r); break;
-                            default: r.Skip(); break;
-                        }
-                    }
-                    return new CaptureCommand.Pause(_paused);
-                }
                 default:
                     return null;
             }
@@ -1538,10 +1500,6 @@ namespace Prisc.Ipc
                 case CaptureCommand.Capture m:
                     w.WriteString("type", "capture");
                     w.WritePropertyName("mode"); w.WriteStringValue(CaptureModeName(m.Mode));
-                    break;
-                case CaptureCommand.Pause m:
-                    w.WriteString("type", "pause");
-                    w.WritePropertyName("paused"); w.WriteBooleanValue(m.Paused);
                     break;
                 default:
                     throw new ArgumentException($"not a capture Command: {value}", nameof(value));
@@ -1580,67 +1538,6 @@ namespace Prisc.Ipc
             CaptureResult.Stopped => "stopped",
             _ => throw new ArgumentOutOfRangeException(nameof(value), value, "no wire string"),
         };
-
-        private static CaptureHotkeys ReadCaptureHotkeys(ref Utf8JsonReader r)
-        {
-            if (!IpcJson.EnterObject(ref r)) return null;
-            IReadOnlyList<CaptureHotkeyStatus> _main = Array.Empty<CaptureHotkeyStatus>();
-            IReadOnlyList<CaptureHotkeyStatus> _window = Array.Empty<CaptureHotkeyStatus>();
-            IReadOnlyList<CaptureHotkeyStatus> _monitor = Array.Empty<CaptureHotkeyStatus>();
-            while (IpcJson.NextProperty(ref r, out var name))
-            {
-                switch (name)
-                {
-                    case "main": _main = IpcJson.ReadList<CaptureHotkeyStatus>(ref r, ReadCaptureHotkeyStatus); break;
-                    case "window": _window = IpcJson.ReadList<CaptureHotkeyStatus>(ref r, ReadCaptureHotkeyStatus); break;
-                    case "monitor": _monitor = IpcJson.ReadList<CaptureHotkeyStatus>(ref r, ReadCaptureHotkeyStatus); break;
-                    default: r.Skip(); break;
-                }
-            }
-            return new CaptureHotkeys(_main, _window, _monitor);
-        }
-
-        private static void WriteCaptureHotkeys(Utf8JsonWriter w, CaptureHotkeys value)
-        {
-            if (value == null) { w.WriteNullValue(); return; }
-            w.WriteStartObject();
-            w.WritePropertyName("main"); w.WriteStartArray(); foreach (var item in value.Main ?? Array.Empty<CaptureHotkeyStatus>()) { WriteCaptureHotkeyStatus(w, item); } w.WriteEndArray();
-            w.WritePropertyName("window"); w.WriteStartArray(); foreach (var item in value.Window ?? Array.Empty<CaptureHotkeyStatus>()) { WriteCaptureHotkeyStatus(w, item); } w.WriteEndArray();
-            w.WritePropertyName("monitor"); w.WriteStartArray(); foreach (var item in value.Monitor ?? Array.Empty<CaptureHotkeyStatus>()) { WriteCaptureHotkeyStatus(w, item); } w.WriteEndArray();
-            w.WriteEndObject();
-        }
-
-        private static CaptureHotkeyStatus ReadCaptureHotkeyStatus(ref Utf8JsonReader r)
-        {
-            if (!IpcJson.EnterObject(ref r)) return null;
-            string _gesture = default;
-            bool _active = default;
-            string _error = default;
-            string _errorCode = default;
-            while (IpcJson.NextProperty(ref r, out var name))
-            {
-                switch (name)
-                {
-                    case "gesture": _gesture = IpcJson.ReadString(ref r); break;
-                    case "active": _active = IpcJson.ReadBool(ref r); break;
-                    case "error": _error = IpcJson.ReadString(ref r); break;
-                    case "error_code": _errorCode = IpcJson.ReadString(ref r); break;
-                    default: r.Skip(); break;
-                }
-            }
-            return new CaptureHotkeyStatus(_gesture, _active, _error, _errorCode);
-        }
-
-        private static void WriteCaptureHotkeyStatus(Utf8JsonWriter w, CaptureHotkeyStatus value)
-        {
-            if (value == null) { w.WriteNullValue(); return; }
-            w.WriteStartObject();
-            w.WritePropertyName("gesture"); w.WriteStringValue(value.Gesture ?? "");
-            w.WritePropertyName("active"); w.WriteBooleanValue(value.Active);
-            if (value.Error != null) { w.WritePropertyName("error"); w.WriteStringValue(value.Error ?? ""); }
-            if (value.ErrorCode != null) { w.WritePropertyName("error_code"); w.WriteStringValue(value.ErrorCode ?? ""); }
-            w.WriteEndObject();
-        }
     }
 
     public static partial class HelperSpecs
@@ -1670,7 +1567,7 @@ namespace Prisc.Ipc
             isTerminal: e => e is ScrollEvent.Done || e is IIpcError { Fatal: true });
 
         public static readonly HelperSpec<CaptureEvent, CaptureCommand> Capture = new(
-            catalog: "capture", catalogHash: "ba3e870e308a74de", quitGrace: TimeSpan.FromMilliseconds(5000),
+            catalog: "capture", catalogHash: "82e472cff9ce3f77", quitGrace: TimeSpan.FromMilliseconds(5000),
             decode: CaptureCodec.DecodeEvent, encode: CaptureCodec.EncodeCommand,
             encodeEvent: CaptureCodec.EncodeEvent, decodeCommand: CaptureCodec.DecodeCommand,
             isTerminal: e => e is CaptureEvent.Done || e is IIpcError { Fatal: true });
@@ -1722,12 +1619,10 @@ namespace Prisc.Ipc
             new("capture", "event ready", """{"type":"ready"}""", line => CaptureCodec.EncodeEvent(CaptureCodec.DecodeEvent(line))),
             new("capture", "event session", """{"type":"session","dir":"/tmp/prisc/session-1"}""", line => CaptureCodec.EncodeEvent(CaptureCodec.DecodeEvent(line))),
             new("capture", "event capture_finished", """{"type":"capture_finished","dir":"/tmp/prisc/session-1"}""", line => CaptureCodec.EncodeEvent(CaptureCodec.DecodeEvent(line))),
-            new("capture", "event settings_status", """{"type":"settings_status","hotkeys":{"main":[{"gesture":"PrintScreen","active":true}],"window":[{"gesture":"Control+Shift+1","active":false,"error":"duplicate gesture","error_code":"duplicate"}],"monitor":[]}}""", line => CaptureCodec.EncodeEvent(CaptureCodec.DecodeEvent(line))),
             new("capture", "event done", """{"type":"done","result":"finished","dir":"/tmp/prisc/session-1"}""", line => CaptureCodec.EncodeEvent(CaptureCodec.DecodeEvent(line))),
             new("capture", "event error", """{"type":"error","code":"bad_command","message":"unknown command 'mvoe'","fatal":false}""", line => CaptureCodec.EncodeEvent(CaptureCodec.DecodeEvent(line))),
             new("capture", "command settings", """{"type":"settings","args":["--theme","dark"]}""", line => CaptureCodec.EncodeCommand(CaptureCodec.DecodeCommand(line))),
             new("capture", "command capture", """{"type":"capture","mode":"window"}""", line => CaptureCodec.EncodeCommand(CaptureCodec.DecodeCommand(line))),
-            new("capture", "command pause", """{"type":"pause","paused":true}""", line => CaptureCodec.EncodeCommand(CaptureCodec.DecodeCommand(line))),
         ];
     }
 }

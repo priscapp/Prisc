@@ -227,123 +227,23 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void Statuses_reported_by_the_capturer_land_on_the_matching_gestures()
+        public void The_standby_command_line_carries_no_hotkeys()
         {
-            var (manager, host, _) = Create(wireActions: false);
-            // warm capture: the standby capturer, not this process's hook, owns the screenshot gestures
-            manager.SetAction(HotkeyId.CaptureRegion, null);
-            var region = manager.GetEntry(HotkeyId.CaptureRegion);
-            region.AddGesture(CtrlShift1);
-            region.AddGesture(CtrlShift2);
-            Assert.Empty(host.Live);
-            Assert.All(region.Shortcuts, s => Assert.False(s.IsRegistered));
-
-            manager.ApplyExternalStatus(HotkeyId.CaptureRegion, new[]
-            {
-                new ExternalGestureStatus("Control+Shift+D1", false, "duplicate gesture"),
-                new ExternalGestureStatus("PrintScreen", true, ""),
-                // not one of ours (a report for a superseded settings snapshot): ignored
-                new ExternalGestureStatus("Alt+F4", true, ""),
-            });
-
-            Assert.True(region.Shortcuts[0].IsRegistered);
-            Assert.False(region.Shortcuts[1].IsRegistered);
-            Assert.Equal("duplicate gesture", region.Shortcuts[1].Error);
-            // no report yet: left as it was until the next one arrives
-            Assert.False(region.Shortcuts[2].IsRegistered);
-            Assert.Equal("", region.Shortcuts[2].Error);
-            Assert.Equal(PrintScreen, region.FirstRegisteredGesture);
-
-            // and once this process owns the action again, a stale capturer report must not stomp it
-            host.Refuse(PrintScreen, "Taken by another app.");
-            manager.SetAction(HotkeyId.CaptureRegion, () => { });
-            manager.ApplyExternalStatus(HotkeyId.CaptureRegion, new[] { new ExternalGestureStatus("PrintScreen", true, "") });
-            Assert.False(region.Shortcuts[0].IsRegistered);
-        }
-
-        [Fact]
-        public void A_capturer_failure_shows_the_same_text_as_the_shells_own()
-        {
-            var (manager, _, _) = Create(wireActions: false);
-            manager.SetAction(HotkeyId.CaptureRegion, null);
-            var region = manager.GetEntry(HotkeyId.CaptureRegion);
-            region.AddGesture(CtrlShift1);
-            region.AddGesture(CtrlShift2);
-
-            // keyed off the stable code, not the crate's wording (CAPTURE_PROTOCOL.md): one text table
-            // renders both the shell's own hook and the capturer's
-            manager.ApplyExternalStatus(HotkeyId.CaptureRegion, new[]
-            {
-                new ExternalGestureStatus("PrintScreen", false, "reworded crate text", HotkeyErrorCodes.Permission),
-                new ExternalGestureStatus("Control+Shift+D1", false, "duplicate gesture", HotkeyErrorCodes.Duplicate),
-                // a capturer that predates error_code, or a code the shell does not know: shown as sent
-                new ExternalGestureStatus("Control+Shift+D2", false, "some new failure"),
-            });
-
-            Assert.Equal(HotkeyStatusText.PermissionMessage, region.Shortcuts[0].Error);
-            Assert.Equal(HotkeyStatusText.DuplicateMessage, region.Shortcuts[1].Error);
-            Assert.Equal("some new failure", region.Shortcuts[2].Error);
-        }
-
-        [Fact]
-        public void A_capturer_stale_grant_shows_the_shells_stale_grant_text()
-        {
-            // the capturer's supervisor tells the stale grant apart itself: macOS lists Prisc as
-            // allowed, yet the tap lost its key events, so asking for the grant (which the System page
-            // shows) is wrong
-            var (manager, _, _) = Create(wireActions: false);
-            manager.SetAction(HotkeyId.CaptureRegion, null);
-            var region = manager.GetEntry(HotkeyId.CaptureRegion);
-            region.AddGesture(CtrlShift1);
-
-            manager.ApplyExternalStatus(HotkeyId.CaptureRegion, new[]
-            {
-                new ExternalGestureStatus("PrintScreen", false, "reworded crate text", HotkeyErrorCodes.StaleGrant),
-                new ExternalGestureStatus("Control+Shift+D1", false, "the keyboard hook has stopped", HotkeyErrorCodes.HookStopped),
-            });
-
-            Assert.Equal(HotkeyStatusText.StaleGrantMessage, region.Shortcuts[0].Error);
-            // on every OS: the capturer either retries its hook or exits and hands the hotkeys back
-            Assert.Equal(HotkeyStatusText.StoppedError("the keyboard hook has stopped", restartsItself: true),
-                region.Shortcuts[1].Error);
-            Assert.DoesNotContain("Restart", region.Shortcuts[1].Error);
-        }
-
-        [Fact]
-        public void A_capturer_invalid_gesture_shows_the_shells_text_with_the_parse_error()
-        {
-            var (manager, _, _) = Create(wireActions: false);
-            manager.SetAction(HotkeyId.CaptureRegion, null);
-            var region = manager.GetEntry(HotkeyId.CaptureRegion);
-
-            manager.ApplyExternalStatus(HotkeyId.CaptureRegion, new[]
-            {
-                new ExternalGestureStatus("PrintScreen", false, "unknown key 'Shift'", HotkeyErrorCodes.InvalidGesture),
-            });
-
-            Assert.Equal("This gesture could not be read: unknown key 'Shift'.", region.Shortcuts[0].Error);
-        }
-
-        [Fact]
-        public void The_standby_command_line_repeats_each_flag_once_per_gesture_in_order()
-        {
+            // the shell's hook owns the screenshot gestures, warm or not: a press reaches the
+            // standby capturer as a `capture` request, like a tray click
             var root = new SettingsRoot { Hotkeys = new SettingsHotkey(OSPlatform.Windows) };
             root.General.UseSystemAccentColor = false;
             root.Hotkeys.CaptureRegionShortcut = GestureList.Of(PrintScreen, CtrlShift1);
-            root.Hotkeys.CaptureActiveShortcut = GestureList.Empty;
 
             var args = CaptureArguments.BuildStandby(@"C:\sessions", root).ToList();
 
-            Assert.Equal(new[] { "PrintScreen", "Control+Shift+D1" }, ValuesOf("--hk-main"));
-            Assert.Empty(ValuesOf("--hk-window"));
-            Assert.Equal(new[] { "Control+PrintScreen" }, ValuesOf("--hk-monitor"));
-
-            IEnumerable<string> ValuesOf(string flag) =>
-                args.Select((a, i) => (a, i)).Where(t => t.a == flag).Select(t => args[t.i + 1]).ToList();
+            Assert.Equal(new[] { "--standby", "--session-root", @"C:\sessions" }, args.Take(3));
+            Assert.DoesNotContain(args, a => a.StartsWith("--hk-", StringComparison.Ordinal));
+            Assert.DoesNotContain("PrintScreen", args);
         }
 
         [Fact]
-        public void The_macos_defaults_register_and_reach_the_standby_capturer()
+        public void The_macos_defaults_register()
         {
             // what a fresh Mac starts with: both region gestures and the screen one, each live
             var host = new FakeHost();
@@ -356,17 +256,6 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(GestureList.Of(new HotkeyGesture(HotkeyKey.D2, cmdShift), new HotkeyGesture(HotkeyKey.F13)), region.Gestures);
             Assert.All(region.Shortcuts, s => Assert.True(s.IsRegistered));
             Assert.Equal(3, host.Live.Count);
-
-            // ...and in the crate's text form on the warm capturer's command line
-            var root = new SettingsRoot { Hotkeys = new SettingsHotkey(OSPlatform.OSX) };
-            root.General.UseSystemAccentColor = false;
-            var args = CaptureArguments.BuildStandby("/sessions", root).ToList();
-            Assert.Equal(new[] { "Shift+Meta+D2", "F13" }, ValuesOf("--hk-main"));
-            Assert.Empty(ValuesOf("--hk-window"));
-            Assert.Equal(new[] { "Shift+Meta+D1" }, ValuesOf("--hk-monitor"));
-
-            IEnumerable<string> ValuesOf(string flag) =>
-                args.Select((a, i) => (a, i)).Where(t => t.a == flag).Select(t => args[t.i + 1]).ToList();
         }
 
         [Theory]
@@ -392,42 +281,6 @@ namespace Prisc.VideoSDK.Tests
             Assert.True(draw.Shortcuts[1].IsRegistered);
             // kept, so the row shows it and its ✕ can remove it
             Assert.Equal(GestureList.Of(reserved, CtrlShift1), settings.DrawOnScreenShortcut);
-        }
-
-        [Fact]
-        public void A_reserved_gesture_the_capturer_owns_says_so_and_never_reaches_it()
-        {
-            var cmdM = new HotkeyGesture(HotkeyKey.M, HotkeyModifiers.Meta);
-            var settings = new SettingsHotkey(OSPlatform.OSX);
-            settings.CaptureRegionShortcut = GestureList.Of(cmdM);
-            using var manager = new HotkeyManager(new FakeHost(), settings, OSPlatform.OSX);
-            manager.SetAction(HotkeyId.CaptureRegion, null); // warm capture: the capturer's
-
-            var shortcut = Assert.Single(manager.GetEntry(HotkeyId.CaptureRegion).Shortcuts);
-            Assert.Contains("reserved", shortcut.Error);
-            // a report for it cannot make it look active
-            manager.ApplyExternalStatus(HotkeyId.CaptureRegion, new[] { new ExternalGestureStatus("Meta+M", true, "") });
-            Assert.False(shortcut.IsRegistered);
-        }
-
-        [Fact]
-        public void The_standby_command_line_leaves_out_reserved_gestures()
-        {
-            if (!OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS())
-                return; // nothing is reserved elsewhere, and there is no standby capturer either
-
-            // the capturer binds what it is sent, on the OS it runs on
-            var reserved = OperatingSystem.IsMacOS()
-                ? new HotkeyGesture(HotkeyKey.M, HotkeyModifiers.Meta)
-                : new HotkeyGesture(HotkeyKey.Tab, HotkeyModifiers.Alt);
-            var root = new SettingsRoot { Hotkeys = new SettingsHotkey(OSPlatform.Windows) };
-            root.General.UseSystemAccentColor = false;
-            root.Hotkeys.CaptureRegionShortcut = GestureList.Of(reserved, PrintScreen);
-
-            var args = CaptureArguments.BuildStandby("/sessions", root).ToList();
-
-            var main = args.Select((a, i) => (a, i)).Where(t => t.a == "--hk-main").Select(t => args[t.i + 1]);
-            Assert.Equal(new[] { "PrintScreen" }, main);
         }
 
         [Fact]
@@ -522,8 +375,7 @@ namespace Prisc.VideoSDK.Tests
         [Fact]
         public void A_recording_the_host_ends_with_an_error_ends_and_hands_the_error_over()
         {
-            // the hook dying mid-recording: no gesture will ever come, and the standby capturer's
-            // hotkeys (paused through RecordingChanged) must not stay paused waiting for one
+            // the hook dying mid-recording: no gesture will ever come, so the recording must end
             var (manager, host, _) = Create();
             var states = new List<bool>();
             manager.RecordingChanged += (_, _) => states.Add(manager.IsRecording);

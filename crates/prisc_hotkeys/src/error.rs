@@ -1,8 +1,7 @@
 use crate::Key;
 
-/// Why the hook could not start, or a gesture could not be registered. The Display texts are part
-/// of the capturer's protocol: it echoes them verbatim into the `settings_status` event
-/// (HELPER_PROTOCOL.md §4.5).
+/// Why the hook could not start, or a gesture could not be registered. Prisc.Ui shows its own text
+/// per [`Error::code`]; the Display texts are for logs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
     /// No backend on this OS (Linux).
@@ -52,9 +51,8 @@ pub const STALE_GRANT_CODE: &str = "stale_grant";
 pub const INVALID_GESTURE_CODE: &str = "invalid_gesture";
 
 /// Every machine-readable hotkey status code, `(C# name, code)`: one per [`Error`] variant in
-/// declaration order, then [`STALE_GRANT_CODE`] and [`INVALID_GESTURE_CODE`]. The capturer's `settings_status` event carries
-/// these codes (HELPER_PROTOCOL.md section 4.5) and C# gets them generated as `HotkeyErrorCodes`
-/// (`cargo codegen`), so a code is spelled once.
+/// declaration order, then [`STALE_GRANT_CODE`] and [`INVALID_GESTURE_CODE`]. C# gets them
+/// generated as `HotkeyErrorCodes` (`cargo codegen`), so a code is spelled once.
 pub const ERROR_CODES: &[(&str, &str)] = &[
     ("Unsupported", "unsupported"),
     ("Permission", "permission"),

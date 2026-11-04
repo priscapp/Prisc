@@ -5,10 +5,9 @@ namespace Prisc.UI
 {
     /// <summary>
     /// The one owner of the user-visible hotkey texts, keyed by prisc_hotkeys' status code
-    /// (<see cref="HotkeyErrorCodes"/>, generated from the crate's code table). Both paths render
-    /// through it: the in-process hook (<see cref="NativeHotkeyHost"/>, whose states and refusals map
-    /// onto the codes) and the standby capturer's <c>settings_status</c>
-    /// (<see cref="HotkeyManager.ApplyExternalStatus"/>), whose own display text stays in its logs.
+    /// (<see cref="HotkeyErrorCodes"/>, generated from the crate's code table). The in-process hook
+    /// (<see cref="NativeHotkeyHost"/>, whose states and refusals map onto the codes) renders
+    /// through it.
     /// </summary>
     internal static class HotkeyStatusText
     {

@@ -105,7 +105,7 @@ Error codes (closed set; a parent that sees an unknown code falls back to `fatal
 | `bad_command` | stdin line not JSON, unknown `type`, missing/invalid field. Never fatal. |
 | `rejected` | A well-formed command the helper refused in its current state (standby: rejected settings snapshot, a `capture` while one is open; recorder: `pause` before the output started). Never fatal. |
 | `usage` | Arguments that parsed but cannot be used, found after `hello` (recorder: monitor not found, webcam without `--multi-track`, bad audio arguments; share_region `mirror.rs` `fail_args`). Always fatal, exit 2. |
-| `init_failed` | Setup failed before the helper became useful (libobs, FFmpeg open, no window at scroll point, standby hotkey hook unavailable at startup). |
+| `init_failed` | Setup failed before the helper became useful (libobs, FFmpeg open, no window at scroll point). |
 | `io_failed` | Reading/writing a file or directory failed (session dir, output file). |
 | `permission` | An OS permission is missing (macOS Screen Recording, Accessibility). |
 | `failed` | Any other failure, including a well-formed command that failed to apply (share_region `move` whose `set_region` errors, recorder pause/unpause that libobs refuses). |
@@ -463,21 +463,18 @@ for `screen` (as `standby.rs` ~284 accepts today), so an unknown mode is a `bad_
 from the parser, never a `rejected`.
 
 Commands (standby only; one-shot ignores stdin except EOF/`quit`), shapes otherwise unchanged:
-`settings {args: [string]}` (answered by `settings_status`, or `error{code:"rejected"}` then
-the surviving `settings_status`), `capture {mode: CaptureMode}` (`error{code:"rejected"}`
-while a capture is open), `pause {paused: bool}` (no reply).
+`settings {args: [string]}` (no reply, or `error{code:"rejected"}` for a snapshot that does
+not parse), `capture {mode: CaptureMode}` (`error{code:"rejected"}` while a capture is open).
+The capturer registers no hotkeys: the shell's own hook turns a screenshot press into a
+`capture` request.
 
 | Event | Old line | Fields |
 |---|---|---|
 | `ready` | `PRISC_STANDBY_READY` | |
 | `session` | `PRISC_SESSION <dir>` | `dir: string` |
 | `capture_finished` | `PRISC_CAPTURE_FINISHED <dir>` | `dir: string` (standby, per capture; not terminal) |
-| `settings_status` | `PRISC_SETTINGS_STATUS <json>` | `hotkeys: {main: [HotkeyStatus], window: [HotkeyStatus], monitor: [HotkeyStatus]}` |
 | `error` | `PRISC_IPC_ERROR <text>` | non-fatal: `code: "rejected"` (bad snapshot, capture while busy) or `"io_failed"` (session dir) |
 | `done` **T** | (none) | `result: "finished" \| "cancelled" \| "stopped"`, `dir?: string` |
-
-`HotkeyStatus` = `{gesture: string, active: bool, error?: string, error_code?: string}` (codes
-as in `CAPTURE_PROTOCOL.md` §1.2).
 
 **Standby** exits:
 

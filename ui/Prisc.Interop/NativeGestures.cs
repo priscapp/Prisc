@@ -4,8 +4,7 @@ namespace Prisc.Interop
 {
     /// <summary>
     /// Global hotkey gesture text and validation, in prisc_hotkeys' one grammar (<c>prisc_gesture_*</c>):
-    /// the settings file, the standby capturer's <c>--hk-*</c> flags and its status echo all carry
-    /// that text, so C# keeps no parser of its own. A gesture crosses as its raw values: a
+    /// the settings file carries that text, so C# keeps no parser of its own. A gesture crosses as its raw values: a
     /// <c>HotkeyKey</c> value and <c>HotkeyModifiers</c> bits (Prisc.Shared's generated enums, which
     /// this assembly cannot see). Any thread.
     /// </summary>

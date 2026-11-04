@@ -75,137 +75,40 @@ The shell pre-creates the session directory and passes it via
 `--session-dir`. Which files appear depends on how the capture ended:
 
 Standby mode intentionally reverses creation ownership. With
-`--standby`, the shell supplies `--session-root` plus any number of
-`--hk-main`, `--hk-window`, and `--hk-monitor` occurrences — each flag is
-repeatable, one occurrence per gesture in the action's list order (less any
-combination the OS reserves for itself, which the shell never binds), and zero
-occurrences means that action has no hotkey (hotkeys take effect when the
-first settings snapshot arrives; see below). The capturer emits `ready` and
-waits event-driven without initializing capture/GPU
-resources (the main loop is fully blocked, and so is the Windows hook thread
-between key events; on macOS the hook thread and a permission watcher wake
-about once a second for tap-health and Accessibility checks, and a hook that
-is down is retried every 2 s while a gesture needs it — see below), then
-creates a unique child directory and emits `session` with its absolute path
-when a hotkey fires, followed by one ordinary capture cycle. The log goes to
-stderr and the session's `capture.log`. Stdin is a lifetime lease (the quit
-path of HELPER_PROTOCOL.md §3.3): a quit while waiting ends with
-`done{result:"stopped"}` without starting a capture, and a quit mid-capture
-closes the overlay without writing the session and ends the same way.
+`--standby`, the shell supplies `--session-root`. The capturer emits `ready`
+and waits event-driven without initializing capture/GPU resources (the main
+loop is fully blocked), then creates a unique child directory and emits
+`session` with its absolute path when a `capture` request arrives, followed by
+one ordinary capture cycle. The log goes to stderr and the session's
+`capture.log`. Stdin is a lifetime lease (the quit path of HELPER_PROTOCOL.md
+§3.3): a quit while waiting ends with `done{result:"stopped"}` without
+starting a capture, and a quit mid-capture closes the overlay without writing
+the session and ends the same way.
 
-The capturer owns the screenshot hotkeys, via a low-level keyboard hook
-(the prisc_hotkeys crate: WH_KEYBOARD_LL on Windows, a CGEventTap on macOS —
-which needs the Accessibility permission; there is no Linux backend yet, and
-that error is reported per gesture), NOT via RegisterHotKey-style
-registration. Both halves of that choice are load-bearing: the trigger path
-must not depend on the shell being resident (a paged-out Prisc.UI would add
-its page-in time to every capture), and the key must be suppressed before OS
-handlers see it — Windows 11's "PrintScreen opens Snipping Tool" feature
-consumes the key ahead of RegisterHotKey delivery, so a plain registration
-reports success and then never fires. Gestures travel in the settings form:
-`Control`/`Alt`/`Shift`/`Meta` joined with `+`, then a canonical key name
-(`PrintScreen`, `Control+Shift+D1`, `Alt+Meta+Oem3`); aliases such as
-`Snapshot` are accepted. The shell translates nothing — the key names are
-prisc_hotkeys' key table, which the shell's `HotkeyKey` is generated from —
-and a key with no code on this OS surfaces as an explicit per-hotkey error.
-A hook that cannot start, or dies later, is fatal only on Windows, where the
-failure (`HookFailed`, the hook's message loop failing, or a silently
-removed hook that could not be re-installed) is specific to
-this process: it ends with a fatal `error` (`init_failed` at startup,
-`failed` later) and exit 1 (a death noticed under an open overlay waits
-until that capture has finished), so the shell's crash accounting
-restarts it or falls back. Everywhere else the process stays up for tray
-captures and reports the error on every gesture. On macOS the ways the tap
-fails (`PermissionDenied`; a running tap ended by a revoked grant, which is
-reported as a missing grant too; a NULL tap, `HookFailed`; repeated timeouts
-or invalidation, `Stopped`) come down to
-the Accessibility grant, which the shell's own hook shares, or are transient,
-so the capturer retries the hook every 2 s while the last snapshot holds a
-gesture it would register (not before the first snapshot, nor with no
-gestures or only refused ones; a settings snapshot also retries it, once 2 s
-have passed since the last try). A stale grant (listed and trusted, but the
-tap gets no key events) backs off instead: it tries again 2, 4 and 8 ticks
-apart, then every 16 ticks (32 s), only probing the permission on the ticks
-in between, and a probe that reads the grant as missing ends the back-off at
-once. The capturer logs a start failure once per change of
-reason rather than per try and a death as an error only the first time per
-run (a revoked grant never), and announces each change (the
-hook coming up, going down, failing differently, or dying and coming straight
-back with its gestures registered again) with an unsolicited
-`settings_status`; granting
-Accessibility later makes the hotkeys work without restarting anything. The
-capturer never prompts for the permission; the shell does, keyed off
-`error_code` (below). `Unsupported` (Linux) is reported and never retried.
-Standby is not the only capture path: the
-shell only runs it while its "keep capturer warm" setting is in effect, and
-it falls back to its own prisc_hotkeys registrations plus classic one-shot
-spawns for the rest of its process lifetime when standby proves unusable —
-no permission or binary, exit code 3 (permission revoked), or repeated
-crashes.
+The capturer registers no hotkeys. The shell owns every global hotkey,
+screenshots included, through its own prisc_hotkeys hook (a low-level keyboard
+hook, so the key is suppressed before OS handlers such as Windows 11's
+"PrintScreen opens Snipping Tool" see it), and turns a screenshot press into
+the same `capture` request as a tray click. The hotkeys therefore stay
+registered whether or not a standby process is running, so no press falls
+through to the OS while the standby starts, restarts or is switched off.
+Standby is not the only capture path: the shell only runs it while its "keep
+capturer warm" setting is in effect, sends a request only when the standby has
+reported `ready` and no overlay is open or requested, and otherwise spawns a
+classic one-shot capturer. When standby proves unusable — no permission or
+binary, exit code 3 (permission revoked), or repeated crashes — the shell
+stops running it for the rest of its process lifetime.
 
 While waiting, stdin carries the catalog's commands. A `settings` command
-replaces the complete standby CLI snapshot (including hotkeys) after parsing
-its `args` through `CliArgs`; every snapshot is answered with
-`settings_status` (statuses cannot arrive out of order: one pipe, one
-sequential reader), and one may also arrive unasked when the hook comes up or
-goes down. Its `hotkeys` object
-maps each of `main`, `window`, and `monitor` to an array with one entry per
-gesture received for that action, in the order received; `gesture` echoes
-the received string verbatim, which is what the shell matches back to
-`HotkeyGesture.ToSerializedString()` of its own gestures:
-
-```json
-{"type":"settings_status","hotkeys":{
-  "main":[{"gesture":"PrintScreen","active":true},
-          {"gesture":"Control+Shift+1","active":true}],
-  "window":[{"gesture":"Shift+Control+1","active":false,
-             "error":"duplicate gesture","error_code":"duplicate"}],
-  "monitor":[{"gesture":"Control+PrintScreen","active":true}]}}
-```
-
-`error` is display text (prisc_hotkeys' error text, echoed verbatim) and may
-change; `error_code` is its stable, machine-readable twin, and the one to
-branch on. Both are absent exactly when `active` is true. The codes are
-prisc_hotkeys' one table (`ERROR_CODES`, generated into the shell's
-`HotkeyErrorCodes`): `permission` (macOS Accessibility not granted, including
-a grant revoked under a running tap), `stale_grant` (listed and trusted, but
-the tap gets no key events), `unsupported` (no hook on this OS),
-`hook_failed` (the OS refused the hook), `hook_stopped` (the hook died and is
-not back yet), `invalid_gesture` (does not parse), `no_key`, `modifier_key`
-(a bare modifier), `unsupported_key` (no code on this OS), `duplicate`.
-
-The shell shows its own text for every code it knows (`HotkeyStatusText`, the
-same table its in-process hook uses) and falls back to `error` only for an
-unknown or missing code. It never probes the permission itself: it prompts for
-Accessibility once per run, and only for a `permission` that arrives before
-the hook ever ran, and it never prompts for `stale_grant`, whose text asks the
-user to remove and re-add Prisc in the Accessibility list.
-
-Hook-based hotkeys cannot conflict with other applications, so a gesture is
-active exactly when it parses, names a key usable on this OS (not `None`, not
-a bare modifier), and the hook is running; a rejected gesture or a missing
-hook is non-fatal and does not prevent other hotkeys or settings from being
-applied. The shell gives each gesture to at most one action; as
-defense in depth, a gesture repeated anywhere in the snapshot (compared after
-parsing) registers at its first occurrence and every later one reports
-`"active":false,"error":"duplicate gesture"`. A snapshot that fails to parse
-changes nothing and is answered with `error{code:"rejected"}`, then the
-surviving hotkeys' real state. A `pause` command (`paused` true or false) pauses or resumes the hotkeys
-(paused: registered gestures neither fire nor are suppressed) while the shell
-records a gesture in its settings UI, so the recorded press reaches the
-shell. It is applied immediately, even mid-capture, gets no reply, and the
-shell re-sends it after every `ready`. A `capture` command (`mode` `region`,
-`screen` or `window`; `monitor` is accepted for `screen`) starts the same
-single capture cycle as a native hotkey. This is how shell and tray capture
-buttons reuse the waiting process instead of spawning a second one; the shell
-sends one only when no overlay is open or requested — nothing is ever queued
-on either side. A non-fatal `error` is the NACK: `rejected` for a refused
-snapshot or a capture request that arrived while one was open, `io_failed`
-for a failed session-dir creation, `bad_command` for a malformed line; the
-shell clears its overlay-pending state on it. Overlay exclusion is per-side:
-during the brief windows where the shell falls back to a one-shot spawn, a
-native hotkey can still race a second overlay from the standby process —
-accepted as rare and harmless rather than adding cross-process locking.
+replaces the complete standby CLI snapshot after parsing its `args` through
+`CliArgs`; it gets no reply unless it fails to parse, in which case it changes
+nothing and is answered with `error{code:"rejected"}`. A `capture` command
+(`mode` `region`, `screen` or `window`; `monitor` is accepted for `screen`)
+starts one capture cycle; nothing is ever queued on either side. A non-fatal
+`error` is the NACK: `rejected` for a refused snapshot or a capture request
+that arrived while one was open, `io_failed` for a failed session-dir
+creation, `bad_command` for a malformed line; the shell clears its
+overlay-pending state on it.
 
 Normal completion does not exit the standby process. After all overlay windows,
 render workers and GPU objects have been dropped, the capturer closes that
@@ -215,19 +118,11 @@ therefore reserved for the quit path (`done{stopped}`) or a fatal `error`,
 after which the shell restarts the standby process (with
 backoff) or falls back as above.
 
-The keyboard hook stays installed while an overlay is active, so the
-gestures remain suppressed system-wide for the overlay's duration (the
-dedicated hook thread keeps pumping regardless of what the capture cycle is
-doing). Everything received during that interval, hotkey presses and stdin
-commands alike, is stale and discarded before the next `ready` (a `capture`
-request is still answered with `error{rejected}` and a malformed line with
-`bad_command`, in arrival order; best effort: an event in flight between hook and
-channel during the final microseconds of teardown can survive the drain and
-start a capture, which is what the press asked for). The shell re-sends its
-full settings snapshot in
-response to every `ready`, so dropped settings cannot be lost, and that
-snapshot is also the only thing that changes the hooked gesture set —
-configuration has exactly one path.
+Stdin commands received while an overlay is active are stale and discarded
+before the next `ready` (a `capture` request is still answered with
+`error{rejected}` and a malformed line with `bad_command`, in arrival order).
+The shell re-sends its full settings snapshot in response to every `ready`, so
+dropped settings cannot be lost.
 
 | Outcome | Files written | `action.txt` content |
 |---|---|---|

@@ -21,11 +21,10 @@
 //!   can't be suppressed (Win+L can still be recorded; registering it fires but Windows still
 //!   locks). AltGr is Ctrl+Alt (as with SharpHook, Avalonia and RegisterHotKey), so a registered
 //!   `Control+Alt+X` also swallows AltGr+X — and `Alt+E` never eats AltGr+E.
-//! - Windows: a hook Windows removed silently (callback timeouts, e.g. a debugger pause) is
-//!   re-installed after a few keystrokes it missed, which moves it to the front of the hook chain.
-//!   The watchdog needs the process's keyboard raw input, so it is off in a process that keeps
-//!   that for itself (a winit event loop takes it; `prisc_capture` hands it back when it builds
-//!   its loop, so the watchdog runs there).
+//! - Windows: a hook Windows removed silently (repeated callback timeouts, e.g. a debugger pause)
+//!   stays removed: there is no watchdog. Detecting it needs a keyboard raw-input sink, and with
+//!   one registered Windows skips the process's own LL hook whenever its own window is focused.
+//!   For the same reason a host process must not register keyboard raw input itself.
 //! - macOS: needs the Accessibility permission (`start` fails with `PermissionDenied`, never
 //!   prompts; losing it later ends the hook with `Event::Stopped` within about a second, as does a
 //!   tap that times out a 6th time within 10 s). Secure Input (password fields, in any app) hides
@@ -55,9 +54,6 @@ mod modifiers;
 pub mod reserved;
 /// The supervised hook: retry, stale-grant back-off and the recovery policy in one place.
 pub mod supervise;
-// Used only by windows.rs outside tests; compiled and tested on every OS.
-#[cfg_attr(not(windows), allow(dead_code))]
-mod watchdog;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod winstate;
 

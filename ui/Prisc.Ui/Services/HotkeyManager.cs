@@ -227,13 +227,12 @@ namespace Prisc.UI
         /// <summary>True while a gesture is being recorded (<see cref="StartRecording"/>).</summary>
         public bool IsRecording => _recording != null;
 
-        /// <summary>Raised on the UI thread after <see cref="IsRecording"/> changes, both ways (the
-        /// App pauses the standby capturer's hook with it).</summary>
+        /// <summary>Raised on the UI thread after <see cref="IsRecording"/> changes, both ways.</summary>
         public event EventHandler RecordingChanged;
 
         /// <summary>Raised whenever any action's gestures or any gesture's registration status
         /// change — the latter possibly long after the change that caused it (the hook failing to
-        /// start, the standby capturer reporting back). Raised on the thread that made the change,
+        /// start or coming back). Raised on the thread that made the change,
         /// which is the UI thread in the app.</summary>
         public event EventHandler Changed;
 
@@ -307,8 +306,7 @@ namespace Prisc.UI
         private void OnHostRecordingAvailable(object sender, EventArgs e) => RecordingAvailable?.Invoke(this, EventArgs.Empty);
 
         /// <summary>Wires the action invoked when the hotkey fires, then (re)registers it. A null
-        /// action leaves the gestures to another owner (the standby capturer, for the screenshot
-        /// actions), which reports their status through <see cref="ApplyExternalStatus"/>.</summary>
+        /// action unregisters it.</summary>
         public void SetAction(HotkeyId id, Action action)
         {
             _actions[id] = action;
@@ -390,55 +388,6 @@ namespace Prisc.UI
             RecordingChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        /// <summary>
-        /// Statuses for an action whose gestures another process registers (the standby capturer's
-        /// screenshot hotkeys), keyed by the gesture as that process received it —
-        /// <see cref="HotkeyGesture.ToSerializedString"/>. A gesture with no report keeps the
-        /// status it has: the report may predate the settings snapshot that added it, and the
-        /// snapshot's own report follows. Ignored while this manager owns the action itself. The
-        /// text shown is the shell's own for the status's <see cref="ExternalGestureStatus.ErrorCode"/>
-        /// (<see cref="HotkeyStatusText"/>, the same table the in-process hook renders through, so
-        /// a missing grant and a stale one read alike on both paths); a status with no code, or one
-        /// the table does not know, shows the text as sent.
-        /// </summary>
-        public void ApplyExternalStatus(HotkeyId id, IReadOnlyList<ExternalGestureStatus> statuses)
-        {
-            if (_disposed || statuses == null)
-                return;
-
-            var entry = GetEntry(id);
-            if (_actions.TryGetValue(id, out var action) && action != null)
-                return;
-
-            // each report is used once: the capturer echoes every occurrence it was sent, in
-            // order, so a report always pairs with the gesture it was sent for.
-            var used = new bool[statuses.Count];
-            foreach (var shortcut in entry.Shortcuts)
-            {
-                // never sent to the capturer (CaptureArguments.BuildStandby), and refused here
-                if (_isReserved(shortcut.Gesture))
-                    continue;
-
-                var token = shortcut.Gesture.ToSerializedString();
-                for (int i = 0; i < statuses.Count; i++)
-                {
-                    if (used[i] || statuses[i].Gesture != token)
-                        continue;
-                    used[i] = true;
-                    // the capturer's hook runs under the same supervisor and shares the shell's
-                    // Accessibility grant: show the text the shell's own host would. A stopped
-                    // capturer hook never needs a restart of Prisc: the capturer either retries it
-                    // or exits, and the shell then takes the hotkeys back (the supervisor's recovery
-                    // policy decides which, so it is not repeated here).
-                    var error = statuses[i].IsRegistered
-                        ? ""
-                        : HotkeyStatusText.For(statuses[i].ErrorCode, statuses[i].Error, recoverable: true, shortcut.Gesture);
-                    shortcut.SetStatus(statuses[i].IsRegistered, error);
-                    break;
-                }
-            }
-        }
-
         internal GestureList GetGestures(HotkeyEntry entry) => entry.Getter(_settings);
 
         internal void SetGestures(HotkeyEntry entry, GestureList gestures)
@@ -498,7 +447,7 @@ namespace Prisc.UI
 
             if (!_actions.TryGetValue(entry.Id, out var action) || action == null)
             {
-                // nobody here owns the action: no status until whoever does reports one
+                // no action wired (yet): nothing to register, no status to show
                 foreach (var shortcut in bindable)
                     shortcut.SetStatus(false, "");
                 return;
@@ -541,7 +490,7 @@ namespace Prisc.UI
 
         /// <summary>The manager's side of one recording: ends <see cref="IsRecording"/> exactly
         /// once, whichever way the recording ends, in a finally so a throwing callback or host call
-        /// cannot leave it (and with it the standby capturer's pause) stuck.</summary>
+        /// cannot leave it stuck.</summary>
         private sealed class RecordingSession : IDisposable
         {
             private readonly HotkeyManager _manager;
@@ -595,12 +544,4 @@ namespace Prisc.UI
             }
         }
     }
-
-    /// <summary>One gesture's status as reported by the process that registered it (see
-    /// <see cref="HotkeyManager.ApplyExternalStatus"/>).</summary>
-    /// <param name="Gesture">The gesture exactly as that process received it, in
-    /// <see cref="HotkeyGesture.ToSerializedString"/> form.</param>
-    /// <param name="ErrorCode">The stable code behind <paramref name="Error"/> (CAPTURE_PROTOCOL.md
-    /// §1.2), to branch on instead of the text; null when registered or not reported.</param>
-    public readonly record struct ExternalGestureStatus(string Gesture, bool IsRegistered, string Error, string ErrorCode = null);
 }

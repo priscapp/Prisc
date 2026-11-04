@@ -29,11 +29,8 @@ serde_json.workspace = true
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
     "Win32_Foundation",
-    # SetWindowsHookExW, KBDLLHOOKSTRUCT, GetMessageW, PostThreadMessageW, GetGUIThreadInfo, GetWindowThreadProcessId,
-    # CreateWindowExW (the watchdog's message-only window)
+    # SetWindowsHookExW, KBDLLHOOKSTRUCT, GetMessageW, PostThreadMessageW, GetGUIThreadInfo, GetWindowThreadProcessId
     "Win32_UI_WindowsAndMessaging",
-    # RegisterRawInputDevices, GetRegisteredRawInputDevices (the watchdog's canary)
-    "Win32_UI_Input",
     # SendInput, GetAsyncKeyState, GetKeyState, GetKeyboardLayout, ToUnicodeEx
     "Win32_UI_Input_KeyboardAndMouse",
     # GetCurrentThreadId, SetThreadPriority

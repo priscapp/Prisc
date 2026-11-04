@@ -727,8 +727,6 @@ ipc_catalog! {
     quit_grace_ms 5000;
     strings CaptureMode { Region, Screen | Monitor, Window }
     strings CaptureResult { Finished, Cancelled, Stopped }
-    record Hotkeys { main: Vec<HotkeyStatus>, window: Vec<HotkeyStatus>, monitor: Vec<HotkeyStatus> }
-    record HotkeyStatus { gesture: String, active: bool, error: Option<String>, error_code: Option<String> }
     events {
         event Ready {}
             sample r#"{"type":"ready"}"#;
@@ -736,8 +734,6 @@ ipc_catalog! {
             sample r#"{"type":"session","dir":"/tmp/prisc/session-1"}"#;
         event CaptureFinished { dir: String }
             sample r#"{"type":"capture_finished","dir":"/tmp/prisc/session-1"}"#;
-        event SettingsStatus { hotkeys: Hotkeys }
-            sample r#"{"type":"settings_status","hotkeys":{"main":[{"gesture":"PrintScreen","active":true}],"window":[{"gesture":"Control+Shift+1","active":false,"error":"duplicate gesture","error_code":"duplicate"}],"monitor":[]}}"#;
         terminal Done { result: CaptureResult, dir: Option<String> }
             sample r#"{"type":"done","result":"finished","dir":"/tmp/prisc/session-1"}"#;
     }
@@ -746,8 +742,6 @@ ipc_catalog! {
             sample r#"{"type":"settings","args":["--theme","dark"]}"#;
         Capture { mode: CaptureMode }
             sample r#"{"type":"capture","mode":"window"}"#;
-        Pause { paused: bool }
-            sample r#"{"type":"pause","paused":true}"#;
     }
 }
 
