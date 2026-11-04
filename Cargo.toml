@@ -22,7 +22,7 @@ authors = ["Caelan Sayler <git@caesay.com>"]
 repository = "https://github.com/priscapp/Prisc"
 keywords = ["update", "install", "velopack", "squirrel", "automatic-updates"]
 categories = ["development-tools"]
-license = "MIT"
+license = "GPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.89"
 

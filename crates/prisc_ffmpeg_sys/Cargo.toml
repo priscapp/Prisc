@@ -2,7 +2,7 @@
 name = "prisc_ffmpeg_sys"
 version = "0.1.0"
 edition = "2021"
-license = "GPL-2.0-or-later"
+license.workspace = true
 # Exports the resolved obs-deps bundle to dependents as DEP_FFMPEG_DEPS_ROOT /
 # _LIB / _BIN. The `links` key also makes cargo run this crate's build script
 # BEFORE any dependent's, which prisc_vid2gif relies on: without that ordering its

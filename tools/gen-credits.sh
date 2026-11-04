@@ -59,7 +59,7 @@ EXTRA_ENTRIES=(
     "ONNX Runtime||MIT|https://github.com/microsoft/onnxruntime"
     "OBS Studio||GPL-2.0-or-later|https://github.com/obsproject/obs-studio"
     "FFmpeg||GPL-2.0-or-later|https://ffmpeg.org"
-    "x264||GPL-2.0|https://www.videolan.org/developers/x264.html"
+    "x264||GPL-2.0-or-later|https://www.videolan.org/developers/x264.html"
 )
 
 command -v cargo >/dev/null || { echo "error: cargo not found on PATH" >&2; exit 1; }

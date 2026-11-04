@@ -2,7 +2,7 @@
 name = "prisc_recorder"
 version = "0.11.0"
 edition = "2021"
-license = "GPL-2.0-or-later"
+license.workspace = true
 
 [dependencies]
 # The helper protocol (crates/prisc_capture/HELPER_PROTOCOL.md): stdio channel, commands, lifetime.

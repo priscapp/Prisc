@@ -7,9 +7,8 @@
 //! failure on a degenerate selection takes down whatever process it is
 //! running in — and in-process that is the overlay, mid-capture, with the
 //! user's selection already framed. Out-of-process the same failure is an
-//! exit code the capturer reports as [`OcrError::Failed`]. (It also keeps the
-//! GPL-licensed `prisc_ai` binary, and its tens of MB of model weights, out
-//! of the overlay.)
+//! exit code the capturer reports as [`OcrError::Failed`]. (It also keeps
+//! `prisc_ai`'s tens of MB of model weights out of the overlay.)
 //!
 //! # Wire format
 //!

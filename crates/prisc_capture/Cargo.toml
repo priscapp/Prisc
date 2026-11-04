@@ -2,6 +2,7 @@
 name = "prisc_capture"
 version = "1.0.0"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 prisc_ipc.workspace = true

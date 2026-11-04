@@ -1,10 +1,9 @@
 prisc_ai — on-device AI inference (OCR, video matting, audio denoising) for Prisc
 
-This executable (prisc_ai) is licensed under the GNU General Public
-License, version 3 only (GPL-3.0-only). See the accompanying LICENSE file
-for the full license text. It is distributed alongside Prisc as a separate
-program (mere aggregation); the rest of Prisc is MIT licensed and is not
-covered by the GPL.
+This executable (prisc_ai) is part of Prisc and, like the rest of Prisc, is
+licensed under the GNU General Public License, version 3 or (at your option)
+any later version (GPL-3.0-or-later), with the additional terms in Prisc's
+NOTICE.txt. See the accompanying LICENSE.txt file for the full license text.
 
 It embeds the following model weights:
 

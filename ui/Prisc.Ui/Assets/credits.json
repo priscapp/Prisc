@@ -434,7 +434,7 @@
         {
           "name": "x264",
           "version": "",
-          "license": "GPL-2.0",
+          "license": "GPL-2.0-or-later",
           "url": "https://www.videolan.org/developers/x264.html"
         },
         {

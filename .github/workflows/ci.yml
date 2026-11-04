@@ -156,21 +156,21 @@ jobs:
           cargo test -p prisc_codegen
         shell: bash
 
-      # The in-process library and the code generator must never link Sentry (prisc_interop only)
-      # or anything GPL or from the recorder stack. The cheap early signal; build-rust.yml checks
+      # The in-process library and the code generator must never link Sentry (prisc_interop only),
+      # prisc_ai or anything from the recorder stack: those run as their own processes. The cheap early signal; build-rust.yml checks
       # the shipped artifact itself.
       - name: "Rust gate: crate boundaries"
         run: |
-          gpl='prisc_recorder|prisc_share_region|prisc_obs[a-z0-9_]*|prisc_vid2gif|prisc_ffmpeg_sys|prisc_build_support|prisc_ai'
+          separate='prisc_recorder|prisc_share_region|prisc_obs[a-z0-9_]*|prisc_vid2gif|prisc_ffmpeg_sys|prisc_build_support|prisc_ai'
           # Captured first: inside an `if` condition a failing cargo tree would just read as "no match".
           interop_tree=$(cargo tree -p prisc_interop -e normal --target all --prefix none)
           codegen_tree=$(cargo tree -p prisc_codegen -e normal --target all --prefix none)
-          if grep -wE "sentry|$gpl" <<<"$interop_tree"; then
-            echo "::error::prisc_interop depends on Sentry or on a GPL or recorder-stack crate (listed above)"
+          if grep -wE "sentry|$separate" <<<"$interop_tree"; then
+            echo "::error::prisc_interop depends on Sentry, prisc_ai or a recorder-stack crate (listed above)"
             exit 1
           fi
-          if grep -wE "$gpl" <<<"$codegen_tree"; then
-            echo "::error::prisc_codegen depends on a GPL or recorder-stack crate (listed above)"
+          if grep -wE "$separate" <<<"$codegen_tree"; then
+            echo "::error::prisc_codegen depends on prisc_ai or a recorder-stack crate (listed above)"
             exit 1
           fi
         shell: bash

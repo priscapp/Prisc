@@ -126,8 +126,8 @@ jobs:
           done
 
       # stage/ unpacks into the package directory beside Prisc.Ui: the overlay, the scrolling
-      # capture driver, the interop library and prisc_ai with its
-      # license, DirectML.dll and (Windows) the VC++ runtime it alone imports. release.yml signs them with the rest: vpk's
+      # capture driver, the interop library, LICENSE/NOTICE and prisc_ai with its
+      # model NOTICE, DirectML.dll and (Windows) the VC++ runtime it alone imports. release.yml signs them with the rest: vpk's
       # Trusted Signing pass covers every dll in the pack dir, and the macOS app signing and
       # notarization cover every Mach-O in the bundle.
       - name: Stage rust binaries

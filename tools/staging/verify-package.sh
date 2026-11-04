@@ -27,9 +27,9 @@ exe=$(rid_exe "$rid")
 expected=("Prisc.Ui$exe" "Prisc.VideoRender$exe")
 while IFS= read -r f; do expected+=("$f"); done < <(app_binaries "$rid")
 while IFS= read -r f; do expected+=("recorder/$f"); done < <(recorder_binaries "$rid")
-expected+=(recorder/LICENSE.txt)
+expected+=(LICENSE.txt NOTICE.txt recorder/LICENSE.txt recorder/NOTICE.txt)
 if rid_has_ai "$rid"; then
-  expected+=(prisc_ai.LICENSE.txt prisc_ai.NOTICE.txt)
+  expected+=(prisc_ai.NOTICE.txt)
 fi
 case "$rid" in
   win-*)

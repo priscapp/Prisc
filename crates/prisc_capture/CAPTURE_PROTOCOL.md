@@ -434,9 +434,7 @@ would unwind harmlessly, but an `abort`, a segfault or a refused allocation on
 a degenerate selection kills the process it is running in — which in-process
 meant the overlay, mid-capture, with the user's selection already framed.
 Out-of-process the same failure is an exit code the capturer turns into an
-"OCR failed" pill. It is also the license boundary: `prisc_ai` embeds GPL-3.0
-matting weights and is GPL-3.0 itself, which the process boundary keeps out of
-the MIT overlay.
+"OCR failed" pill.
 
 Two things follow from that split, both improvements rather than costs:
 canceling (BACK) is killing a process rather than polling a flag between

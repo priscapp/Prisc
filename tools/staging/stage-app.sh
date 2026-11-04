@@ -123,11 +123,11 @@ case "$mode" in
     while IFS= read -r f; do
       cp "$src/$f" "$dest/"
     done < <(app_binaries "$rid")
+    # GPL sections 4/6: the license text travels with every distributed copy.
+    cp "$root/LICENSE" "$dest/LICENSE.txt"
+    cp "$root/NOTICE" "$dest/NOTICE.txt"
     if rid_has_ai "$rid"; then
-      # prisc_ai is GPL-3.0 (it embeds the RobustVideoMatting weights); GPL
-      # sections 4/6 require the license text and source offer to travel with
-      # every distributed copy.
-      cp "$root/crates/prisc_ai/LICENSE" "$dest/prisc_ai.LICENSE.txt"
+      # Attributions and licenses of the model weights prisc_ai embeds.
       cp "$root/crates/prisc_ai/NOTICE.txt" "$dest/prisc_ai.NOTICE.txt"
       case "$rid" in
         win-*)

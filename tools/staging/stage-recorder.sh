@@ -213,8 +213,9 @@ case "$rid" in
   linux-*) "$root/tools/linux-build/stage-bundle.sh" "$src" "$dist" ;;
 esac
 
-# GPL-2.0: the license text travels with every distributed copy.
-cp "$root/crates/prisc_recorder/LICENSE" "$dist/LICENSE.txt"
+# GPL: the license text travels with every distributed copy.
+cp "$root/LICENSE" "$dist/LICENSE.txt"
+cp "$root/NOTICE" "$dist/NOTICE.txt"
 
 echo "Staged contents:"; ls "$dist"
 echo "Bundle size:"; du -sh "$dist"

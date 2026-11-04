@@ -196,4 +196,4 @@ On failure the ack is `configure_error` with a `message` and a `restart_required
 
 ## License
 
-Licensed under the GNU General Public License, version 2 or (at your option) any later version (`GPL-2.0-or-later`; the text is in [LICENSE](LICENSE)), as are the other recorder crates (`prisc_obs_sys`, `prisc_obs`, `prisc_obs_platform`, `prisc_ffmpeg_sys`, `prisc_build_support`, `prisc_share_region`, `prisc_vid2gif`). That matches [OBS Studio](https://github.com/obsproject/obs-studio) / libobs, which these crates link and are therefore bound by. The rest of Prisc talks to the recorder over pipes as a separate process.
+`GPL-3.0-or-later`, like the rest of Prisc; see [LICENSE](../../LICENSE).

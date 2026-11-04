@@ -2,7 +2,7 @@
 name = "prisc_build_support"
 version = "0.1.0"
 edition = "2021"
-license = "GPL-2.0-or-later"
+license.workspace = true
 publish = false
 description = "Build-script helpers shared by the workspace's build.rs files (obs-deps lookup, libobs rpaths, runtime staging, the Linux FFmpeg bundle)."
 

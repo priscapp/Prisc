@@ -14,8 +14,8 @@ publish = false
 # bindings from src/ffi (`cargo codegen`) and enforces the crate rules (`cargo test -p prisc_codegen`).
 #
 # Never a dependency of anything (no workspace entry), and never depends on sentry, the telemetry
-# feature of prisc_rust_core or any GPL / recorder-stack crate: it runs inside processes that
-# already report, and it is MIT.
+# feature of prisc_rust_core or any recorder-stack / prisc_ai crate: it runs inside processes that
+# already report, and those stacks belong in their own processes.
 
 [lib]
 # cdylib for the hosts, rlib only so tests/ can link the crate. The rlib is never shipped.

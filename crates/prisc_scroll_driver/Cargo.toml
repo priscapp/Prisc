@@ -2,6 +2,7 @@
 name = "prisc_scroll_driver"
 version = "1.0.0"
 edition = "2021"
+license.workspace = true
 
 # The second half of a scrolling capture: the overlay picks the region and scroll point,
 # this binary scrolls, photographs and stitches. Kept out of the capturer because starting a

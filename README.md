@@ -215,4 +215,6 @@ Requires Windows 10+ or macOS 13+.
 
 ## License
 
-Prisc is [MIT licensed](LICENSE), with two exceptions that each run as their own process: the recorder crates (`crates/prisc_recorder`, `crates/prisc_share_region`, `crates/prisc_vid2gif` and the OBS crates they build on) are GPL-2.0 because they link libobs, and the on-device AI binary (`crates/prisc_ai`) is GPL-3.0 because it embeds the RobustVideoMatting weights. Building from source is covered in [BUILDING.md](BUILDING.md).
+Copyright © 2014–2026 Caelan Sayler.
+
+Prisc is free software: you can redistribute it and/or modify it under the terms of the [GNU General Public License](LICENSE) as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version, together with the additional terms in [NOTICE](NOTICE): forks must keep the attribution "Based on Prisc by Caelan Sayler" and must not use the Prisc name or logo. Building from source is covered in [BUILDING.md](BUILDING.md).

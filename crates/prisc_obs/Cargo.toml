@@ -2,7 +2,7 @@
 name = "prisc_obs"
 version = "0.1.0"
 edition = "2021"
-license = "GPL-2.0-or-later"
+license.workspace = true
 
 [dependencies]
 prisc_obs_sys = { workspace = true }

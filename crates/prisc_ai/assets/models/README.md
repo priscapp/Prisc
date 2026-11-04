@@ -16,10 +16,7 @@ byte, and re-syncing a model means re-downloading it.
 
 RobustVideoMatting is the MobileNetV3 fp32 tier (15.0 MB) rather than resnet50 (~102 MB): webcam
 mattes at the ≤540p analysis resolution look indistinguishable between the two, and the weights
-ride along in every install. **Its GPL-3.0 license is why the `prisc_ai` crate is GPL-3.0
-while the app around it is MIT** (the repository's other GPL code is the separate GPL-2.0
-recorder process, `crates/prisc_recorder`) — see the crate's `Cargo.toml` for how the process boundary
-keeps that license out of the rest of Prisc.
+ride along in every install.
 
 DPDFNet ("DPDFNet: Boosting DeepFilterNet2 via Dual-Path RNN", Rika/Sapir/Gus 2025) is authored
 by Ceva; the sherpa-onnx release mirrors the ONNX exports from the official

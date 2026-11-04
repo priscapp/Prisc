@@ -34,8 +34,8 @@ use crate::{read_frame, FrameRead};
 // RobustVideoMatting (PeterL1n/RobustVideoMatting, release v1.0.0), the
 // rvm_mobilenetv3_fp32.onnx asset, 15.0 MB embedded verbatim — the mobilenet
 // tier rather than resnet50 (~102 MB) because webcam mattes at ≤540p look
-// indistinguishable and the weights ride along in every install. GPL-3.0 —
-// the reason this crate is GPL; see Cargo.toml and assets/models/README.md.
+// indistinguishable and the weights ride along in every install. GPL-3.0;
+// see assets/models/README.md.
 static RVM_MODEL: &[u8] = include_bytes!("../assets/models/rvm_mobilenetv3_fp32.onnx");
 
 /// Output pixel format of the matte stream.

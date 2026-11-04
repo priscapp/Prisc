@@ -17,10 +17,7 @@
 //!
 //! One job, one process, then gone — canceling a job is killing us, and a
 //! crash in native inference costs a per-job child rather than the editor or
-//! the overlay mid-capture. The process boundary is also the license boundary:
-//! the embedded RobustVideoMatting weights make this binary GPL-3.0, kept apart
-//! from the MIT app exactly like the GPL-2.0 recorder process
-//! (crates/prisc_recorder) is (see Cargo.toml).
+//! the overlay mid-capture.
 //!
 //! **stdout carries only the binary payload** of `matte`/`denoise`, one output
 //! frame per input frame, flushed per frame so the C# side can stream results

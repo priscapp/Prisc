@@ -1,0 +1,63 @@
+Prisc
+Copyright (C) 2014-2026 Caelan Sayler
+https://github.com/priscapp/Prisc
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version, together with the additional terms and the additional
+permission set out below under section 7 of that License.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License
+for more details.
+
+You should have received a copy of the GNU General Public License along
+with this program (the LICENSE file). If not, see
+<https://www.gnu.org/licenses/>.
+
+
+ADDITIONAL TERMS (GNU GPL VERSION 3, SECTION 7)
+
+The following terms supplement the GNU General Public License for Prisc and
+for any work based on it. They are additional terms permitted by section 7
+of the License, not further restrictions.
+
+1. Author attribution (section 7(b)).
+
+   You must preserve the following author attribution in the source code
+   of any work based on Prisc and in the Appropriate Legal Notices that the
+   work displays:
+
+       Based on Prisc by Caelan Sayler (https://github.com/priscapp/Prisc)
+
+   An unmodified copy of Prisc satisfies this term by keeping the notices
+   it already contains and displays.
+
+2. Marking of modified versions (section 7(c)).
+
+   A modified version must be clearly marked as different from the
+   original. It must not be represented as the original Prisc, or as made,
+   endorsed or supported by Caelan Sayler.
+
+3. Trademarks (section 7(e)).
+
+   This License grants no rights under trademark law to the name "Prisc",
+   the Prisc logo and emblem, or any other trade name, trademark or service
+   mark of Caelan Sayler. Unmodified copies may be redistributed under the
+   Prisc name. A modified version that you convey must use its own name and
+   logo, and may refer to Prisc only to give the attribution required by
+   term 1 and to describe the origin of the work accurately.
+
+
+ADDITIONAL PERMISSION (GNU GPL VERSION 3, SECTION 7)
+
+If you modify Prisc, or any covered work, by linking or combining it with
+Microsoft DirectML, the Microsoft Visual C++ runtime, the .NET runtime, or
+the libraries and frameworks of the operating system it runs on (or
+modified versions of those), containing parts covered by the terms of their
+own licenses, the licensors of Prisc grant you additional permission to
+convey the resulting work. Corresponding Source for a non-source form of
+such a combination shall not include the source code for the parts of
+those libraries used.

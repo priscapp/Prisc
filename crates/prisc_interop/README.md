@@ -163,7 +163,7 @@ enum. The platform switch is a cfg'd block inside the body; the `#[cfg(not(...))
 
 D2. No panic crosses the boundary (A6).
 
-D3. No telemetry in-process: no `sentry`, no `telemetry` feature of prisc_rust_core, no GPL crate,
+D3. No telemetry in-process: no `sentry`, no `telemetry` feature of prisc_rust_core, no recorder-stack or prisc_ai crate,
 and the crate installs no `log` logger (rust_core's `log::warn!` calls are then no-ops). The
 crate's own diagnostics go only to the host sink set by `prisc_log_set_callback`.
 

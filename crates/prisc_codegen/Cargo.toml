@@ -14,7 +14,7 @@ publish = false
 # session.json golden sample), plus the lint that enforces prisc_interop's crate rules.
 # `cargo codegen` regenerates; `cargo test -p prisc_codegen` fails on any stale, missing or
 # orphaned output and on any rule violation. Never shipped. Never depends on prisc_interop (it
-# reads crates/prisc_interop/src/ffi as files), nor on anything GPL or from the recorder stack.
+# reads crates/prisc_interop/src/ffi as files), nor on prisc_ai or anything from the recorder stack.
 
 [lib]
 path = "src/lib.rs"

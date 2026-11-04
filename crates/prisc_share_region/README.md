@@ -8,4 +8,4 @@ The messages, the error codes and the exit codes are specified in [`crates/prisc
 
 ## License
 
-`GPL-2.0-or-later`, like the rest of the recorder crates; see [prisc_recorder's LICENSE](../prisc_recorder/LICENSE).
+`GPL-3.0-or-later`, like the rest of Prisc; see [LICENSE](../../LICENSE).

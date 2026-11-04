@@ -2,15 +2,7 @@
 name = "prisc_ai"
 version = "1.0.0"
 edition = "2021"
-# The only GPL-3.0 crate in the repository (the app's own crates are MIT, the
-# recorder crates GPL-2.0-or-later), and deliberately so: the
-# embedded RobustVideoMatting weights (assets/models/, see the README there)
-# are released under GPL-3.0, so the binary that embeds them is GPL-3.0 too.
-# That license must not reach the rest of Prisc, which is the second reason —
-# after fault isolation — that AI inference is its own process: the GPL ends
-# at this process boundary (mere aggregation; the app talks to it over pipes),
-# exactly like the GPL'd prisc_recorder process (crates/prisc_recorder).
-license = "GPL-3.0-only"
+license.workspace = true
 
 # Every on-device AI model Prisc runs, as its own process, one subcommand per
 # job kind:
@@ -22,8 +14,7 @@ license = "GPL-3.0-only"
 #   spawn it per job and stream raw frames/samples down stdin; it streams
 #   matte frames / denoised samples back up stdout.
 #
-# Split out of the app for three reasons:
-# - the GPL boundary above;
+# Split out of the app for two reasons:
 # - ONNX Runtime is a large native library; a crash in native inference kills
 #   a per-job child, not the editor or the capture overlay;
 # - the embedded model weights (~15 MB RobustVideoMatting fp32 + ~10.6 MB

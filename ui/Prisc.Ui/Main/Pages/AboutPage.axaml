@@ -112,14 +112,24 @@
                 </StackPanel>
             </HeaderedContentControl>
 
-            <TextBlock Classes="Body"
-                       Text="Ever wanted a screen capture tool that has everything you need and doesn't need endless tweaking? That is what Prisc strives to be." />
-            <TextBlock Classes="Body"
-                       Text="It covers everything from quick, pixel-perfect selection and one-click screen recording to editing images and uploading them to share." />
-            <TextBlock Classes="Body"
-                       Text="Open this window any time from the tray icon." />
+            <!-- The GPL's "Appropriate Legal Notices" (GPL-3.0 section 0 and 5d): copyright,
+                 no warranty, the license and how to view it. Section 5d obliges modified versions
+                 to keep displaying them, and NOTICE term 1 (section 7(b)) requires a fork to add
+                 "Based on Prisc by Caelan Sayler" here. Keep in step with the repository NOTICE. -->
+            <TextBlock Classes="Body" TextWrapping="Wrap"
+                       Text="Copyright © 2014–2026 Caelan Sayler." />
+            <TextBlock Classes="Body" TextWrapping="Wrap"
+                       Text="Prisc is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version, together with the additional terms in the NOTICE file." />
+            <TextBlock Classes="Body" TextWrapping="Wrap"
+                       Text="Prisc is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details." />
+            <TextBlock Classes="Body" TextWrapping="Wrap"
+                       Text="“Prisc” and the Prisc logo are trademarks of Caelan Sayler and are not licensed under the GNU General Public License." />
 
-            <HyperlinkButton Padding="0" Content="Read more online" NavigateUri="https://github.com/priscapp/Prisc" />
+            <StackPanel Orientation="Horizontal" Spacing="16">
+                <HyperlinkButton Padding="0" Content="License" NavigateUri="https://github.com/priscapp/Prisc/blob/master/LICENSE" />
+                <HyperlinkButton Padding="0" Content="Additional terms" NavigateUri="https://github.com/priscapp/Prisc/blob/master/NOTICE" />
+                <HyperlinkButton Padding="0" Content="Source code" NavigateUri="https://github.com/priscapp/Prisc" />
+            </StackPanel>
 
             <TextBlock Classes="Body"
                        Text="Prisc is made possible in part by these open source projects." />
