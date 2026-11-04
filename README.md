@@ -2,13 +2,6 @@
   <a href="https://prisc.app"><img src="assets/readme/banner.png" alt="Prisc, formerly Clowd: capture, annotate, record and edit anything. Free and open source for Windows and macOS." width="100%"></a>
 </p>
 
-<p align="center">
-  <a href="https://prisc.app/download"><img src="https://img.shields.io/badge/Download-Windows%20%7C%20macOS-3B97D2?style=for-the-badge" alt="Download for Windows and macOS"></a>
-  <a href="https://prisc.app"><img src="https://img.shields.io/badge/Website-prisc.app-0b0f15?style=for-the-badge" alt="prisc.app"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2ea043?style=for-the-badge" alt="MIT license"></a>
-  <a href="https://github.com/priscapp/Prisc/actions"><img src="https://img.shields.io/github/actions/workflow/status/priscapp/Prisc/ci.yml?branch=master&style=for-the-badge&label=Build" alt="Build status"></a>
-</p>
-
 <h3 align="center">Capture, annotate, record and edit anything, all in one app.</h3>
 
 <p align="center">
