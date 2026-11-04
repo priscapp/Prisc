@@ -33,6 +33,7 @@ Capture it, annotate it, record it, edit it, share it. Every feature is a switch
 - [Draw on screen](#draw-on-screen): draw on anything, then get back to work
 - [Screenshots](#screenshots): snap a window or crop to the pixel
 - [OCR](#ocr): copy text from anything on screen
+- [Color Wheel](#color-wheel): pick any color on screen, build a palette
 - [Scrolling capture](#scrolling-capture): the whole page in one image
 - [Image editor](#image-editor): arrows, steps and blur, one key each
 - [Share region](#share-region): share just part of your screen in any meeting
@@ -135,6 +136,25 @@ Requires Windows 10+ or macOS 13+.
 <sub>Requires Windows or a Mac with Apple Silicon. Latin, Greek, Chinese and Japanese kana; Cyrillic and Korean aren't supported yet.</sub>
 
 **[Learn more about OCR →](https://prisc.app/features/ocr)**
+
+---
+
+## Color Wheel
+
+**Find a color. Build a palette.** Match any color on screen, pull a palette from a photo, or build a balanced scheme from one color. Every value copies in a click, ready to paste.
+
+<p align="center"><a href="https://prisc.app/features/color-wheel"><img src="assets/readme/color-wheel.webp" alt="Color Wheel: the eyedropper drags across a photo and the whole palette re-colors live around each color it touches" width="720"></a></p>
+
+- **Any color on screen.** Drag the eyedropper over any app with a live preview, and press <kbd>Esc</kbd> mid-drag to get the old color back.
+- **Palette from a photo.** Drop in a picture and get five colors, with a mood for each: Colorful, Bright, Muted, Deep or Dark.
+- **Harmonies that hold their shape.** Eight classic schemes from one color. Drag one on the wheel and the rest turn with it.
+- **Lightness you can trust.** The Oklch editor keeps shades on the same hue, so lighter and darker never drift toward another color.
+- **Copy it the way you need it.** HEX, RGB, HSL or CSS `oklch()` in one click, or every hex in the palette at once.
+- **Open it from anywhere.** Press <kbd>H</kbd> over any pixel while you capture, pick it from the tray, or set your own hotkey.
+
+<sub>On macOS the eyedropper needs Screen Recording permission.</sub>
+
+**[Learn more about the Color Wheel →](https://prisc.app/features/color-wheel)**
 
 ---
 
