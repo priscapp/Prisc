@@ -1,4 +1,4 @@
-# The filtered GPU tests' outcomes on WARP (CI's Windows test-video leg), recorded from CI run
+# The filtered GPU tests' outcomes on WARP (CI's Windows dotnet-test leg), recorded from CI run
 # 40885191105, the first Windows run of the GPU code after it moved to prisc_interop (the BASE run
 # of the old C# D3D12 code was never pushed, so this is the first recording). 20 passed, 11 skipped.
 # One of those passes, the D3D12 abandon test, went with its export; the crate's ring tests

@@ -4,20 +4,24 @@ name: Build recorder
 # prisc_vid2gif and libobs from the obs-studio submodule, built by prisc_obs_sys
 # via CMake) for the packaged desktop platforms: recorder-win-x64,
 # recorder-win-arm64, recorder-osx-arm64 and recorder-osx-x64.
-# build-recorder-linux.yml is the Linux twin; the shared steps live in
+# build-recorder-linux.yml is the Linux twin; the shared build setup lives in
 # .github/actions/setup-obs-build. They are two workflows rather than one with
 # skipped legs because a caller's `needs` waits on every job of a reusable
 # workflow (ci.yml's package job must not wait on Linux), and skipped matrix
 # legs show up in the run as unexpanded `${{ matrix.* }}` names.
 #
-# Each desktop artifact `recorder-<rid>` holds one archive, `recorder-<rid>.zip`,
+# Each artifact `recorder-<rid>` holds one archive, `recorder-<rid>.zip`,
 # whose members sit at the archive root; ci.yml's package job unpacks it into
 # publish/recorder/, the folder HelperLocator resolves. Staging is
 # tools/staging/stage-recorder.sh, the same script build.sh runs.
 #
-# These and build-recorder-linux.yml are the only CI jobs that check out the
-# submodules. libobs is 20-40 min cold, so the OBS build tree is cached per OS
-# and arch (see .github/actions/setup-obs-build).
+# Most commits do not touch the recorder, so each leg first looks up the payload
+# an earlier run built and tested from the same inputs (the `fingerprint` input,
+# tools/ci/fingerprint.sh recorder, plus the toolchain) and, if there is one,
+# uploads it again without checking out the submodules or building anything.
+# The payload is cached only once its tests passed. When a leg does build,
+# libobs is 20-40 min cold, so the OBS build tree is cached per OS and arch too
+# (see .github/actions/setup-obs-build).
 #
 # No step tags the tagless obs-studio checkout for OBS's `git describe --tags`
 # version discovery: the top-level configure gets -DOBS_VERSION_OVERRIDE, and
@@ -25,6 +29,15 @@ name: Build recorder
 # ensure_obs_version_tag, which tags HEAD before every configure.
 on:
   workflow_call:
+    inputs:
+      fingerprint:
+        description: tools/ci/fingerprint.sh recorder, from ci.yml's plan job.
+        type: string
+        required: true
+      natives-fingerprint:
+        description: tools/ci/fingerprint.sh recorder-natives, from ci.yml's plan job (the payload cache key leads with it so ci.yml's dotnet-test can find a payload with the same natives).
+        type: string
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -61,17 +74,30 @@ jobs:
     env:
       LIBCLANG_PATH: C:\Program Files\LLVM\bin
     steps:
-      - name: Checkout (recursive submodules)
+      - name: Checkout
         uses: actions/checkout@v7
-        with:
-          # obs-studio must be recursive: obs-browser / obs-websocket submodule
-          # dirs must EXIST even though disabled, or their CMakeLists FATAL_ERROR.
-          submodules: recursive
 
       - name: Install Rust toolchain
+        id: toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # The key leads with the natives fingerprint so ci.yml's dotnet-test can find a payload with
+      # the same FFmpeg natives (.github/actions/recorder-payload).
+      - name: Look up a payload built from these inputs
+        id: payload
+        uses: actions/cache/restore@v6
+        with:
+          path: dist/recorder-${{ matrix.rid }}.zip
+          key: recorder-${{ matrix.rid }}-${{ inputs.natives-fingerprint }}-${{ inputs.fingerprint }}-${{ steps.toolchain.outputs.cachekey }}
+
+      - name: Build only on a miss
+        run: |
+          $hit = '${{ steps.payload.outputs.cache-hit }}' -eq 'true'
+          "BUILD=$((-not $hit).ToString().ToLower())" >> $env:GITHUB_ENV
+          if ($hit) { Write-Host "::notice title=recorder (${{ matrix.rid }})::reusing the payload an earlier run built and tested from the same inputs" }
+
       - name: Toolchain diagnostics
+        if: env.BUILD == 'true'
         run: |
           cmake --version
           rustc --version
@@ -84,16 +110,19 @@ jobs:
             Write-Host "::warning::libclang.dll not found at LIBCLANG_PATH ($env:LIBCLANG_PATH) - bindgen may fail"
           }
 
-      - name: Set up the OBS build caches
+      - name: Set up the OBS build
+        if: env.BUILD == 'true'
         uses: ./.github/actions/setup-obs-build
         with:
           arch: ${{ matrix.arch }}
           obs-build-path: target/obs-${{ matrix.arch }}
 
       - name: Build (release)
+        if: env.BUILD == 'true'
         run: cargo build --release -p prisc_recorder -p prisc_share_region -p prisc_vid2gif
 
       - name: Test (release, unit tests only)
+        if: env.BUILD == 'true'
         run: |
           # prisc_recorder links obs.dll (import lib), so the test exe in
           # target/release/deps needs the runtime DLLs (assembled in
@@ -111,16 +140,26 @@ jobs:
       # The runtime tree prisc_recorder's build.rs assembled in target/release,
       # plus the VC++ runtime the /MD-built libobs, plugins and FFmpeg DLLs import.
       - name: Stage artifact
+        if: env.BUILD == 'true'
         shell: bash
         run: tools/staging/stage-recorder.sh "${{ matrix.rid }}" target/release "dist/recorder-${{ matrix.rid }}"
 
       # Archive in the build job so the artifact is one file with the members at
       # the archive root; ci.yml expands it into publish/recorder.
       - name: Archive bundle
+        if: env.BUILD == 'true'
         run: |
           $dist = "dist/recorder-${{ matrix.rid }}"
           Compress-Archive -Path "$dist/*" -DestinationPath "$dist.zip" -CompressionLevel Optimal
           Get-Item "$dist.zip" | Select-Object Name, Length
+
+      # Saved from any branch (it is small), and only here, after the tests passed.
+      - name: Cache the payload
+        if: env.BUILD == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: dist/recorder-${{ matrix.rid }}.zip
+          key: ${{ steps.payload.outputs.cache-primary-key }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -168,12 +207,34 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: Checkout (recursive submodules)
+      - name: Checkout
         uses: actions/checkout@v7
+
+      # The x64 slice cross-compiles, so its target must be installed.
+      - name: Install Rust toolchain
+        id: toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          submodules: recursive
+          targets: ${{ matrix.triple }}
+
+      - name: Look up a payload built from these inputs
+        id: payload
+        uses: actions/cache/restore@v6
+        with:
+          path: dist/recorder-${{ matrix.rid }}.zip
+          key: recorder-${{ matrix.rid }}-${{ inputs.natives-fingerprint }}-${{ inputs.fingerprint }}-${{ steps.toolchain.outputs.cachekey }}
+
+      - name: Build only on a miss
+        run: |
+          if [ "${{ steps.payload.outputs.cache-hit }}" = true ]; then
+            echo "BUILD=false" >> "$GITHUB_ENV"
+            echo "::notice title=recorder (${{ matrix.rid }})::reusing the payload an earlier run built and tested from the same inputs"
+          else
+            echo "BUILD=true" >> "$GITHUB_ENV"
+          fi
 
       - name: Select full Xcode
+        if: env.BUILD == 'true'
         run: |
           # build.rs uses the Xcode generator + enable_language(Swift); the CLT
           # alone are not enough. The image's default Xcode.app is current.
@@ -182,17 +243,13 @@ jobs:
           xcodebuild -version
 
       - name: Ensure cmake (>= 3.28)
+        if: env.BUILD == 'true'
         run: |
           cmake --version || brew install cmake
           cmake --version
 
-      # The x64 slice cross-compiles, so its target must be installed.
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.triple }}
-
       - name: Toolchain diagnostics
+        if: env.BUILD == 'true'
         run: |
           rustc --version
           cargo --version
@@ -201,13 +258,15 @@ jobs:
 
       # prisc_obs_sys has no build-dir override on macOS; the OBS build lands in
       # its OUT_DIR, under the per-target output dir.
-      - name: Set up the OBS build caches
+      - name: Set up the OBS build
+        if: env.BUILD == 'true'
         uses: ./.github/actions/setup-obs-build
         with:
           arch: ${{ matrix.arch }}
           obs-build-path: ${{ matrix.outdir }}/build/prisc_obs_sys-*/out
 
       - name: Build (release)
+        if: env.BUILD == 'true'
         run: cargo build --release -p prisc_recorder -p prisc_share_region -p prisc_vid2gif ${{ matrix.target_flag }}
 
       - name: Test (release, unit tests only)
@@ -215,7 +274,7 @@ jobs:
         # cross-compiled and cannot execute here (no Rosetta). The same unit
         # tests run on the arm64 mac and on both Windows arches, so coverage is
         # preserved.
-        if: matrix.arch == 'arm64'
+        if: env.BUILD == 'true' && matrix.arch == 'arm64'
         run: |
           cargo test --release -p prisc_recorder -p prisc_obs_platform -p prisc_share_region ${{ matrix.target_flag }}
           # prisc_vid2gif links the FFmpeg dylibs directly — its integration tests
@@ -226,6 +285,7 @@ jobs:
       # The arm64 slice also runs a vid2gif conversion and a foreign dlopen of
       # the dep dylibs; the cross-compiled x64 slice cannot execute here.
       - name: Stage artifact (self-contained bundle)
+        if: env.BUILD == 'true'
         run: tools/staging/stage-recorder.sh "${{ matrix.rid }}" "${{ matrix.outdir }}" "dist/recorder-${{ matrix.rid }}"
 
       # The staged tree is correct (755 executables, symlinked dylib aliases,
@@ -239,6 +299,7 @@ jobs:
       # `._*` AppleDouble entries (embedded code signatures live in the
       # Mach-O, nothing here needs a resource fork).
       - name: Archive bundle
+        if: env.BUILD == 'true'
         run: |
           set -euo pipefail
           dist="dist/recorder-${{ matrix.rid }}"
@@ -249,6 +310,14 @@ jobs:
           [ "$(zipinfo "$zip" | grep -c '^l')" -gt 0 ] || { echo "::error::archive lost its symlinks"; exit 1; }
           zipinfo "$zip" | grep -E ' prisc_recorder$' | grep -q '^-rwx' || { echo "::error::archive lost the execute bit"; exit 1; }
           ls -la "$zip"
+
+      # Saved from any branch (it is small), and only here, after the tests passed.
+      - name: Cache the payload
+        if: env.BUILD == 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: dist/recorder-${{ matrix.rid }}.zip
+          key: ${{ steps.payload.outputs.cache-primary-key }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

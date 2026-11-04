@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- The C# side of the prisc_interop boundary: loader and probe, ABI check, status and last-error
        mapping, strings, the log sink, handle leases, and one smoke test per export family. No
-       Avalonia, no FFmpeg, so it runs in CI's fast test job right after `cargo build -p prisc_interop`.
+       Avalonia, no FFmpeg, so it runs in CI's dotnet-test job right after `cargo build -p prisc_interop`.
        Run with PRISC_INTEROP_REQUIRED=1 to fail instead of skip when the library is missing. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
