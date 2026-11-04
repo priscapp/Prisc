@@ -51,7 +51,7 @@ runs:
       with:
         key: ${{ inputs.arch }}
         cache-targets: "false"
-        save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/claude/ci-speedup' }}
+        save-if: ${{ github.ref == 'refs/heads/master' }}
 
     - name: Cache OBS native build + prebuilt deps
       uses: actions/cache@v6

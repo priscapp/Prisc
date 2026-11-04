@@ -90,7 +90,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.name }}
-          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/claude/ci-speedup' }}
+          save-if: ${{ github.ref == 'refs/heads/master' }}
 
       # Per RID: the packages in one invocation rather than one per crate, so codegen and the LTO
       # links overlap instead of leaving the runner idle. Explicit packages: the workspace also
