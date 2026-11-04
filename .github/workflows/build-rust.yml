@@ -82,7 +82,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.rid }}
-          save-if: ${{ github.ref == 'refs/heads/master' }}
+          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/claude/ci-speedup' }}
 
       # One invocation rather than one per crate, so codegen and the LTO links overlap instead of leaving the runner idle.
       # Explicit packages: the workspace also holds the recorder crates, which build-recorder.yml builds.

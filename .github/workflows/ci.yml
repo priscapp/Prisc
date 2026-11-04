@@ -183,7 +183,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: debug
-          save-if: ${{ github.ref == 'refs/heads/master' }}
+          save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/claude/ci-speedup' }}
 
       # Covers the whole workspace (the imported recorder crates opt out of formatting through
       # their own rustfmt.toml). Formatting does not depend on the OS, so one leg checks it.
