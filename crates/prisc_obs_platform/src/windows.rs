@@ -7,8 +7,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use prisc_obs::data::ObsData;
-use prisc_rust_core::desktop;
-use prisc_rust_core::geometry::ScreenPoint;
+use prisc_shared::geometry::ScreenPoint;
 use windows::Wdk::System::SystemServices::RtlGetVersion;
 use windows::Win32::System::SystemInformation::OSVERSIONINFOW;
 use windows::Win32::System::Threading::ExitProcess;
@@ -60,7 +59,7 @@ pub fn init_process() -> Result<(), String> {
 
 pub fn enumerate_monitors() -> Vec<MonitorInfo> {
     // A failed enumeration simply yields an empty list.
-    desktop::monitors()
+    prisc_desktop::monitors()
         .unwrap_or_default()
         .into_iter()
         .map(|m| {
@@ -93,7 +92,7 @@ pub fn find_monitor(id: &str) -> Option<MonitorInfo> {
 /// Distinct from `MonitorInfo::scale` (capture px per coordinate unit, always
 /// 1.0 on Windows).
 pub fn monitor_display_scale(m: &MonitorInfo) -> f64 {
-    desktop::dpi_scale_at(ScreenPoint::new(
+    prisc_desktop::dpi_scale_at(ScreenPoint::new(
         m.x + (m.width as i32 / 2),
         m.y + (m.height as i32 / 2),
     ))
@@ -125,7 +124,7 @@ pub fn region_adapter_index(
     monitors: &[MonitorInfo],
 ) -> Option<u32> {
     let ranked = region::monitors_by_coverage(region, plan, monitors);
-    let outputs = desktop::dxgi_outputs()?;
+    let outputs = prisc_desktop::dxgi_outputs()?;
     for index in ranked {
         // GDI device name (`\.\DISPLAY1`) is the join key: it is both
         // MonitorInfo::alt_id and DXGI_OUTPUT_DESC::DeviceName.
@@ -264,7 +263,7 @@ pub const WEBCAM_DEVICE_KEY: &str = "video_device_id";
 /// *current* physical down state, so a click is caught as long as the button
 /// is still held on some tick, the same sampling the C++ original does.
 pub fn get_mouse_info() -> MouseInfo {
-    let Some(p) = desktop::cursor_position() else {
+    let Some(p) = prisc_desktop::cursor_position() else {
         return MouseInfo {
             x: 0.0,
             y: 0.0,
@@ -281,7 +280,7 @@ pub fn get_mouse_info() -> MouseInfo {
         y: p.y as f64,
         pressed,
         // Per-monitor DPI: 96 = 100% scaling, so dpi/96 is the zoom factor.
-        scale: desktop::dpi_scale_at(p),
+        scale: prisc_desktop::dpi_scale_at(p),
     }
 }
 
@@ -329,7 +328,7 @@ fn stock_cursor_table() -> &'static Vec<(isize, CursorKind)> {
 /// classification (and the sprite rasterized from `handle`) can never
 /// disagree with the sampled position).
 pub fn get_cursor_state() -> CursorState {
-    let Some(cursor) = desktop::cursor_snapshot() else {
+    let Some(cursor) = prisc_desktop::cursor_snapshot() else {
         return CursorState {
             x: 0,
             y: 0,
@@ -380,7 +379,6 @@ mod sprite {
     use std::sync::{Mutex, OnceLock};
     use std::time::Instant;
 
-    use prisc_rust_core::desktop;
     use windows::core::{s, w};
     use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
     use windows::Win32::UI::WindowsAndMessaging::HCURSOR;
@@ -454,14 +452,14 @@ mod sprite {
         event
     }
 
-    /// The cursor's pixels as a sprite (`desktop::read_cursor` copies the
+    /// The cursor's pixels as a sprite (`prisc_desktop::read_cursor` copies the
     /// handle first: it belongs to the foreground app, which may destroy it
     /// at any moment). Failure degrades to `Hidden` (frame rows drop their
     /// `ci` ref, the wire contract's "unavailable" case) rather than
     /// `Unchanged`, which would pin the ref to a sprite of the *previous*
     /// shape.
     fn rasterize_copied(hcur: HCURSOR, kind: CursorKind) -> SpriteEvent {
-        match desktop::read_cursor(hcur.0 as isize) {
+        match prisc_desktop::read_cursor(hcur.0 as isize) {
             Some(icon) => SpriteEvent::Candidate(cursor_sprite::from_icon(icon, kind.as_str())),
             None => SpriteEvent::Hidden,
         }
@@ -657,7 +655,7 @@ mod endpoint_volume {
 // ---------------------------------------------------------------------------
 
 /// Visible top-level windows other than the recorder's own, topmost first,
-/// through the filter the overlay's walker shares (`prisc_rust_core::desktop`).
+/// through the filter the overlay's walker shares (`prisc_desktop`).
 /// The recorder runs this up to 60 times a second, so it skips the overlay's
 /// virtual-desktop check (COM on this thread): DWM cloaks another desktop's
 /// windows a poll or two after a switch anyway.
@@ -665,11 +663,11 @@ mod endpoint_volume {
 /// Coordinates are physical pixels (the process is per-monitor-v2 DPI aware),
 /// i.e. the §1.1 capture space, so no conversion happens here.
 pub fn enumerate_windows() -> Vec<WindowInfo> {
-    let filter = desktop::WindowFilter {
+    let filter = prisc_desktop::WindowFilter {
         current_virtual_desktop_only: false,
         exclude_own_process: true,
     };
-    desktop::top_level_windows(&filter)
+    prisc_desktop::top_level_windows(&filter)
         .into_iter()
         .map(|w| WindowInfo {
             id: w.hwnd.0 as usize as u64,
@@ -679,7 +677,7 @@ pub fn enumerate_windows() -> Vec<WindowInfo> {
             w: w.rect.size.width as u32,
             h: w.rect.size.height as u32,
             title: w.title,
-            app: desktop::process_image_name(w.pid),
+            app: prisc_desktop::process_image_name(w.pid),
         })
         .collect()
 }

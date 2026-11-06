@@ -26,8 +26,8 @@ path = "src/main.rs"
 [dependencies]
 prisc_hotkeys.workspace = true
 prisc_ipc.workspace = true
-# No features: contracts and session only, never desktop or telemetry.
-prisc_rust_core.workspace = true
+# Contracts and session only, never prisc_desktop or prisc_telemetry.
+prisc_shared.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 # Pinned exactly, not caret: its output is committed and compared byte for byte, so a patch

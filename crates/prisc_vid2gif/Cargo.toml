@@ -16,7 +16,7 @@ libwebp-sys = { workspace = true }
 # Sentry: panics only (init_job), one project with the rest of Prisc. Not on Linux, where
 # vid2gif is built in the manylinux image without the sentry/TLS tree (HELPER_PROTOCOL.md §3.4).
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-prisc_rust_core = { workspace = true, features = ["telemetry"] }
+prisc_telemetry = { workspace = true }
 
 [dev-dependencies]
 # tests/cli.rs parses the protocol lines.

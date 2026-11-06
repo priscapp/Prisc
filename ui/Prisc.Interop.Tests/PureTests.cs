@@ -8,7 +8,7 @@ namespace Prisc.Interop.Tests
     /// <summary>The pure family (colour, OKLCH and the picker's painters, the share-region rules, the
     /// H.264 mapping): the struct layouts Rust pins, the enum values, and one success, one failure
     /// and one round trip per export through the public wrappers. The behaviour vectors live next
-    /// to the one implementation in <c>prisc_rust_core</c>. Every export here is any-thread.</summary>
+    /// to the one implementation in <c>prisc_shared</c>. Every export here is any-thread.</summary>
     public sealed class PureTests
     {
         [Fact]

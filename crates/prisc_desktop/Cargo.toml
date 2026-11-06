@@ -1,0 +1,58 @@
+[package]
+name = "prisc_desktop"
+version = "1.0.0"
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# The desktop as the OS describes it: the window list, monitors, DXGI outputs, screen grab and cursor,
+# which the overlay, the scrolling driver, the recorder and Prisc.Ui must all read the same way, plus
+# the macOS overlay window level. Its own crate so that consumers which read no windows or monitors
+# (prisc_ai, prisc_codegen, prisc_vid2gif) do not link these frameworks.
+
+[dependencies]
+prisc_shared.workspace = true
+euclid.workspace = true
+log.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    # IVirtualDesktopManager for the overlay's current-desktop filter.
+    "Win32_System_Com",
+    "Win32_UI_Shell",
+    # OpenProcess + QueryFullProcessImageNameW for window owner names.
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-core-foundation = { workspace = true, features = ["CFArray", "CFCGTypes", "CFData", "CFDictionary", "CFNumber", "CFString", "CFUUID"] }
+objc2-core-graphics = { workspace = true, features = [
+    "CGDataProvider",
+    "CGDirectDisplay",
+    # CGDisplayIsMain and the display mode queries the shared screen list reads.
+    "CGDisplayConfiguration",
+    "CGError",
+    "CGEvent",
+    "CGEventSource",
+    "CGEventTypes",
+    "CGImage",
+    # CGWarpMouseCursorPosition / CGAssociateMouseAndMouseCursorPosition; the
+    # latter's binding also needs `libc` (boolean_t argument).
+    "CGRemoteOperation",
+    "CGWindow",
+    "libc",
+] }
+# The overlay module sets the overlay level and collection behaviour on an NSWindow. Declared
+# directly (not `workspace = true`) so default-features = false takes effect: the root entry is a
+# bare version whose defaults prisc_capture relies on, and an inherited entry would silently keep
+# them, compiling all of AppKit into every `cargo build -p prisc_interop`.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSResponder", "NSWindow"] }

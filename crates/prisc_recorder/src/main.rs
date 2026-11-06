@@ -38,8 +38,8 @@ fn main() {
     // No Sentry on Linux (HELPER_PROTOCOL.md §3.4).
     #[cfg(not(target_os = "linux"))]
     let _sentry = {
-        let guard = prisc_rust_core::telemetry::init("prisc_recorder");
-        prisc_ipc::lifetime::on_exit(prisc_rust_core::telemetry::shutdown_hook);
+        let guard = prisc_telemetry::init("prisc_recorder");
+        prisc_ipc::lifetime::on_exit(prisc_telemetry::shutdown_hook);
         guard
     };
     // `_exit` / `ExitProcess`: libobs teardown is intentionally skipped (known

@@ -23,7 +23,7 @@ namespace Prisc.Util
     /// The overrides go into <see cref="Application.Resources"/>, which is searched ahead of the
     /// theme's dictionaries.
     ///
-    /// The ramps themselves are <c>prisc_rust_core::color::palette</c>'s
+    /// The ramps themselves are <c>prisc_shared::color::palette</c>'s
     /// (<see cref="AccentColors.Palette"/>): light and dark are built separately, since Semi's
     /// ramp is not the same in both, and dark carries a second, lighter ramp for the tokens that
     /// paint accent text, since no one color can be both a fill under white text and text on a
@@ -85,7 +85,7 @@ namespace Prisc.Util
             if (app == null)
                 return;
 
-            // the ramps are prisc_rust_core::color::palette's, one native call per accent
+            // the ramps are prisc_shared::color::palette's, one native call per accent
             var palette = SettingsRoot.Current?.General?.GetAccentPalette()
                 ?? AccentColors.Palette(AccentColors.PriscBlue, maintainContrast: true);
             var accent = palette.Effective;

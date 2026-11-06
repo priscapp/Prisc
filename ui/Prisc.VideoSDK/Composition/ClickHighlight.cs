@@ -34,7 +34,7 @@ namespace Prisc.VideoSDK.Composition
     /// </summary>
     /// <remarks>
     /// The constants are the obs tracker's (<c>tracker.rs</c>), one table both read
-    /// (<c>prisc_rust_core::contract::click_highlight</c>, generated into ClickHighlight.g.cs as
+    /// (<c>prisc_shared::contract::click_highlight</c>, generated into ClickHighlight.g.cs as
     /// <see cref="DurationMs"/>, <see cref="MaxOpacity"/>, <see cref="RadiusStartDip"/> and
     /// <see cref="RadiusGrowthDip"/>): 400 ms, 85% peak opacity fading linearly to nothing, radius
     /// 10 → 40 density-independent units. The tracker re-anchors

@@ -11,7 +11,7 @@ namespace Prisc.UI.Harness
         /// <summary>The wrapper-level items of this area: one success, one documented failure and one
         /// round trip per export family, keyed <c>&lt;area&gt;.&lt;item&gt;</c>. Every pure export is
         /// any-thread, so every item also runs from a pool thread. The values are the ones the Rust
-        /// tests pin (prisc_rust_core color, palette, chart, share_region and encoding), so the E2E
+        /// tests pin (prisc_shared color, palette, chart, share_region and encoding), so the E2E
         /// row compares them against those vectors.</summary>
         static partial void ProbePure(ProbeRun run)
         {

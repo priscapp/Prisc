@@ -1,4 +1,4 @@
-//! The accent colour maths the overlay paints with: `prisc_rust_core::color`, the one
+//! The accent colour maths the overlay paints with: `prisc_shared::color`, the one
 //! implementation Prisc.Ui's `AccentColors` and `AccentTheme` also call (through prisc_interop), so
 //! the overlay and the C# windows beside it derive the same colours from the same pick.
 //!
@@ -6,4 +6,4 @@
 //! [`ensure_contrast_with_white`] of it unless `--no-accent-contrast` is passed, and the hint comet
 //! is [`comet_colors`] of the pick itself.
 
-pub use prisc_rust_core::color::*;
+pub use prisc_shared::color::*;

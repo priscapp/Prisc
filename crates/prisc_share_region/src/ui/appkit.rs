@@ -86,7 +86,7 @@ use objc2_foundation::{
 };
 
 use prisc_obs_platform::region::Rect;
-use prisc_rust_core::desktop::overlay::{self, OverlayFlags};
+use prisc_desktop::overlay::{self, OverlayFlags};
 
 use super::{AppEvents, UiConfig};
 use crate::commands::Command;

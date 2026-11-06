@@ -98,7 +98,7 @@ echo "==> Building the Rust binaries (release)"
 # An explicit package list, never the whole workspace: the workspace also holds
 # the recorder stack, which builds libobs and is built separately below.
 # PRISC_VERSION stamps the Sentry release name so the Rust binaries report
-# against the same release as the shell (crates/prisc_rust_core/src/telemetry.rs).
+# against the same release as the shell (crates/prisc_telemetry/src/lib.rs).
 # shellcheck disable=SC2046 # word-split `-p <crate>` pairs
 PRISC_VERSION="$VERSION" cargo build --release --manifest-path "$ROOT/Cargo.toml" ${TARGET_ARGS[@]+"${TARGET_ARGS[@]}"} \
     $("$STAGING/stage-app.sh" packages "$RID")

@@ -15,7 +15,7 @@
 #[allow(deprecated)]
 use objc2_core_graphics::{CGWindowImageOption, CGWindowListCreateImage, CGWindowListOption};
 use objc2_foundation::NSProcessInfo;
-use prisc_rust_core::desktop::{grab, CGPoint, CGRect, CGSize};
+use prisc_desktop::{grab, CGPoint, CGRect, CGSize};
 
 use super::corners::{estimate_radius_from_alpha, macos_fallback_radius_points, Corner};
 use super::MonitorInfo;

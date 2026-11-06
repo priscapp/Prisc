@@ -24,7 +24,7 @@
 //! [`Options::layered_windows`] composites it in on some drivers.
 
 use super::screens::OsError;
-use crate::geometry::{ScreenPoint, ScreenRect};
+use prisc_shared::geometry::{ScreenPoint, ScreenRect};
 
 /// A grabbed picture: BGRA8, top-down, `width * 4` bytes a row.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -250,8 +250,8 @@ mod imp {
     };
 
     use super::{byte_len, force_opaque, GrabError, Image, Options};
-    use crate::desktop::screens::OsError;
-    use crate::geometry::{ScreenPoint, ScreenRect};
+    use crate::screens::OsError;
+    use prisc_shared::geometry::{ScreenPoint, ScreenRect};
 
     fn last_error(what: &str) -> GrabError {
         let WIN32_ERROR(code) = unsafe { GetLastError() };
@@ -424,9 +424,9 @@ mod imp {
     use objc2_core_graphics::{CGImage, CGWindowImageOption, CGWindowListCreateImage, CGWindowListOption};
 
     use super::{pack_bgra, rgb_of, GrabError, Image, Layout, Options};
-    use crate::desktop::screens::{self, Fallback, OsError};
-    use crate::desktop::{CGPoint, CGRect, CGSize, ImageBytes};
-    use crate::geometry::{ScreenPoint, ScreenRect};
+    use crate::screens::{self, Fallback, OsError};
+    use crate::{CGPoint, CGRect, CGSize, ImageBytes};
+    use prisc_shared::geometry::{ScreenPoint, ScreenRect};
 
     /// The pixel layout of a `CGImage`: one of the 32-bit, 8-bit-per-component [`Layout`]s, or
     /// [`GrabError::Format`] for anything else. The one rule every reader of a CoreGraphics image
@@ -513,7 +513,7 @@ mod imp {
 #[cfg(not(any(windows, target_os = "macos")))]
 mod imp {
     use super::{GrabError, Image, Options};
-    use crate::geometry::{ScreenPoint, ScreenRect};
+    use prisc_shared::geometry::{ScreenPoint, ScreenRect};
 
     pub(super) fn grab(_: ScreenRect, _: Options) -> Result<Image, GrabError> {
         Err(GrabError::Unsupported)
@@ -527,7 +527,7 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::RectExt;
+    use prisc_shared::geometry::RectExt;
 
     /// One pixel, blue 0x11 green 0x22 red 0x33 alpha 0x44, in each layout.
     const PIXEL_IN: [(Layout, [u8; 4]); 4] = [
@@ -628,7 +628,7 @@ mod tests {
             );
             return;
         }
-        let Ok(Some(primary)) = crate::desktop::screens::primary() else {
+        let Ok(Some(primary)) = crate::screens::primary() else {
             eprintln!("skipping: no primary screen");
             return;
         };

@@ -71,9 +71,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use prisc_obs_platform::region::Rect;
-use prisc_rust_core::color::{from_u32, palette, relative_luminance, to_u32};
-use prisc_rust_core::desktop::screens::{self, Fallback};
-use prisc_rust_core::geometry::{RectExt, ScreenRect};
+use prisc_shared::color::{from_u32, palette, relative_luminance, to_u32};
+use prisc_desktop::screens::{self, Fallback};
+use prisc_shared::geometry::{RectExt, ScreenRect};
 
 use crate::commands::Command;
 
@@ -425,7 +425,7 @@ fn colorref(rgb: u32) -> u32 {
 }
 
 /// The OK button's fill at rest, under the pointer and pressed: steps 5, 6 and
-/// 7 of the app's dark accent ramp (`prisc_rust_core::color::palette`), the
+/// 7 of the app's dark accent ramp (`prisc_shared::color::palette`), the
 /// fills Prisc's own accent buttons use, so the prompt reacts the way the app
 /// does.
 fn button_fills(accent: u32) -> [u32; 3] {
@@ -461,7 +461,7 @@ fn scalef(dpi: u32, v: f32) -> f32 {
 /// The work area (screen minus taskbar) of the display the region is on, in
 /// capture space, and that display's effective DPI.
 ///
-/// The display comes from the shared screen list (`desktop::screens::at_rect`
+/// The display comes from the shared screen list (`prisc_desktop::screens::at_rect`
 /// with the Nearest fallback, the lookup the capture overlay and Prisc.Ui
 /// use), which answers the two cases a containment test cannot: a region
 /// straddling two displays (the one it overlaps most wins) and a region that

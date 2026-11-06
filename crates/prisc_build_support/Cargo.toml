@@ -6,6 +6,10 @@ license.workspace = true
 publish = false
 description = "Build-script helpers shared by the workspace's build.rs files (obs-deps lookup, libobs rpaths, runtime staging, the Linux FFmpeg bundle)."
 
+# app.manifest also lives here: it is what makes a process per-monitor DPI aware, and a drifted copy
+# would silently make one binary photograph the wrong pixels. Each binary's build script embeds it by
+# path, so using it adds no dependency on this crate.
+#
 # Deliberately dependency-free: it is a build-dependency of every crate that
 # links libobs or FFmpeg, so anything added here lands in each of their
 # build-script compiles.

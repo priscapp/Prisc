@@ -53,10 +53,9 @@ Scope:
 7. **Single source of truth: Rust codegen** (§6). Message types are declared once in
    `prisc_ipc`, and the C# records are generated from them by `cargo codegen`
    (`crates/prisc_codegen`), the one generator of every Rust-to-C# mirror.
-8. **Dependency direction: `prisc_ipc` is a leaf; `prisc_rust_core` depends on it** and
-   re-exports `exit`. Neither crate depends on libobs, so `prisc_capture` stays libobs-free.
-   `prisc_recorder`, `prisc_share_region` and `prisc_vid2gif` gain a `prisc_rust_core`
-   dependency for telemetry.
+8. **Dependency direction: `prisc_ipc` is a leaf; `prisc_shared` depends on it.** Neither crate
+   depends on libobs, so `prisc_capture` stays libobs-free. `prisc_recorder`,
+   `prisc_share_region` and `prisc_vid2gif` gain a `prisc_telemetry` dependency.
 9. **One env var** for finding helpers, `PRISC_HELPERS_DIR`, a path list (§7.1). Every
    per-helper override (`PRISC_RECORDER_PATH`, `PRISC_SHARE_REGION_PATH`, `PRISC_VID2GIF_PATH`,
    `PRISC_VID_RENDER_PATH`, `PRISC_CAPTURE_PATH`, `PRISC_AI_PATH`, `PRISC_AI_BINARY`,
@@ -161,7 +160,7 @@ after the parent is gone (stop, finalize, background writers) use `log!`.
 ```rust
 pub const PROTOCOL: u32 = 1;
 
-pub mod exit;        // §5, moved from prisc_rust_core::exit
+pub mod exit;        // §5
 pub mod catalog;     // §4, macro-generated message types, one module per catalog
 mod csharp;          // §6 generator + drift test
 
@@ -221,7 +220,7 @@ pub mod lifetime {
     /// teardown.
     pub fn exit_now(code: i32) -> !;
     /// Registers a hook that `exit` runs before the exit fn. Helpers register
-    /// prisc_rust_core::telemetry::shutdown here (§3.4).
+    /// prisc_telemetry::shutdown here (§3.4).
     pub fn on_exit(f: fn(i32));
     /// The process's single exit path: runs every on_exit hook (in registration order,
     /// each expected to bound itself), then the exit fn. Used by Channel::error, the
@@ -244,8 +243,8 @@ pub mod locate {
 
 ```rust
 let out = prisc_ipc::open::<catalog::job::Event>("prisc_vid2gif");
-let _sentry = prisc_rust_core::telemetry::init_job("prisc_vid2gif");
-prisc_ipc::lifetime::on_exit(prisc_rust_core::telemetry::shutdown_hook);
+let _sentry = prisc_telemetry::init_job("prisc_vid2gif");
+prisc_ipc::lifetime::on_exit(prisc_telemetry::shutdown_hook);
 let cancel = CancelToken::new();
 let c = cancel.clone();
 prisc_ipc::lifetime::install(move |_| c.cancel(), catalog::job::QUIT_GRACE + SELF_EXIT_MARGIN);
@@ -319,7 +318,7 @@ Windows caveats, stated so nobody relies on more than this:
 
 ### 3.4 Telemetry
 
-`prisc_recorder` and `prisc_share_region` call `prisc_rust_core::telemetry::init(<stem>)`
+`prisc_recorder` and `prisc_share_region` call `prisc_telemetry::init(<stem>)`
 (long-lived, one session per recording/share). `prisc_vid2gif` calls a new
 `telemetry::init_job(<stem>)`: the same client with `auto_session_tracking: false`, so a
 per-export process reports panics without skewing release health. `prisc_ai` stays without a
@@ -329,10 +328,10 @@ Every exit in the recorder and share_region today goes through `platform::exit_p
 (`_exit` / `ExitProcess`), so the Sentry guard is never dropped: sessions never end and queued
 events are lost. The fix is the single exit path:
 
-- `prisc_rust_core` adds `telemetry::shutdown(timeout)` (end the session, `exited` for code 0
+- `prisc_telemetry` adds `shutdown(timeout)` (end the session, `exited` for code 0
   and `abnormal` otherwise, then flush) and `shutdown_hook(code)`, which calls it with a 2 s
   timeout and is a no-op when no client was initialised.
-- Every helper registers `lifetime::on_exit(telemetry::shutdown_hook)` and
+- Every helper registers `lifetime::on_exit(prisc_telemetry::shutdown_hook)` and
   `lifetime::set_exit_fn(platform::exit_process)` where it needs the raw exit.
 - **Every direct `platform::exit_process` / `std::process::exit` call in the recorder and
   share_region is replaced by `prisc_ipc::lifetime::exit`**: done/stopped, done/failed, cancel,
@@ -340,8 +339,8 @@ events are lost. The fix is the single exit path:
   is then called only as the registered exit fn. A grep for `exit_process(` outside that
   registration is part of the review checklist.
 
-Not on Linux. `prisc_rust_core`'s `telemetry` feature (sentry with rustls, so aws-lc-sys) is off
-by default, and `prisc_recorder` and `prisc_vid2gif` enable it only under
+Not on Linux. `prisc_telemetry` (sentry with rustls, so aws-lc-sys) is a dependency of
+`prisc_recorder` and `prisc_vid2gif` only under
 `cfg(not(target_os = "linux"))`, with the `init` / `on_exit` calls behind the same cfg. The Linux
 recorder is built in the manylinux image (`tools/linux-build`) whose glibc floor and toolchain the
 bundle check enforces, and keeping the sentry/TLS tree out of that graph is why audit/platform
@@ -522,8 +521,7 @@ spawns it via `locate::sibling("prisc_ai")`.
 | 7 | `INFERENCE_UNAVAILABLE` | Reserved for prisc_ai (older binaries). |
 | 101 | (Rust) | Panic. |
 
-`prisc_rust_core::exit` becomes `pub use prisc_ipc::exit::*;` so existing paths keep
-compiling; the recorder and share_region literals `0/1/2` are replaced by the constants. The C#
+The recorder and share_region literals `0/1/2` are replaced by the constants. The C#
 mirror is generated as `HelperExit` (§6); `ScreenCaptureService.ExitCodeNoScreenPermission` and
 `AiClient.ExitInferenceUnavailable` are deleted in favour of it.
 
@@ -939,8 +937,8 @@ scroll capture, standby capture, one-shot capture including Escape, OCR, matte).
    `single_line`, `locate`. Unit tests: BOM line, invalid UTF-8, oversize line, EPIPE on emit
    (trigger runs after the lock is released and an `on_quit` that emits does not deadlock),
    quit/EOF idempotence, the private stdout handle not inherited by a spawned child.
-2. `prisc_rust_core`: depend on `prisc_ipc`; `exit.rs` becomes the re-export; add
-   `telemetry::init_job`, `telemetry::shutdown` and `shutdown_hook`.
+2. `prisc_shared`: depend on `prisc_ipc`. `prisc_telemetry`: add `init_job`, `shutdown` and
+   `shutdown_hook`.
 3. `prisc_recorder`: replace `status::emit_json`/`emit_simple`/`emit_stopped_recording`/
    `emit_configure_*` with `Channel<recorder::Event>`; `commands.rs` text parser replaced by
    `recorder::Command` → internal `Command` mapping (internal variants `OutputStarted`,

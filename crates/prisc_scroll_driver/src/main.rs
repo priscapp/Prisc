@@ -88,12 +88,12 @@ fn main() {
             std::io::LineWriter::new(file),
         ));
     }
-    prisc_rust_core::telemetry::install_logger(simplelog::CombinedLogger::new(loggers));
+    prisc_telemetry::install_logger(simplelog::CombinedLogger::new(loggers));
 
     // Every exit goes through prisc_ipc::lifetime::exit, never a drop of this
     // guard, so the session is ended and the queue flushed by the exit hook.
-    let _sentry = prisc_rust_core::telemetry::init("prisc_scroll_driver");
-    prisc_ipc::lifetime::on_exit(prisc_rust_core::telemetry::shutdown_hook);
+    let _sentry = prisc_telemetry::init("prisc_scroll_driver");
+    prisc_ipc::lifetime::on_exit(prisc_telemetry::shutdown_hook);
 
     drive::run(args, out)
 }

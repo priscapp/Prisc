@@ -1,6 +1,6 @@
 //! `prisc_interop`: the one native library Prisc's C# hosts load in-process (Prisc.Ui,
 //! Prisc.VideoRender and their tests). A thin C ABI over the shared Rust crates (prisc_platform,
-//! prisc_rust_core, prisc_hotkeys, prisc_ipc) plus the OS code that has no other Rust consumer.
+//! prisc_desktop, prisc_shared, prisc_hotkeys, prisc_ipc) plus the OS code that has no other Rust consumer.
 //!
 //! - `src/ffi/*`: the ABI, one file per area. crates/prisc_codegen reads these files and
 //!   generates `ui/Prisc.Interop/Generated/NativeMethods.g.cs` (DllImports, structs, handles) and

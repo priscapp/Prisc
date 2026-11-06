@@ -13,8 +13,8 @@ namespace Prisc.VideoSDK.Tests
     /// The crf → per-encoder settings (<see cref="H264EncoderSettings"/>) pinned without FFmpeg:
     /// the option names and values each encoder is handed, the generic rate-control fields, and
     /// the description line. The crf mapping itself (NVENC cq, the VideoToolbox slider and bitrate)
-    /// is <c>prisc_rust_core::encoding</c>, shared with the recorder, and its tables are pinned
-    /// there (crates/prisc_rust_core/src/encoding.rs), its marshalling smoke in Prisc.Interop.Tests;
+    /// is <c>prisc_shared::encoding</c>, shared with the recorder, and its tables are pinned
+    /// there (crates/prisc_shared/src/encoding.rs), its marshalling smoke in Prisc.Interop.Tests;
     /// the rows here check that the settings carry what that one call returns, with no number of
     /// the mapping repeated.
     /// </summary>

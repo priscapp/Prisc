@@ -191,7 +191,7 @@ namespace Prisc.Drawing.Tests
         [AvaloniaFact]
         public void Ink_IsOneNativeCall_AndFollowsThePaper()
         {
-            // the ink rule and its vectors live in prisc_rust_core::color::ink; this checks the
+            // the ink rule and its vectors live in prisc_shared::color::ink; this checks the
             // paper reaches it with its alpha and the note's cached ink follows a paper change
             InteropTestGate.Require();
             Assert.Equal(Color.FromRgb(0x59, 0x4A, 0x0D), GraphicStickyNote.GetInk(Color.FromUInt32(0xFFFFF1B8)));

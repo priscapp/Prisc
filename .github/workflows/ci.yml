@@ -135,8 +135,12 @@ jobs:
           cargo fmt --check
           cargo clippy -p prisc_ipc --all-targets -- -D warnings
           cargo test -p prisc_ipc
-          cargo clippy -p prisc_rust_core --all-targets -- -D warnings
-          cargo test -p prisc_rust_core
+          cargo clippy -p prisc_shared --all-targets -- -D warnings
+          cargo test -p prisc_shared
+          cargo clippy -p prisc_desktop --all-targets -- -D warnings
+          cargo test -p prisc_desktop
+          cargo clippy -p prisc_telemetry --all-targets -- -D warnings
+          cargo test -p prisc_telemetry
           cargo clippy -p prisc_hotkeys --all-targets -- -D warnings
           cargo test -p prisc_hotkeys
           # prisc_capture has always been gated without --all-targets; widening that is a change of its own.
@@ -177,7 +181,7 @@ jobs:
 
       # prisc_hotkeys has no Linux backend yet, but Key/Gesture still build there, and this job
       # has no Linux leg. prisc_platform and prisc_interop prove every unsupported arm compiles;
-      # prisc_rust_core without features is what the Linux recorder now depends on
+      # prisc_shared and prisc_desktop are what the Linux recorder stack depends on
       # unconditionally. Plain Rust on Linux, so clippy needs no linker. One call per crate.
       - name: "Rust gate: Linux cross-check"
         if: runner.os == 'Windows'
@@ -186,7 +190,8 @@ jobs:
           cargo clippy -p prisc_hotkeys --target x86_64-unknown-linux-gnu -- -D warnings
           cargo clippy -p prisc_platform --target x86_64-unknown-linux-gnu -- -D warnings
           cargo clippy -p prisc_interop --target x86_64-unknown-linux-gnu -- -D warnings
-          cargo clippy -p prisc_rust_core --no-default-features --target x86_64-unknown-linux-gnu -- -D warnings
+          cargo clippy -p prisc_shared --target x86_64-unknown-linux-gnu -- -D warnings
+          cargo clippy -p prisc_desktop --target x86_64-unknown-linux-gnu -- -D warnings
         shell: bash
 
       # The shell extension is a Windows COM dll and an empty crate elsewhere.

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use prisc_rust_core::geometry::{parse_point, parse_rect, ScreenPoint, ScreenRect};
+use prisc_shared::geometry::{parse_point, parse_rect, ScreenPoint, ScreenRect};
 
 #[derive(Debug, Parser)]
 #[command(version, about = "Prisc scrolling capture driver")]
@@ -69,7 +69,7 @@ pub struct CliArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use prisc_rust_core::geometry::RectExt;
+    use prisc_shared::geometry::RectExt;
 
     #[test]
     fn flags_parse() {

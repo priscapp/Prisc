@@ -77,8 +77,8 @@ fn main() {
     // No Sentry on Linux (HELPER_PROTOCOL.md §3.4).
     #[cfg(not(target_os = "linux"))]
     let _sentry = {
-        let guard = prisc_rust_core::telemetry::init_job("prisc_vid2gif");
-        prisc_ipc::lifetime::on_exit(prisc_rust_core::telemetry::shutdown_hook);
+        let guard = prisc_telemetry::init_job("prisc_vid2gif");
+        prisc_ipc::lifetime::on_exit(prisc_telemetry::shutdown_hook);
         guard
     };
 

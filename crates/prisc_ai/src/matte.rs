@@ -17,7 +17,7 @@
 //! hint: `MODEL_SHORT_SIDE` (270) over the short side, capped at 1. The C#
 //! side scales its input so the short side is at most `MAX_ANALYSIS_SIDE`
 //! (540), where inference measured 27 ms/frame on the dev box (51 ms at
-//! 1080p); both sizes are `prisc_rust_core::contract::matte`, which C#'s
+//! 1080p); both sizes are `prisc_shared::contract::matte`, which C#'s
 //! `MatteGenerator` is generated from.
 
 use std::io::Write;
@@ -27,7 +27,7 @@ use anyhow::{ensure, Context};
 use ort::session::Session;
 use ort::value::Tensor;
 
-use prisc_rust_core::contract::matte::MODEL_SHORT_SIDE;
+use prisc_shared::contract::matte::MODEL_SHORT_SIDE;
 
 use crate::{read_frame, FrameRead};
 
@@ -206,7 +206,7 @@ mod tests {
     /// proportionally, and inputs already at or below 270 run unscaled.
     #[test]
     fn downsample_ratio_matches_contract() {
-        use prisc_rust_core::contract::matte::MAX_ANALYSIS_SIDE;
+        use prisc_shared::contract::matte::MAX_ANALYSIS_SIDE;
         assert_eq!(downsample_ratio(960, MAX_ANALYSIS_SIDE as u32), 0.5);
         assert_eq!(downsample_ratio(960, 540), 0.5);
         assert_eq!(downsample_ratio(1920, 1080), 0.25);

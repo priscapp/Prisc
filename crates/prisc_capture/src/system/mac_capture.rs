@@ -6,8 +6,8 @@ use objc2_core_foundation::CFRetained;
 use objc2_core_graphics::{CGDisplayCreateImage, CGImage, CGWindowID, CGWindowImageOption, CGWindowListCreateImage, CGWindowListOption};
 
 use crate::system::MonitorInfo;
-use prisc_rust_core::desktop::{self, grab, CGPoint, CGRect, CGSize, ImageBytes};
-use prisc_rust_core::geometry::ScreenRect;
+use prisc_desktop::{grab, CGPoint, CGRect, CGSize, ImageBytes};
+use prisc_shared::geometry::ScreenRect;
 
 pub struct DesktopBitmap {
     pub bgra: Vec<u8>,
@@ -69,7 +69,7 @@ pub fn capture_bitmap(monitors: &[MonitorInfo]) -> Result<DesktopBitmap> {
 
     let mut bgra = vec![0u8; vd_w * vd_h * 4];
 
-    let display_ids = desktop::active_display_ids().map_err(|e| anyhow!("CGGetActiveDisplayList failed: {:?}", e))?;
+    let display_ids = prisc_desktop::active_display_ids().map_err(|e| anyhow!("CGGetActiveDisplayList failed: {:?}", e))?;
 
     // Zip monitors with display_ids; truncate to the shorter list in
     // case a display connected/disconnected between enumeration and capture.
@@ -168,7 +168,7 @@ pub fn capture_bitmap(monitors: &[MonitorInfo]) -> Result<DesktopBitmap> {
 }
 
 /// Capture a single window's image via CGWindowListCreateImage, converted to BGRA by the shared
-/// grab (`desktop::grab::from_cg_image`, alpha kept: the window's own transparency is part of the
+/// grab (`prisc_desktop::grab::from_cg_image`, alpha kept: the window's own transparency is part of the
 /// peek). Returns BGRA pixel bytes and dimensions, or None on failure.
 pub fn capture_window_image(window_id: CGWindowID) -> Option<(Vec<u8>, u32, u32)> {
     let cg_null = CGRect::new(CGPoint::new(f64::INFINITY, f64::INFINITY), CGSize::new(0.0, 0.0));

@@ -4,7 +4,7 @@ namespace Prisc.Interop
 {
     /// <summary>
     /// OKLCH conversions and the colour picker's gamut painters (<c>prisc_oklch_*</c>), over
-    /// <c>prisc_rust_core::color</c>. Lightness is 0 to 1, hue is in degrees, colours are
+    /// <c>prisc_shared::color</c>. Lightness is 0 to 1, hue is in degrees, colours are
     /// <c>0x00RRGGBB</c>, and painted pixels are premultiplied BGRA words (<c>0xAARRGGBB</c>, what
     /// Avalonia's <c>Bgra8888</c> reads). Every member: any thread.
     /// </summary>

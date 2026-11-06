@@ -1,4 +1,4 @@
-//! The typed contract constants (`prisc_rust_core::contract`, DESIGN 3.3) as C# static partial
+//! The typed contract constants (`prisc_shared::contract`, DESIGN 3.3) as C# static partial
 //! classes. Each output file renders one or more contract modules into one class; the values come
 //! from each module's `items()`, so a `computed` entry reaches C# as a literal.
 //!
@@ -10,7 +10,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use prisc_rust_core::contract::{self, Item, Value};
+use prisc_shared::contract::{self, Item, Value};
 
 use crate::{cs, Output};
 
@@ -106,7 +106,7 @@ renderer!(render_matte, MATTE);
 renderer!(render_share_region, SHARE_REGION);
 renderer!(render_h264, H264);
 
-const SOURCE: &str = "the contract tables in crates/prisc_rust_core/src/contract";
+const SOURCE: &str = "the contract tables in crates/prisc_shared/src/contract";
 
 /// Every contract output.
 pub static OUTPUTS: &[Output] = &[

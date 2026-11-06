@@ -42,7 +42,7 @@ fn hello(spec: &catalog::CatalogSpec, helper: &str) -> catalog::Hello {
         catalog: spec.name.to_owned(),
         catalog_hash: spec.catalog_hash(),
         helper: helper.to_owned(),
-        // For logs only. The same fallback as prisc_rust_core's telemetry release name.
+        // For logs only. The same fallback as prisc_telemetry's release name.
         version: option_env!("PRISC_VERSION")
             .unwrap_or(env!("CARGO_PKG_VERSION"))
             .to_owned(),

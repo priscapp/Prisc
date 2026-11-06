@@ -28,7 +28,7 @@ namespace Prisc.Interop
 
     /// <summary>
     /// The screens, asked of the OS on every call and never cached: the list Prisc.Ui, the capture
-    /// overlay and the share-region prompt all read (<c>prisc_rust_core::desktop::screens</c>).
+    /// overlay and the share-region prompt all read (<c>prisc_desktop::screens</c>).
     /// Any thread on every OS. On a platform without a screen list the list is empty and every
     /// lookup answers null.
     /// </summary>

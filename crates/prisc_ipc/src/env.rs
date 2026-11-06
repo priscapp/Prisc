@@ -3,7 +3,7 @@
 //! prisc_ipc is the lowest crate every reader shares, and the C# side gets the same names
 //! generated into `ui/Prisc.Interop/Generated/EnvVars.g.cs` (`cargo codegen`), so a reader in
 //! either language takes the name from here: prisc_ipc's helper lookup (`locate.rs`),
-//! prisc_rust_core's telemetry, and every C# reader and test through `EnvVars`.
+//! prisc_telemetry, and every C# reader and test through `EnvVars`.
 //!
 //! Each variable is declared once through `env_vars!`: its doc comment is both the constant's
 //! rustdoc and the `doc` the generated C# carries, so the two cannot drift. Write the doc as plain

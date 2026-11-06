@@ -61,8 +61,8 @@ fn main() {
     let logger = cycle_logger::CycleLogger::install();
     // Every exit goes through prisc_ipc::lifetime::exit, never a drop of this
     // guard, so the session is ended and the queue flushed by the exit hook.
-    let _sentry = prisc_rust_core::telemetry::init("prisc_capture");
-    prisc_ipc::lifetime::on_exit(prisc_rust_core::telemetry::shutdown_hook);
+    let _sentry = prisc_telemetry::init("prisc_capture");
+    prisc_ipc::lifetime::on_exit(prisc_telemetry::shutdown_hook);
     system::SystemInterop::init();
     let mut event_loop = match build_event_loop() {
         Ok(event_loop) => event_loop,
@@ -174,7 +174,7 @@ pub(crate) fn finish(result: CaptureResult, dir: Option<String>) -> ! {
 /// A fatal `error` (reported to Sentry first), then exit 1.
 fn fatal(code: ErrorCode, err: anyhow::Error) -> ! {
     protocol::claim_terminal();
-    prisc_rust_core::telemetry::capture_error(&err);
+    prisc_telemetry::capture_error(&err);
     protocol::out().fatal(code, format!("{err:#}"))
 }
 

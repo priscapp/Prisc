@@ -42,7 +42,7 @@ namespace Prisc.Interop
         public ReadOnlyMemory<uint> DarkText { get; }
     }
 
-    /// <summary>The accent colour maths of <c>prisc_rust_core::color</c>, the one implementation
+    /// <summary>The accent colour maths of <c>prisc_shared::color</c>, the one implementation
     /// the capture overlay uses too. Colours are <c>0x00RRGGBB</c>. Every member: any thread.</summary>
     public static unsafe class ColorMath
     {

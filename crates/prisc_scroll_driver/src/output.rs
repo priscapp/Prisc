@@ -17,8 +17,8 @@
 
 use std::path::{Path, PathBuf};
 
-use prisc_rust_core::geometry::{RectExt, ScreenRect};
-use prisc_rust_core::session::{absolute_path, created_utc_now, save_png, SessionJson};
+use prisc_shared::geometry::{RectExt, ScreenRect};
+use prisc_shared::session::{absolute_path, created_utc_now, save_png, SessionJson};
 
 use crate::stitch::Composite;
 

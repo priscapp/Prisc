@@ -27,7 +27,7 @@ use prisc_obs_platform::region::{self, Rect, RegionPlan};
 use prisc_obs_platform::{CaptureMethod, MonitorInfo};
 
 /// The one place a requested region is turned into a region this process can
-/// actually mirror: `prisc_rust_core::share_region::normalize` (size floored at
+/// actually mirror: `prisc_shared::share_region::normalize` (size floored at
 /// `MIN_REGION`, then rounded down to even, origin untouched; see its docs for
 /// why), the same function Prisc.Ui's resize drag applies. Everything that
 /// reaches the wire as `sharing_started` or `region_changed`, and everything
@@ -36,7 +36,7 @@ use prisc_obs_platform::{CaptureMethod, MonitorInfo};
 /// even) and the ack in one value domain, which is the property
 /// `AppEvents::set_region` is built on.
 fn normalize_region(region: Rect) -> Rect {
-    prisc_rust_core::share_region::normalize(region.into()).into()
+    prisc_shared::share_region::normalize(region.into()).into()
 }
 
 /// Setup failures: fatal `error{code:"init_failed"}`, exit 1. Never unwind:

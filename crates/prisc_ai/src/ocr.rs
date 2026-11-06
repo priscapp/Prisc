@@ -63,8 +63,8 @@ use image::RgbaImage;
 use ort::session::Session;
 use ort::value::Tensor;
 
-use prisc_rust_core::geometry::{RectExt, ScreenRectF};
-use prisc_rust_core::ocr::{OcrError, OcrLine, OcrOutcome, OcrRequest, OcrResponse, RequestHeader};
+use prisc_shared::geometry::{RectExt, ScreenRectF};
+use prisc_shared::ocr::{OcrError, OcrLine, OcrOutcome, OcrRequest, OcrResponse, RequestHeader};
 
 /// Line cap, applied BEFORE recognition (see module docs) purely to bound
 /// worst-case latency — the render side (bubble rects, glyphon buffers)
@@ -1032,7 +1032,7 @@ fn ctc_decode(probs: &[f32], classes: usize, charset: &[&str]) -> (String, f32) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use prisc_rust_core::geometry::ScreenRect;
+    use prisc_shared::geometry::ScreenRect;
 
     fn request(bgra: Vec<u8>, w: u32, h: u32) -> OcrRequest {
         OcrRequest {

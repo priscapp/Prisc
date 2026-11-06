@@ -33,7 +33,7 @@ use crate::ui::command::Command;
 use crate::ui::components::panel;
 use crate::ui::egui_host::{EguiHosts, FontInstall, PanelOutcome, SyncArgs};
 use crate::ui::shared::{active_panel_set, cursor_image_rect, peek_covers_cursor, sample_bgra, UiMonitor, UiSharedState};
-use prisc_rust_core::geometry::{
+use prisc_shared::geometry::{
     to_screen_point, RectExt, ScreenPoint, ScreenPointF, ScreenRect, ScreenRectExt, ScreenRectRounded, WindowPoint,
 };
 

@@ -1,7 +1,7 @@
 # prisc_interop
 
 The one native library Prisc's C# hosts load in-process (Prisc.Ui, Prisc.VideoRender and their
-tests): a thin C ABI over the shared Rust crates (prisc_platform, prisc_rust_core, prisc_hotkeys,
+tests): a thin C ABI over the shared Rust crates (prisc_platform, prisc_desktop, prisc_shared, prisc_hotkeys,
 prisc_ipc) plus the OS code that has no other Rust consumer. This file is the ABI contract.
 
 - `src/ffi/*.rs`: the exports, one file per area. Nothing else is part of the ABI.
@@ -14,7 +14,7 @@ prisc_ipc) plus the OS code that has no other Rust consumer. This file is the AB
 
 Building: `cargo build -p prisc_interop` puts `libprisc_interop.dylib` / `prisc_interop.dll` in
 `target/debug`, where the C# loader's dev walk-up finds it. The shipped library is built in its
-own cargo invocation so no feature of another package (prisc_capture's `telemetry`) is unified in.
+own cargo invocation so no feature of another package (prisc_capture's AppKit features, for one) is unified in.
 
 ## A. Export shape
 
@@ -163,8 +163,8 @@ enum. The platform switch is a cfg'd block inside the body; the `#[cfg(not(...))
 
 D2. No panic crosses the boundary (A6).
 
-D3. No telemetry in-process: no `sentry`, no `telemetry` feature of prisc_rust_core, no recorder-stack or prisc_ai crate,
-and the crate installs no `log` logger (rust_core's `log::warn!` calls are then no-ops). The
+D3. No telemetry in-process: no `sentry`, no prisc_telemetry, no recorder-stack or prisc_ai crate,
+and the crate installs no `log` logger (prisc_desktop's `log::warn!` calls are then no-ops). The
 crate's own diagnostics go only to the host sink set by `prisc_log_set_callback`.
 
 D4. prisc_interop's own sources spawn no thread (`thread::spawn`, `thread::Builder`; a syn scan
@@ -241,7 +241,7 @@ the crate's own tests.
 | Area (`src/ffi/`) | Exports | |
 |---|---|---|
 | infra: `version`, `error`, `string`, `log`, `selftest` | 7 | version and ABI hash, last error, string free, log sink, the boundary self-test |
-| `screens`, `pixels`, `idle`, `system`, `cursor` | 11 | the monitor list, screen grab and pixel read, idle time, animation preference, cursor position (screens and grab: prisc_rust_core::desktop) |
+| `screens`, `pixels`, `idle`, `system`, `cursor` | 11 | the monitor list, screen grab and pixel read, idle time, animation preference, cursor position (screens and grab: prisc_desktop) |
 | `window` | 11 | overlay setup, click-through, capture exclusion, foreground, bounds, the foreground watch |
 | `ipc`, `process` | 5 | the stdout guard, the kill-on-close job, the foreground grant, FFmpeg preparation, package identity |
 | `app`, `services`, `permissions` | 4 | activation policy, the NSServices provider, permission state and request (prisc_platform) |
@@ -249,7 +249,7 @@ the crate's own tests.
 | `gpu` | 19 | the D3D12 or Metal device, the readback ring, the NV12 converter and its textures |
 | `hotkeys` | 9 | the supervised keyboard hook (prisc_hotkeys) |
 | `gesture`, `keyboard` | 5 | gesture parse, format and check, physical key state, Secure Event Input |
-| `color`, `share_region`, `encoding` | 9 | the accent palette, OKLCH conversion and painting, share-region geometry, H.264 quality (prisc_rust_core) |
+| `color`, `share_region`, `encoding` | 9 | the accent palette, OKLCH conversion and painting, share-region geometry, H.264 quality (prisc_shared) |
 
 ## Threads the library owns
 

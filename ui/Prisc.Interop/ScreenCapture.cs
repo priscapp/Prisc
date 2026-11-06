@@ -4,7 +4,7 @@ namespace Prisc.Interop
 {
     /// <summary>
     /// Reads the screen as it is right now, through the grab every Prisc reader of screen pixels
-    /// shares (<c>prisc_rust_core::desktop::grab</c>). Coordinates are <see cref="NativeScreens"/>'
+    /// shares (<c>prisc_desktop::grab</c>). Coordinates are <see cref="NativeScreens"/>'
     /// capture space. Any thread.
     /// </summary>
     /// <remarks>On macOS both reads refuse with <see cref="InteropStatus.Permission"/> when Screen

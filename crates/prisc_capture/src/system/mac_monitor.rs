@@ -3,8 +3,8 @@ use std::collections::VecDeque;
 use anyhow::Result;
 
 use crate::system::MonitorInfo;
-use prisc_rust_core::desktop::screens;
-use prisc_rust_core::geometry::{LogicalPoint, RectExt, ScreenRect};
+use prisc_desktop::screens;
+use prisc_shared::geometry::{LogicalPoint, RectExt, ScreenRect};
 
 /// The overlay's own frame rate target when a display reports no refresh rate (most built-in
 /// panels do not).
@@ -23,7 +23,7 @@ struct RawMonitor {
     name: String,
 }
 
-/// Every display from the shared CoreGraphics screen list (`desktop::screens`, the list Prisc.Ui
+/// Every display from the shared CoreGraphics screen list (`prisc_desktop::screens`, the list Prisc.Ui
 /// reads too), shaped for the overlay: physical-pixel bounds laid out by
 /// [`compute_physical_origins`], the CG origin kept as `logical_origin`.
 pub fn all_monitors() -> Result<Vec<MonitorInfo>> {

@@ -1,12 +1,12 @@
 //! Screen pixels and the screen grab (README section 4.2), a thin layer over
-//! `prisc_rust_core::desktop::grab`, the grab the capture overlay and the scrolling driver use
+//! `prisc_desktop::grab`, the grab the capture overlay and the scrolling driver use
 //! too. Coordinates are the `prisc_screens_*` space. On macOS both exports answer
 //! `PRISC_E_PERMISSION` first when Screen Recording is missing (`prisc_platform::permissions`, the
 //! same check every other reader makes): an unpermitted window-list image succeeds and shows the
 //! desktop picture instead of the windows, so it would silently read the wrong pixels.
 
-use prisc_rust_core::desktop::grab::{self, GrabError, Options};
-use prisc_rust_core::geometry::ScreenPoint;
+use prisc_desktop::grab::{self, GrabError, Options};
+use prisc_shared::geometry::ScreenPoint;
 
 use crate::error::{Error, Result};
 use crate::ffi::screens::to_rect;
@@ -210,7 +210,7 @@ mod tests {
 
     #[test]
     fn grab_errors_map_to_their_statuses() {
-        use prisc_rust_core::desktop::screens::OsError;
+        use prisc_desktop::screens::OsError;
         let status = |e: GrabError| grab_error(e).status;
         assert_eq!(
             status(GrabError::Empty {

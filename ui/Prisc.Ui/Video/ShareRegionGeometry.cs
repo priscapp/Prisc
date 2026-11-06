@@ -14,7 +14,7 @@ namespace Prisc.UI
     public static partial class ShareRegionGeometry
     {
         // MinRegion, the helper's own floor, is generated (ShareRegionGeometry.g.cs) from
-        // prisc_rust_core::contract::share_region.
+        // prisc_shared::contract::share_region.
 
         // Handle indices, the video editor gizmo's numbering (TransformGizmoControl): 0-3 corners
         // in z-order TL,TR,BL,BR; 4-7 edge midpoints L,T,R,B. 8 is the body (move), which the
@@ -30,7 +30,7 @@ namespace Prisc.UI
         public const int HandleBody = (int)ShareRegionHandle.Body;
 
         /// <summary>
-        /// The helper's own <c>normalize</c> (<c>prisc_rust_core::share_region</c>, the same code):
+        /// The helper's own <c>normalize</c> (<c>prisc_shared::share_region</c>, the same code):
         /// each side floored at <see cref="MinRegion"/> and THEN rounded DOWN to even, in that order,
         /// with X/Y untouched (the helper never clamps the origin and never clips to the desktop).
         /// Idempotent, so echoing an acked region back through it is safe. Applying it during the
@@ -56,7 +56,7 @@ namespace Prisc.UI
         /// <para>Crossing an edge swaps the two edge VALUES <b>and</b> which edge is moving; the
         /// result is always normalized (<see cref="Clamp"/>'s rule), and the normalization pushes
         /// back the MOVING edge so the anchored one stays pinned. The rule is
-        /// <c>prisc_rust_core::share_region::apply_drag</c>, one native call.</para>
+        /// <c>prisc_shared::share_region::apply_drag</c>, one native call.</para>
         /// </summary>
         public static ScreenRect ApplyDrag(ScreenRect anchor, int handle, int dx, int dy)
         {

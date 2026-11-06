@@ -23,7 +23,7 @@ namespace Prisc.UI.Controls.Tray
     /// <para>
     /// The tokens the capture overlay's egui panel shares (the fills, the ring, radius, padding, the
     /// button and icon sizes, the veils, the tooltip, the fade and the shadow) are generated from
-    /// <c>prisc_rust_core::contract::tray</c> into the other part of this class (TrayTokens.g.cs);
+    /// <c>prisc_shared::contract::tray</c> into the other part of this class (TrayTokens.g.cs);
     /// this part turns them into Avalonia colours, brushes and shadows.
     /// </para>
     /// </summary>

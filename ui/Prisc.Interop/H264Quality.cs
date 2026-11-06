@@ -4,7 +4,7 @@ namespace Prisc.Interop
 {
     /// <summary>
     /// One x264-style crf (0 best to 51 worst) mapped onto every H.264 encoder's own scale
-    /// (<c>prisc_encoding_h264_quality</c>, over <c>prisc_rust_core::encoding</c>, the mapping the
+    /// (<c>prisc_encoding_h264_quality</c>, over <c>prisc_shared::encoding</c>, the mapping the
     /// recorder applies too): <see cref="Crf"/> for x264 and AMF, NVENC's constant-quality target,
     /// VideoToolbox's quality slider, and the average bitrate an Intel Mac's VideoToolbox encodes at
     /// instead.

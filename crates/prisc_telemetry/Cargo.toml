@@ -1,0 +1,18 @@
+[package]
+name = "prisc_telemetry"
+version = "1.0.0"
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# The Sentry setup every reporting process shares: one project, one release name, one opt-out
+# variable. Its own crate because of what it links (the sentry/TLS tree): prisc_interop must never
+# depend on it, and the Linux recorder stack leaves it out (HELPER_PROTOCOL.md section 3.4).
+
+[dependencies]
+prisc_shared.workspace = true
+anyhow.workspace = true
+log.workspace = true
+sentry.workspace = true

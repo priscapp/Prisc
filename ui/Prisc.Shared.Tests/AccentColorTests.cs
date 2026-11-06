@@ -7,10 +7,10 @@ using Xunit;
 namespace Prisc.Shared.Tests
 {
     /// <summary>
-    /// <see cref="AccentColors"/> and the accent settings over <c>prisc_rust_core::color</c>, the
+    /// <see cref="AccentColors"/> and the accent settings over <c>prisc_shared::color</c>, the
     /// one implementation the capture overlay paints with too. The maths' own vectors (the contrast
     /// rule, the pinned comet colours, the ramps as master's C# built them) live with it in
-    /// crates/prisc_rust_core/src/color.rs and color/palette.rs; these check that the C# side hands
+    /// crates/prisc_shared/src/color.rs and color/palette.rs; these check that the C# side hands
     /// colours across and back intact and that the settings apply the rule where they should.
     /// </summary>
     public class AccentColorTests

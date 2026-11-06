@@ -16,8 +16,8 @@
 
 use std::path::{Path, PathBuf};
 
-use prisc_rust_core::geometry::{RectExt, ScreenPoint, ScreenRect};
-use prisc_rust_core::session::{absolute_path, created_utc_now, save_png, SessionJson};
+use prisc_shared::geometry::{RectExt, ScreenPoint, ScreenRect};
+use prisc_shared::session::{absolute_path, created_utc_now, save_png, SessionJson};
 
 use crate::capture_output::ActionResult;
 use crate::image_extract::{
@@ -813,7 +813,7 @@ mod tests {
             adapter_id: None,
             low_vram_adapter: false,
             #[cfg(target_os = "macos")]
-            logical_origin: prisc_rust_core::geometry::LogicalPoint::new(x as f64, y as f64),
+            logical_origin: prisc_shared::geometry::LogicalPoint::new(x as f64, y as f64),
         }
     }
 

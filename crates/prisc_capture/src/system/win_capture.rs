@@ -1,10 +1,10 @@
-//! The overlay's Windows grabs, both through the shared GDI grab (`desktop::grab`, the one
+//! The overlay's Windows grabs, both through the shared GDI grab (`prisc_desktop::grab`, the one
 //! Prisc.Ui and the scrolling driver use): the whole virtual desktop for the frozen screenshot,
 //! and one window drawn with `PrintWindow` for the peek.
 
 use anyhow::Result;
-use prisc_rust_core::desktop::grab::{self, Options};
-use prisc_rust_core::geometry::ScreenRect;
+use prisc_desktop::grab::{self, Options};
+use prisc_shared::geometry::ScreenRect;
 use windows::Win32::{
     Foundation::HWND,
     Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS},

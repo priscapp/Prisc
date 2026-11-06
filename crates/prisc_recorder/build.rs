@@ -22,7 +22,7 @@ fn main() {
 
 fn build_macos() {
     // No framework links here: the AppKit/CoreGraphics/CoreFoundation code
-    // lives in prisc_obs_platform and prisc_rust_core::desktop, whose objc2
+    // lives in prisc_obs_platform and prisc_desktop, whose objc2
     // binding crates (and #[link] attributes) carry their own link directives.
 
     let build_dir = env::var("DEP_OBS_OBS_BUILD_DIR").expect("DEP_OBS_OBS_BUILD_DIR not set");

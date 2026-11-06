@@ -14,7 +14,7 @@ use crate::settings::CapturerSettings;
 use crate::system::{CapturedCursor, CapturedDesktop, WindowPeekImage};
 use crate::telemetry::perf::{PerfSlot, PerfSnapshot};
 use crate::ui::shared::UiSharedState;
-use prisc_rust_core::geometry::{ScreenPointF, ScreenRect};
+use prisc_shared::geometry::{ScreenPointF, ScreenRect};
 
 // ── WindowHandle ───────────────────────────────────────────────────
 
@@ -414,7 +414,7 @@ fn apply_capture_window_tweaks(window: &Window) {
 
     unsafe {
         use objc2_app_kit::{NSColor, NSView, NSWindowAnimationBehavior};
-        use prisc_rust_core::desktop::overlay::{self, OverlayFlags};
+        use prisc_desktop::overlay::{self, OverlayFlags};
 
         let ns_view: &NSView = &*(h.ns_view.as_ptr() as *const NSView);
         let Some(ns_window) = ns_view.window() else {

@@ -3700,7 +3700,7 @@ dependencies = [
  "log",
  "ort",
  "prisc_ipc",
- "prisc_rust_core",
+ "prisc_shared",
  "realfft",
  "serde_json",
  "simplelog",
@@ -3737,10 +3737,12 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-metal 0.3.2",
  "objc2-quartz-core 0.3.2",
+ "prisc_desktop",
  "prisc_hotkeys",
  "prisc_ipc",
  "prisc_platform",
- "prisc_rust_core",
+ "prisc_shared",
+ "prisc_telemetry",
  "rfd",
  "sentry",
  "serde",
@@ -3760,11 +3762,24 @@ dependencies = [
  "csbindgen",
  "prisc_hotkeys",
  "prisc_ipc",
- "prisc_rust_core",
+ "prisc_shared",
  "proc-macro2",
  "quote",
  "serde_json",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "prisc_desktop"
+version = "1.0.0"
+dependencies = [
+ "euclid",
+ "log",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "prisc_shared",
+ "windows",
 ]
 
 [[package]]
@@ -3807,10 +3822,11 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "objc2-metal 0.3.2",
+ "prisc_desktop",
  "prisc_hotkeys",
  "prisc_ipc",
  "prisc_platform",
- "prisc_rust_core",
+ "prisc_shared",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -3847,10 +3863,11 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-foundation 0.3.2",
  "prisc_build_support",
+ "prisc_desktop",
  "prisc_obs",
  "prisc_obs_sys",
  "prisc_platform",
- "prisc_rust_core",
+ "prisc_shared",
  "windows",
 ]
 
@@ -3889,25 +3906,8 @@ dependencies = [
  "prisc_obs_platform",
  "prisc_obs_sys",
  "prisc_platform",
- "prisc_rust_core",
- "serde",
- "serde_json",
- "windows",
-]
-
-[[package]]
-name = "prisc_rust_core"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "euclid",
- "image",
- "log",
- "objc2-app-kit 0.3.2",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "prisc_ipc",
- "sentry",
+ "prisc_shared",
+ "prisc_telemetry",
  "serde",
  "serde_json",
  "windows",
@@ -3923,9 +3923,11 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-core-foundation",
  "objc2-core-graphics",
+ "prisc_desktop",
  "prisc_ipc",
  "prisc_platform",
- "prisc_rust_core",
+ "prisc_shared",
+ "prisc_telemetry",
  "serde_json",
  "simplelog",
  "windows",
@@ -3941,13 +3943,27 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "prisc_build_support",
+ "prisc_desktop",
  "prisc_ipc",
  "prisc_obs",
  "prisc_obs_platform",
  "prisc_obs_sys",
- "prisc_rust_core",
+ "prisc_shared",
+ "prisc_telemetry",
  "serde_json",
  "windows",
+]
+
+[[package]]
+name = "prisc_shared"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "euclid",
+ "image",
+ "prisc_ipc",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3960,6 +3976,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "prisc_telemetry"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "prisc_shared",
+ "sentry",
+]
+
+[[package]]
 name = "prisc_vid2gif"
 version = "0.1.0"
 dependencies = [
@@ -3969,7 +3995,7 @@ dependencies = [
  "prisc_build_support",
  "prisc_ffmpeg_sys",
  "prisc_ipc",
- "prisc_rust_core",
+ "prisc_telemetry",
  "serde_json",
 ]
 

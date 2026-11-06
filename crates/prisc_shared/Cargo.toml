@@ -1,0 +1,23 @@
+[package]
+name = "prisc_shared"
+version = "1.0.0"
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# Only what two Prisc processes must agree on, as pure logic: the coordinate space, the session.json
+# and OCR contracts, the colour, share-region and H.264 rules, and the constant tables codegen renders
+# into C#. No OS API and no Sentry, so every Prisc crate can depend on it, the Linux recorder stack
+# and prisc_codegen included. The OS queries are prisc_desktop, the Sentry setup prisc_telemetry.
+
+[dependencies]
+prisc_ipc.workspace = true
+anyhow.workspace = true
+euclid.workspace = true
+image = { workspace = true, features = ["png"] }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

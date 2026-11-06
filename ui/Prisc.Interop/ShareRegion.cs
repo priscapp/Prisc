@@ -2,7 +2,7 @@ namespace Prisc.Interop
 {
     /// <summary>
     /// The share-region rectangle rules (<c>prisc_share_region_*</c>) over
-    /// <c>prisc_rust_core::share_region</c>, the one implementation the region helper applies to
+    /// <c>prisc_shared::share_region</c>, the one implementation the region helper applies to
     /// every region it mirrors. Rects are in capture space (physical pixels in virtual-desktop
     /// coordinates on Windows, CoreGraphics points on macOS) as (x, y, width, height). Every member:
     /// any thread.

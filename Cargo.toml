@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
     "crates/prisc_ai", "crates/prisc_capture", "crates/prisc_codegen", "crates/prisc_hotkeys", "crates/prisc_interop",
-    "crates/prisc_ipc", "crates/prisc_platform", "crates/prisc_rust_core", "crates/prisc_scroll_driver", "crates/prisc_shell_ext",
+    "crates/prisc_ipc", "crates/prisc_platform", "crates/prisc_desktop", "crates/prisc_shared", "crates/prisc_telemetry", "crates/prisc_scroll_driver", "crates/prisc_shell_ext",
     "crates/prisc_build_support", "crates/prisc_ffmpeg_sys", "crates/prisc_obs", "crates/prisc_obs_platform",
     "crates/prisc_obs_sys", "crates/prisc_recorder", "crates/prisc_share_region", "crates/prisc_vid2gif",
 ]
@@ -13,7 +13,7 @@ members = [
 # where the dotnet dev walk-up finds it.
 default-members = [
     "crates/prisc_ai", "crates/prisc_capture", "crates/prisc_codegen", "crates/prisc_hotkeys", "crates/prisc_interop",
-    "crates/prisc_ipc", "crates/prisc_platform", "crates/prisc_rust_core", "crates/prisc_scroll_driver", "crates/prisc_shell_ext",
+    "crates/prisc_ipc", "crates/prisc_platform", "crates/prisc_desktop", "crates/prisc_shared", "crates/prisc_telemetry", "crates/prisc_scroll_driver", "crates/prisc_shell_ext",
 ]
 
 [workspace.package]
@@ -27,11 +27,13 @@ edition = "2021"
 rust-version = "1.89"
 
 [workspace.dependencies]
-# Shared by prisc_capture, prisc_scroll_driver, prisc_ai and (through
-# prisc_obs_platform) the recorder stack: geometry, the session.json contract, exit
-# codes, the desktop queries and Sentry setup. Default features are off here so each
-# consumer names the `desktop` and `telemetry` modules it actually uses.
-prisc_rust_core = { path = "crates/prisc_rust_core", default-features = false }
+# What two Prisc processes must agree on, as pure logic: geometry, the session.json and OCR
+# contracts, the colour, share-region and H.264 rules, and the contract tables.
+prisc_shared = { path = "crates/prisc_shared" }
+# The OS desktop queries: the window list, monitors, screen grab and cursor.
+prisc_desktop = { path = "crates/prisc_desktop" }
+# The Sentry setup every reporting process shares. Never a dependency of prisc_interop.
+prisc_telemetry = { path = "crates/prisc_telemetry" }
 # The global hotkey hook: an rlib linked into prisc_capture and prisc_interop (Prisc.Ui reaches it
 # through prisc_interop's prisc_hotkeys_* exports).
 prisc_hotkeys = { path = "crates/prisc_hotkeys" }

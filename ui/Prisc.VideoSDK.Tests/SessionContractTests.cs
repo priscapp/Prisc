@@ -10,7 +10,7 @@ namespace Prisc.VideoSDK.Tests
 {
     /// <summary>
     /// The session.json contract between the Rust capture helpers that write it
-    /// (<c>prisc_rust_core::session::SessionJson</c>) and the shell that reads it
+    /// (<c>prisc_shared::session::SessionJson</c>) and the shell that reads it
     /// (<see cref="SessionInfo"/>). <see cref="SessionContract.RustSample"/> is a file the Rust
     /// writer's own serde shape produced with every field set (<c>cargo codegen</c> regenerates it
     /// from <c>session::contract_sample()</c>); it is read here the way

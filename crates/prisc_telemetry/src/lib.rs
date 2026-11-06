@@ -8,7 +8,7 @@
 //! (ui/Prisc.Ui/Util/SentryConfig.cs) under the same rule. Processes are
 //! told apart by the `app` tag each passes to [`init`], and share a release
 //! name, so a failure in any of them lines up against the same release. That
-//! sharing is the whole reason this lives in `prisc_rust_core`: a DSN, an
+//! sharing is the whole reason this is one crate: a DSN, an
 //! opt-out variable or a release format that drifted between binaries would
 //! split one incident across several projects.
 //!
@@ -27,7 +27,7 @@ use sentry::integrations::log::{LogFilter, SentryLogger};
 
 // The DSN, the opt-out variable, the release format and the environment are the contract every
 // process shares, the C# shell included (`contract::telemetry`, generated as `TelemetryContract`).
-use crate::contract::telemetry::{DSN, ENVIRONMENT, OPT_OUT_VARIABLE as OPT_OUT_VAR, RELEASE_FORMAT};
+use prisc_shared::contract::telemetry::{DSN, ENVIRONMENT, OPT_OUT_VARIABLE as OPT_OUT_VAR, RELEASE_FORMAT};
 
 /// True when this build reports at all. Debug builds never do.
 const fn reporting_compiled_in() -> bool {
@@ -177,7 +177,7 @@ fn opted_out() -> bool {
 /// Prisc.Ui; a build without it falls back to this crate's version. That fallback
 /// is reachable in a local `cargo build --release` — reporting is gated on
 /// `debug_assertions`, not on the variable — so such a build reports against
-/// release `prisc@<core's version>`. Harmless, but it is not "off".
+/// release `prisc@<this crate's version>`. Harmless, but it is not "off".
 ///
 /// Resolved here rather than per-binary so every process reports the same
 /// release string — `build.rs` re-runs this crate on a `PRISC_VERSION` change so

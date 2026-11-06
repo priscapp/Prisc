@@ -13,7 +13,7 @@
 //! in it would unwind harmlessly, but an `abort`, a segfault or a refused
 //! allocation on a degenerate selection kills its process — which in-process
 //! meant the overlay, mid-capture, with the user's selection already framed.
-//! The request/response contract is `prisc_rust_core::ocr`.
+//! The request/response contract is `prisc_shared::ocr`.
 
 mod client;
 
@@ -24,7 +24,7 @@ pub mod search;
 // crate both sides share. Re-exported under their original path because
 // everything downstream — `interaction`, `app`, the bubble renderer — refers
 // to them as `crate::ocr::*` and none of it cares where recognition runs.
-pub use prisc_rust_core::ocr::{OcrError, OcrLine, OcrOutcome, OcrRequest};
+pub use prisc_shared::ocr::{OcrError, OcrLine, OcrOutcome, OcrRequest};
 
 use std::path::Path;
 use std::sync::atomic::AtomicBool;

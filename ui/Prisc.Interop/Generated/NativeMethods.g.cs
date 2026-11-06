@@ -1142,7 +1142,7 @@ namespace Prisc.Interop
         /// <summary>
         ///  The open-time setup of an overlay window, as `PriscOverlayFlags` bits, applied in one call:
         ///  - `CoverMenuBar` (macOS): the overlay level (25) and collection behaviour (Stationary,
-        ///    CanJoinAllSpaces, FullScreenAuxiliary, IgnoresCycle) of `prisc_rust_core::desktop::overlay`,
+        ///    CanJoinAllSpaces, FullScreenAuxiliary, IgnoresCycle) of `prisc_desktop::overlay`,
         ///    so the window may cover the menu bar, fullscreen apps and every Space. Apply it before
         ///    positioning the window: below the menu bar level AppKit constrains the frame away from the bar.
         ///  - `OpaqueLayered` (Windows): `SetLayeredWindowAttributes(255, LWA_ALPHA)`, the mandatory

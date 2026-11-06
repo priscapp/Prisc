@@ -126,7 +126,7 @@ keystroke overlay's keycap legends are generated from the crate's tables by `car
 C# reaches native code only through `crates/prisc_interop`, one library loaded in-process by
 Prisc.Ui, Prisc.VideoRender and the test hosts (`prisc_interop.dll` / `libprisc_interop.dylib`,
 shipped beside the Prisc.Ui executable). Its C ABI is a thin layer over the shared Rust crates
-(`prisc_platform`, `prisc_rust_core`, `prisc_hotkeys`, `prisc_ipc`); the rules it keeps are in
+(`prisc_platform`, `prisc_desktop`, `prisc_shared`, `prisc_hotkeys`, `prisc_ipc`); the rules it keeps are in
 `crates/prisc_interop/README.md`. The C# side, `ui/Prisc.Interop`, is generated plus a thin
 hand-written wrapper per area.
 
@@ -297,7 +297,9 @@ cargo test -p prisc_platform
 cargo test -p prisc_interop
 cargo test -p prisc_codegen
 cargo test -p prisc_ipc
-cargo test -p prisc_rust_core
+cargo test -p prisc_shared
+cargo test -p prisc_desktop
+cargo test -p prisc_telemetry
 cargo test -p prisc_hotkeys
 cargo test -p prisc_capture
 cargo test -p prisc_scroll_driver

@@ -1,8 +1,7 @@
 use crate::system::{CapturedCursor, CursorImage};
-use prisc_rust_core::desktop;
 
 pub fn capture_cursor() -> Option<CapturedCursor> {
-    let Some(cursor) = desktop::cursor_snapshot() else {
+    let Some(cursor) = prisc_desktop::cursor_snapshot() else {
         warn!("GetCursorInfo failed");
         return None;
     };
@@ -21,7 +20,7 @@ pub fn capture_cursor() -> Option<CapturedCursor> {
         });
     }
 
-    let Some(icon) = desktop::read_cursor(cursor.handle) else {
+    let Some(icon) = prisc_desktop::read_cursor(cursor.handle) else {
         warn!("could not read the cursor bitmap");
         return None;
     };

@@ -1,9 +1,9 @@
 use crate::system::MonitorInfo;
-use prisc_rust_core::desktop::{self, CGPoint};
-use prisc_rust_core::geometry::{LogicalPoint, ScreenPoint};
+use prisc_desktop::CGPoint;
+use prisc_shared::geometry::{LogicalPoint, ScreenPoint};
 
 pub fn get_position(monitors: &[MonitorInfo]) -> ScreenPoint {
-    let cg_pt = desktop::cursor_location().unwrap_or(CGPoint::new(0.0, 0.0));
+    let cg_pt = prisc_desktop::cursor_location().unwrap_or(CGPoint::new(0.0, 0.0));
     let logical_pt = LogicalPoint::new(cg_pt.x, cg_pt.y);
 
     if let Some(m) = find_monitor_for_logical_point(logical_pt, monitors) {
@@ -23,7 +23,7 @@ pub fn set_position(pos: ScreenPoint, monitors: &[MonitorInfo]) {
         CGPoint::new(pos.x as f64 / s, pos.y as f64 / s)
     };
 
-    let _ = desktop::warp_cursor(logical_pt);
+    let _ = prisc_desktop::warp_cursor(logical_pt);
 }
 
 fn find_monitor_for_logical_point(pt: LogicalPoint, monitors: &[MonitorInfo]) -> Option<&MonitorInfo> {

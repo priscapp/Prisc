@@ -16,7 +16,7 @@ namespace Prisc
     /// <c>AccentTheme</c>, which writes it over the Semi theme's blue ramp — so
     /// <c>AppStyles.AccentColor</c>, reading the theme, hands back this same color.
     ///
-    /// The maths is <c>prisc_rust_core::color</c> (through <see cref="ColorMath"/>), the code the
+    /// The maths is <c>prisc_shared::color</c> (through <see cref="ColorMath"/>), the code the
     /// capture overlay paints with, so the two cannot drift; the constants are generated
     /// (<see cref="SharedDefaults"/>), so reading them never needs the native library.
     /// </summary>

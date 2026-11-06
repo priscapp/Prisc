@@ -5,7 +5,7 @@
 use prisc_obs::data::ObsData;
 use prisc_obs::encoder::ObsEncoder;
 use prisc_obs::error::ObsError;
-use prisc_rust_core::encoding;
+use prisc_shared::encoding;
 
 pub struct EncoderConfig {
     pub hw_accel: bool,
@@ -122,7 +122,7 @@ fn select_videotoolbox_encoder(available: &[String]) -> Option<String> {
 }
 
 // The crf mappings (NVENC cq, the VideoToolbox quality slider and its Intel-Mac
-// average bitrate) and their bounds are `prisc_rust_core::encoding`, the one
+// average bitrate) and their bounds are `prisc_shared::encoding`, the one
 // implementation the video renderer's `H264EncoderSettings` also calls, so a
 // recording and a render at the same crf hand their encoders the same numbers.
 // VideoToolbox ignores the x264 "crf" key entirely, so without the slider
@@ -438,7 +438,7 @@ mod tests {
     }
 
     /// The crf to slider mapping's own vectors live with it in
-    /// `prisc_rust_core::encoding`; this pins that the recorder routes its
+    /// `prisc_shared::encoding`; this pins that the recorder routes its
     /// u16 crf through it, saturating past 51.
     #[test]
     fn vt_quality_mapping_is_the_shared_one() {
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn videotoolbox_abr_fallback_scales_with_pixel_rate_and_clamps() {
-        // the scaling's own vectors live in prisc_rust_core::encoding; the
+        // the scaling's own vectors live in prisc_shared::encoding; the
         // reference point (3440x1440@30 -> 4 Mbps) is what reaches ObsData
         let vt = "com.apple.videotoolbox.videoencoder.ave.avc";
         let s = encoder_settings(vt, &cfg(18, false), &NO_CAPS);

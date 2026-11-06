@@ -1,10 +1,10 @@
-//! The H.264 quality mapping (README section 4.10) over `prisc_rust_core::encoding`, the one
+//! The H.264 quality mapping (README section 4.10) over `prisc_shared::encoding`, the one
 //! implementation the recorder's encoder settings use too.
 
 use crate::error::Error;
 use crate::ffi::status::PRISC_OK;
 use crate::{panic, util};
-use prisc_rust_core::encoding;
+use prisc_shared::encoding;
 
 /// One crf mapped onto every encoder (16 bytes): x264's crf (and AMF's qp), NVENC's constant-quality
 /// target, VideoToolbox's quality slider, and the Intel-Mac VideoToolbox average bitrate in kbps.

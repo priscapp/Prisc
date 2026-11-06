@@ -22,7 +22,7 @@
 //! that color. Such cursors are vanishingly rare; white (exact invert) and
 //! black (exact no-op), the cases that actually occur, are lossless.
 
-use prisc_rust_core::desktop::{mono_bit, mono_stride, IconBitmap, IconPixels};
+use prisc_desktop::{mono_bit, mono_stride, IconBitmap, IconPixels};
 
 /// A rasterized cursor, straight off the platform capture. Pixel planes are
 /// raw and unencoded (except where noted on [`SpritePixels`]); the writer
@@ -125,7 +125,7 @@ pub fn fnv1a64(state: u64, bytes: &[u8]) -> u64 {
 
 // ---------------------------------------------------------------------------
 // Plane decomposition (pure: the Windows rasterizer feeds the cursor bitmap
-// `prisc_rust_core::desktop::read_cursor` returned straight in here)
+// `prisc_desktop::read_cursor` returned straight in here)
 // ---------------------------------------------------------------------------
 
 /// The sprite for a cursor bitmap read off Windows, classified as `kind`.

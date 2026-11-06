@@ -1,5 +1,5 @@
 /// The application manifest is shared with the other Prisc binaries and
-/// lives in `crates/prisc_rust_core/` beside the Rust they share (see that crate's
+/// lives in `crates/prisc_build_support/` (see that crate's
 /// manifest note). It cannot be embedded *by* that crate — `/MANIFEST:EMBED`
 /// is a link argument, and only the crate producing the executable links one
 /// — so each binary's build script points at the single copy instead of
@@ -11,7 +11,7 @@
 /// `ort` crate's build) downloads pyke's prebuilt runtime for the cargo
 /// TARGET and links it statically, and its `copy-dylibs` feature stages the
 /// DirectML EP's helper dylib (DirectML.dll) beside the built exe.
-const SHARED_MANIFEST: &str = "../prisc_rust_core/app.manifest";
+const SHARED_MANIFEST: &str = "../prisc_build_support/app.manifest";
 
 fn main() {
     println!("cargo:rerun-if-changed={SHARED_MANIFEST}");

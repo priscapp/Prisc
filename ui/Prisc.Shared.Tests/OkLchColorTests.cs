@@ -7,7 +7,7 @@ using Xunit;
 namespace Prisc.Shared.Tests
 {
     /// <summary>
-    /// <see cref="OkLchColor"/>: its conversions are <c>prisc_rust_core::color</c>'s (vectors there:
+    /// <see cref="OkLchColor"/>: its conversions are <c>prisc_shared::color</c>'s (vectors there:
     /// the CSS reference values, the sRGB round trip, greys, the gamut mapping), so these check the
     /// hand-off, alpha and the gamut flag; the CSS text is this type's own and is pinned in full.
     /// </summary>

@@ -48,7 +48,7 @@ app_packages() {
 # Cargo packages of the app that must each be built in a cargo invocation of
 # their own, never beside app_packages. One `cargo build -p a -p b` unifies
 # dependency features across a and b, so the in-process library would pick up
-# prisc_rust_core's `telemetry` (Sentry) from prisc_capture; built alone it
+# prisc_capture's (all of AppKit, for one); built alone it
 # links exactly what its own manifest asks for (build-rust.yml then checks
 # the artifact). prisc_interop is the one native library Prisc.Ui and
 # Prisc.VideoRender load in-process; no C# ships on Linux, so it is not built

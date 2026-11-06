@@ -1,12 +1,12 @@
 /// The application manifest is shared with the other Prisc binaries and
-/// lives in `crates/prisc_rust_core/` beside the Rust they share (see that crate's
+/// lives in `crates/prisc_build_support/` (see that crate's
 /// manifest note). It cannot be embedded *by* that crate — `/MANIFEST:EMBED`
 /// is a link argument, and only the crate producing the executable links one
 /// — so each binary's build script points at the single copy instead of
 /// keeping its own. What it buys us is per-monitor DPI awareness; a copy
 /// that silently drifted would make one binary read virtualized coordinates
 /// and photograph the wrong pixels.
-const SHARED_MANIFEST: &str = "../prisc_rust_core/app.manifest";
+const SHARED_MANIFEST: &str = "../prisc_build_support/app.manifest";
 
 // Windows precompiles the capture shaders (WGSL → naga → HLSL → FXC → DXBC)
 // and the binary consumes the blobs directly — the d3d11 backend feeds

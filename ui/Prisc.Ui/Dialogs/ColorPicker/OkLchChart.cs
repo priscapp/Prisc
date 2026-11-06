@@ -184,7 +184,7 @@ namespace Prisc.UI.Dialogs.ColorPicker
 
             if (_sliceDirty)
             {
-                // one native call per slice: prisc_rust_core::color::chart samples every pixel
+                // one native call per slice: prisc_shared::color::chart samples every pixel
                 // centre, then resamples the pixels on the gamut's edge on a grid and gives them
                 // the share that is in gamut as their alpha, so the cut-out edge is smooth
                 OkLch.PaintSlice(Plane, Lightness, Chroma, Hue, pixelSize.Width, pixelSize.Height,

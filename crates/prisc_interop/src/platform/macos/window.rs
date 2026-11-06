@@ -9,7 +9,7 @@
 use objc2::MainThreadMarker;
 use objc2_app_kit::{NSApplication, NSView, NSWindow, NSWindowButton, NSWindowSharingType};
 use objc2_foundation::NSPoint;
-use prisc_rust_core::desktop::overlay::{self, OverlayFlags};
+use prisc_desktop::overlay::{self, OverlayFlags};
 
 use crate::error::Result;
 use crate::ffi::status::{PRISC_OK, PRISC_S_NONE};

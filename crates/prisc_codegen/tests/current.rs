@@ -404,7 +404,8 @@ fn the_dependency_walk_reaches_the_path_crates_and_not_the_crate_itself() {
     };
     for dependency in [
         "crates/prisc_platform/src",
-        "crates/prisc_rust_core/src",
+        "crates/prisc_desktop/src",
+        "crates/prisc_shared/src",
         "crates/prisc_hotkeys/src",
     ] {
         assert!(under(dependency), "no file under {dependency}");

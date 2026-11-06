@@ -1,7 +1,7 @@
 //! The pure exports through the library's public surface (README section 4.10): the accent
 //! palette, luminance, OKLCH and the picker's charts, the share-region rules and the H.264
 //! mapping. One success, the documented failures and a round trip per family; the behaviour
-//! vectors themselves live next to the single implementation in `prisc_rust_core`.
+//! vectors themselves live next to the single implementation in `prisc_shared`.
 
 use std::ptr;
 
@@ -75,7 +75,7 @@ fn colour_exports_refuse_bad_arguments() {
 
 #[test]
 fn note_ink_is_one_call_per_paper() {
-    // butter, and the same paper at half alpha (judged over white); the vectors live in prisc_rust_core
+    // butter, and the same paper at half alpha (judged over white); the vectors live in prisc_shared
     let mut ink = 0u32;
     assert_eq!(unsafe { prisc_color_note_ink(0xFFFFF1B8, &mut ink) }, OK);
     assert_eq!(ink, 0x594A0D);

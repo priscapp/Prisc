@@ -7,7 +7,6 @@ use std::path::Path;
 
 use objc2_core_graphics::{CGEventSource, CGEventSourceStateID, CGMouseButton};
 use prisc_obs::data::ObsData;
-use prisc_rust_core::desktop;
 
 use super::cursor_sprite::SpriteEvent;
 use super::region::{Rect, RegionPlan};
@@ -40,7 +39,7 @@ pub fn init_process() -> Result<(), String> {
 }
 
 pub fn enumerate_monitors() -> Vec<MonitorInfo> {
-    desktop::active_displays()
+    prisc_desktop::active_displays()
         .unwrap_or_default()
         .into_iter()
         .map(|d| {
@@ -156,7 +155,7 @@ pub const WEBCAM_DEVICE_KEY: &str = "device";
 /// The cursor position in global display coordinates (points); the origin
 /// when the window server will not say.
 fn cursor_location() -> (f64, f64) {
-    desktop::cursor_location().map_or((0.0, 0.0), |p| (p.x, p.y))
+    prisc_desktop::cursor_location().map_or((0.0, 0.0), |p| (p.x, p.y))
 }
 
 /// Cursor position in global display points (the same space as
@@ -629,8 +628,8 @@ mod cursor_shape {
 // ---------------------------------------------------------------------------
 
 /// Visible application windows other than the recorder's own, topmost first
-/// (`prisc_rust_core::desktop::window_list`). Floating panels are kept
-/// ([`desktop::APPLICATION_WINDOW_LAYERS`]), and anything under 25 points a
+/// (`prisc_desktop::window_list`). Floating panels are kept
+/// ([`prisc_desktop::APPLICATION_WINDOW_LAYERS`]), and anything under 25 points a
 /// side is dropped: the editor could not draw it, and each one costs a wire id
 /// out of the session's identity budget.
 ///
@@ -640,12 +639,12 @@ mod cursor_shape {
 /// holds; it is left faithful rather than falling back to the app name, so the
 /// permission failure stays visible.
 pub fn enumerate_windows() -> Vec<WindowInfo> {
-    let filter = desktop::WindowFilter {
-        layers: desktop::APPLICATION_WINDOW_LAYERS,
+    let filter = prisc_desktop::WindowFilter {
+        layers: prisc_desktop::APPLICATION_WINDOW_LAYERS,
         exclude_own_process: true,
-        min_size: desktop::MIN_WINDOW_SIZE as f64,
+        min_size: prisc_desktop::MIN_WINDOW_SIZE as f64,
     };
-    desktop::window_list(&filter)
+    prisc_desktop::window_list(&filter)
         .into_iter()
         .map(|w| {
             let b = w.bounds;

@@ -14,7 +14,7 @@ namespace Prisc
     /// OKLCH reaches well past sRGB, so a value here need not be displayable: <see cref="IsInSrgb"/>
     /// says whether it is, and <see cref="ToColor"/> maps it into sRGB the way oklch.com and CSS do
     /// for an out-of-gamut color: by lowering the chroma alone, so lightness and hue hold. The
-    /// conversions are <c>prisc_rust_core::color</c>'s (through <see cref="OkLch"/>); the CSS text
+    /// conversions are <c>prisc_shared::color</c>'s (through <see cref="OkLch"/>); the CSS text
     /// is this type's own.
     /// </remarks>
     public readonly record struct OkLchColor(double L, double C, double H, double Alpha = 1)

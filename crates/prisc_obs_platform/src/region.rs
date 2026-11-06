@@ -3,12 +3,12 @@
 
 use std::fmt;
 
-use prisc_rust_core::geometry::{self, RectExt, ScreenRect};
+use prisc_shared::geometry::{self, RectExt, ScreenRect};
 
 use crate::MonitorInfo;
 
 /// A capture region in the §1.1 capture space. The recorder stack's own
-/// shape (unsigned size) for what `prisc_rust_core::geometry::ScreenRect`
+/// shape (unsigned size) for what `prisc_shared::geometry::ScreenRect`
 /// spells as a euclid rect; it is what the status lines print, so it stays,
 /// and converts both ways.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +88,7 @@ impl std::error::Error for RegionError {}
 
 /// Parses `"x,y,w,h"` (all four components used, x,y included) with the
 /// parser every Prisc command line shares
-/// (`prisc_rust_core::geometry::parse_rect`), then holds the recorder's
+/// (`prisc_shared::geometry::parse_rect`), then holds the recorder's
 /// minimum of 2 px a side (the canvas floor).
 pub fn parse_region(s: &str) -> Result<Rect, RegionError> {
     let rect = geometry::parse_rect(s).map_err(RegionError::Parse)?;

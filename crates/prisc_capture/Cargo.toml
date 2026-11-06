@@ -8,7 +8,9 @@ license.workspace = true
 prisc_ipc.workspace = true
 # The permission checks and the foreground grant every Prisc process answers the same way.
 prisc_platform.workspace = true
-prisc_rust_core = { workspace = true, features = ["desktop", "telemetry"] }
+prisc_desktop.workspace = true
+prisc_shared.workspace = true
+prisc_telemetry.workspace = true
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 image = { workspace = true, features = ["png", "jpeg"] }

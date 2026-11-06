@@ -26,12 +26,12 @@ never speaks to it — the *overlay* does, per OCR press. (The same binary's
 `matte`/`denoise` subcommands serve the video editor's AI effects, over a
 different protocol owned by `Prisc.VideoSDK`'s `AiClient.cs`.) It is
 documented here because it is the third process in the same family and shares
-`prisc_rust_core` with the other two.
+`prisc_shared` with the other two.
 
 Source of truth: `src/settings.rs` (CLI), `src/session_output.rs` (session
 files), `crates/prisc_scroll_driver/src/drive.rs` (scrolling-capture driver),
 `src/ocr/client.rs` + `crates/prisc_ai/src/ocr.rs` (recognizer), and
-`prisc_rust_core` for what the binaries must agree on: the `session.json`
+`prisc_shared` for what the binaries must agree on: the `session.json`
 shape (`session.rs`), the recognition contract (`ocr.rs`) and the coordinate
 space (`geometry.rs`). The protocol messages and exit codes are
 `crates/prisc_ipc`. C# counterparts:

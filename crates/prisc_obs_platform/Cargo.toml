@@ -5,10 +5,11 @@ edition = "2021"
 license.workspace = true
 
 [dependencies]
-# The window list, monitors and cursor (prisc_rust_core::desktop), shared with the
-# overlay and the scrolling driver. Not `telemetry`: the helper binaries enable it
+# The window list, monitors and cursor (prisc_desktop), shared with the
+# overlay and the scrolling driver. Not prisc_telemetry: the helper binaries add it
 # themselves, off Linux only (HELPER_PROTOCOL.md §3.4).
-prisc_rust_core = { workspace = true, features = ["desktop"] }
+prisc_desktop = { workspace = true }
+prisc_shared = { workspace = true }
 # The physical mouse-button state for the input-capture frame rows, shared with the hook.
 prisc_platform = { workspace = true }
 prisc_obs = { workspace = true }
@@ -19,7 +20,7 @@ libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # The window list, monitors, DXGI outputs and cursor reads come through
-# prisc_rust_core::desktop, which declares its own features.
+# prisc_desktop, which declares its own features.
 windows = { workspace = true, features = [
     "Win32_Foundation",
     # Stock cursor handles (LoadCursorW) for the cursor classifier.

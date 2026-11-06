@@ -38,7 +38,7 @@ namespace Prisc.VideoSDK.Ai
     public static partial class MatteGenerator
     {
         // MaxAnalysisSide, the analysis resolution's cap on the shorter side (see the class
-        // remarks), is generated (MatteGenerator.g.cs) from prisc_rust_core::contract::matte, the
+        // remarks), is generated (MatteGenerator.g.cs) from prisc_shared::contract::matte, the
         // table prisc_ai's downsample ratio reads too.
 
         /// <summary>

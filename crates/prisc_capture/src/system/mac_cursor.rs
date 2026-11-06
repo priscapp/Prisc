@@ -2,7 +2,7 @@ use crate::system::{CapturedCursor, CursorImage, MonitorInfo};
 
 use objc2_app_kit::NSCursor;
 use objc2_core_graphics::{CGBitmapContextCreate, CGColorSpace, CGContext, CGImage};
-use prisc_rust_core::desktop::{CGPoint, CGRect, CGSize};
+use prisc_desktop::{CGPoint, CGRect, CGSize};
 
 #[allow(deprecated)]
 pub fn capture_cursor(monitors: &[MonitorInfo]) -> Option<CapturedCursor> {

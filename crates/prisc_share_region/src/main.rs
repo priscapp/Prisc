@@ -229,8 +229,8 @@ fn main() {
     status::init(prisc_ipc::open::<share_region::Event>("prisc_share_region"));
     // Every exit goes through prisc_ipc::lifetime::exit, never a drop of this
     // guard, so the session is ended and the queue flushed by the exit hook.
-    let _sentry = prisc_rust_core::telemetry::init("prisc_share_region");
-    prisc_ipc::lifetime::on_exit(prisc_rust_core::telemetry::shutdown_hook);
+    let _sentry = prisc_telemetry::init("prisc_share_region");
+    prisc_ipc::lifetime::on_exit(prisc_telemetry::shutdown_hook);
     prisc_ipc::lifetime::set_exit_fn(prisc_obs_platform::exit_process);
 
     // Route every libobs log line to stderr (and install the crash handler)

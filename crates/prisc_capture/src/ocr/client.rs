@@ -1,6 +1,6 @@
 //! Drives the `prisc_ai ocr` child process: one spawn per recognition.
 //!
-//! The wire format lives in `prisc_rust_core::ocr`. What lives here is the
+//! The wire format lives in `prisc_shared::ocr`. What lives here is the
 //! parent's half of it — finding the binary, feeding it pixels without ever
 //! blocking on a full pipe, turning BACK into a kill, and mapping however the
 //! child ended into an [`OcrError`].
@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use prisc_rust_core::ocr::{OcrError, OcrOutcome, OcrRequest, OcrResponse, RequestHeader, RESULT_FILE_NAME};
+use prisc_shared::ocr::{OcrError, OcrOutcome, OcrRequest, OcrResponse, RequestHeader, RESULT_FILE_NAME};
 
 /// The binary we spawn, found by `prisc_ipc::locate::sibling`: each directory
 /// of `PRISC_HELPERS_DIR`, then beside our own executable, which is where CI
@@ -277,7 +277,7 @@ impl Drop for ChildGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use prisc_rust_core::geometry::{RectExt, ScreenRect};
+    use prisc_shared::geometry::{RectExt, ScreenRect};
 
     /// A capture with a session directory keeps both artifacts there; one
     /// without gets a collision-proof temp path and no log.

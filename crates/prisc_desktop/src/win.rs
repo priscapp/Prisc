@@ -29,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::{has_alpha, is_shell_window_class, mono_stride, split_mono_planes, IconBitmap, IconPixels, MIN_WINDOW_SIZE};
-use crate::geometry::{RectExt, ScreenPoint, ScreenRect};
+use prisc_shared::geometry::{RectExt, ScreenPoint, ScreenRect};
 
 // ---------------------------------------------------------------------------
 // Top-level windows

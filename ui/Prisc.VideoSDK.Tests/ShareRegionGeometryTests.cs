@@ -7,11 +7,11 @@ using Xunit;
 namespace Prisc.VideoSDK.Tests
 {
     /// <summary>
-    /// The share-region resize facade over <c>prisc_rust_core::share_region</c>, the rule the region
+    /// The share-region resize facade over <c>prisc_shared::share_region</c>, the rule the region
     /// helper applies to every region it mirrors. The rules themselves (the floor and even
     /// rounding, the moving edge absorbing the clamp, the edge swap on a crossing, the pure
     /// function of the press-time anchor) are pinned case by case next to that one implementation
-    /// (crates/prisc_rust_core/src/share_region.rs, which carries this file's former vectors); what
+    /// (crates/prisc_shared/src/share_region.rs, which carries this file's former vectors); what
     /// is left here is that <see cref="ShareRegionGeometry"/> hands the rect across and back intact,
     /// in the gizmo's handle numbering, and refuses what it cannot pass.
     /// </summary>

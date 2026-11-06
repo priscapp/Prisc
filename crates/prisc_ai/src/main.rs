@@ -4,10 +4,10 @@
 //! One binary, one subcommand per job kind, one process per job:
 //!
 //! * `ocr` — the capture overlay (`prisc_capture`) spawns it per OCR
-//!   press, writes a [`RequestHeader`](prisc_rust_core::ocr::RequestHeader)
+//!   press, writes a [`RequestHeader`](prisc_shared::ocr::RequestHeader)
 //!   line and the selected region's raw BGRA down stdin, and reads the
 //!   PaddleOCR result from the `--out` file after it exits (see
-//!   `prisc_rust_core::ocr` for the wire format and [`ocr`] for the pipeline).
+//!   `prisc_shared::ocr` for the wire format and [`ocr`] for the pipeline).
 //! * `matte` / `denoise` — `Prisc.VideoSDK`'s sidecar generators
 //!   (`AiClient.cs`) spawn it per job and stream the raw payload down stdin:
 //!   `matte` takes tightly packed RGB24 frames and answers each with a

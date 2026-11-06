@@ -9,12 +9,12 @@ rust-version.workspace = true
 publish = false
 
 # The only native library C# loads in-process (Prisc.Ui, Prisc.VideoRender and their tests): a thin
-# C ABI over prisc_platform, prisc_rust_core, prisc_hotkeys and prisc_ipc, plus the OS code that has
+# C ABI over prisc_platform, prisc_desktop, prisc_shared, prisc_hotkeys and prisc_ipc, plus the OS code that has
 # no other Rust consumer. README.md is the ABI contract; crates/prisc_codegen generates the C#
 # bindings from src/ffi (`cargo codegen`) and enforces the crate rules (`cargo test -p prisc_codegen`).
 #
-# Never a dependency of anything (no workspace entry), and never depends on sentry, the telemetry
-# feature of prisc_rust_core or any recorder-stack / prisc_ai crate: it runs inside processes that
+# Never a dependency of anything (no workspace entry), and never depends on sentry, prisc_telemetry
+# or any recorder-stack / prisc_ai crate: it runs inside processes that
 # already report, and those stacks belong in their own processes.
 
 [lib]
@@ -33,9 +33,8 @@ harness = false
 
 [dependencies]
 prisc_platform.workspace = true
-# The workspace entry has default features off, so this is `desktop` and nothing else: never
-# `telemetry`, which would pull sentry into the library.
-prisc_rust_core = { workspace = true, features = ["desktop"] }
+prisc_desktop.workspace = true
+prisc_shared.workspace = true
 prisc_hotkeys.workspace = true
 prisc_ipc.workspace = true
 

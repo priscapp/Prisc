@@ -22,14 +22,14 @@ namespace Prisc
     /// local crashes belong in the debugger, not in the issue tracker.</para>
     /// <para>Exceptions only — there is deliberately no logging bridge on this side. The Rust
     /// capturer additionally routes its <c>error!</c> log calls to Sentry
-    /// (crates/prisc_rust_core/src/telemetry.rs); the shell does not.</para>
+    /// (crates/prisc_telemetry/src/lib.rs); the shell does not.</para>
     /// <para>Lives in the root <c>Prisc</c> namespace so every call site resolves it without a
     /// using directive, the same way <see cref="Constants"/> does.</para>
     /// </remarks>
     internal static class SentryConfig
     {
         // The DSN, the opt-out variable, the release format and the environment are one contract
-        // with every Rust process (prisc_rust_core::contract::telemetry, generated as
+        // with every Rust process (prisc_shared::contract::telemetry, generated as
         // TelemetryContract), so a failure anywhere lands in one project under one release.
 
         /// <summary>Set to any non-empty value to turn reporting off

@@ -22,7 +22,7 @@
 //! "hardware default" sentinel 1, NaN, infinity). A caller that needs a number picks its own
 //! fallback at its use site (the capture overlay uses 60 Hz, Prisc.Ui reports 0 = unknown).
 
-use crate::geometry::{ScreenPoint, ScreenRect};
+use prisc_shared::geometry::{ScreenPoint, ScreenRect};
 
 /// One monitor.
 #[derive(Clone, Debug, PartialEq)]
@@ -188,8 +188,8 @@ mod imp {
     };
 
     use super::{known_refresh, Fallback, OsError, Screen};
-    use crate::desktop::{monitor, monitors, Monitor};
-    use crate::geometry::{ScreenPoint, ScreenRect};
+    use crate::{monitor, monitors, Monitor};
+    use prisc_shared::geometry::{ScreenPoint, ScreenRect};
 
     pub(super) fn list() -> Result<Vec<Screen>, OsError> {
         let monitors = monitors().map_err(|e| OsError {
@@ -284,8 +284,8 @@ mod imp {
 #[cfg(target_os = "macos")]
 mod imp {
     use super::{known_refresh, select_at_point, select_at_rect, Fallback, OsError, Screen};
-    use crate::desktop::{active_displays, Display};
-    use crate::geometry::{ScreenPoint, ScreenRect};
+    use crate::{active_displays, Display};
+    use prisc_shared::geometry::{ScreenPoint, ScreenRect};
 
     pub(super) fn list() -> Result<Vec<Screen>, OsError> {
         let displays = active_displays().map_err(|e| OsError {
@@ -339,7 +339,7 @@ mod imp {
 #[cfg(not(any(windows, target_os = "macos")))]
 mod imp {
     use super::{Fallback, OsError, Screen};
-    use crate::geometry::{ScreenPoint, ScreenRect};
+    use prisc_shared::geometry::{ScreenPoint, ScreenRect};
 
     pub(super) fn list() -> Result<Vec<Screen>, OsError> {
         Ok(Vec::new())
@@ -361,7 +361,7 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::RectExt;
+    use prisc_shared::geometry::RectExt;
 
     fn screen(id: u64, x: i32, y: i32, w: i32, h: i32, primary: bool) -> Screen {
         Screen {

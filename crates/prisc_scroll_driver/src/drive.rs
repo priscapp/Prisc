@@ -46,7 +46,7 @@ use crate::frame::{self, Frame};
 use crate::input::{self, Target};
 use crate::output;
 use crate::stitch::{AppendResult, Stitcher};
-use prisc_rust_core::geometry::{ScreenPoint, ScreenRect};
+use prisc_shared::geometry::{ScreenPoint, ScreenRect};
 
 /// Wheel notches in the first burst. One notch is a crawl on most apps
 /// (many frames, a slow run), while a burst big enough to clear the
@@ -332,7 +332,7 @@ pub fn run(args: CliArgs, channel: Channel<Event>) -> ! {
             error,
         }) => {
             error!("scroll driver failed: {error:#}");
-            prisc_rust_core::telemetry::capture_error(&error);
+            prisc_telemetry::capture_error(&error);
             out().fatal(code, format!("{error:#}"))
         }
     }
@@ -1043,7 +1043,7 @@ impl Signals {
 mod tests {
     use super::*;
     use clap::Parser;
-    use prisc_rust_core::geometry::RectExt;
+    use prisc_shared::geometry::RectExt;
 
     #[test]
     fn drive_args_require_the_scroll_trio() {

@@ -5,7 +5,7 @@
 //!
 //! The tokens the Avalonia floating strips share with this panel (colours,
 //! radius, padding, sizes, veils, the tooltip and the shadow) come from
-//! `prisc_rust_core::contract::tray`, which C#'s `TrayTokens` is generated from,
+//! `prisc_shared::contract::tray`, which C#'s `TrayTokens` is generated from,
 //! so the Rust overlay and the C# windows keep looking like one product; the rest
 //! are this panel's own. Nothing else in the panel hard-codes a colour, a radius
 //! or a font size.
@@ -18,7 +18,7 @@ use super::model::GroupTone;
 
 pub mod tokens {
     use egui::{vec2, Color32, CornerRadius, Shadow, Stroke, Vec2};
-    use prisc_rust_core::contract::{tray as shared, Rgb};
+    use prisc_shared::contract::{tray as shared, Rgb};
 
     /// A shared `0x00RRGGBB` token as an opaque egui colour.
     const fn rgb(c: Rgb) -> Color32 {

@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::{cs, Output};
 
-const SOURCE: &str = "prisc_rust_core::session::contract_sample() in crates/prisc_rust_core/src/session.rs";
+const SOURCE: &str = "prisc_shared::session::contract_sample() in crates/prisc_shared/src/session.rs";
 
 /// The session.json golden sample.
 pub static OUTPUTS: &[Output] = &[Output {
@@ -19,7 +19,7 @@ pub static OUTPUTS: &[Output] = &[Output {
 
 fn render(_root: &Path) -> anyhow::Result<String> {
     // The line in the writers' own field order; the field list from the parsed value.
-    let line = serde_json::to_string(&prisc_rust_core::session::contract_sample())?;
+    let line = serde_json::to_string(&prisc_shared::session::contract_sample())?;
     let sample: serde_json::Value = serde_json::from_str(&line)?;
     let fields: Vec<String> = sample
         .as_object()

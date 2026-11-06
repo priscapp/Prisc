@@ -22,9 +22,9 @@ pub unsafe extern "C" fn prisc_cursor_position(out_point: *mut PriscPoint) -> i3
 unsafe fn cursor_position(out_point: *mut PriscPoint) -> Result {
     let out_point = util::out(out_point, "out_point")?;
     #[cfg(windows)]
-    let point = prisc_rust_core::desktop::cursor_position().map(|p| (p.x, p.y));
+    let point = prisc_desktop::cursor_position().map(|p| (p.x, p.y));
     #[cfg(target_os = "macos")]
-    let point = prisc_rust_core::desktop::cursor_location().map(|p| (p.x.floor() as i32, p.y.floor() as i32));
+    let point = prisc_desktop::cursor_location().map(|p| (p.x.floor() as i32, p.y.floor() as i32));
     #[cfg(any(windows, target_os = "macos"))]
     {
         match point {

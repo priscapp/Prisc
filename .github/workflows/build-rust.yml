@@ -16,7 +16,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: The nbgv version ci.yml's version job computed, stamped into the Sentry release name (crates/prisc_rust_core/src/telemetry.rs) and the MSIX manifest.
+        description: The nbgv version ci.yml's version job computed, stamped into the Sentry release name (crates/prisc_telemetry/src/lib.rs) and the MSIX manifest.
         type: string
         required: true
     secrets:
@@ -61,7 +61,7 @@ jobs:
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
       # The Rust build has no nbgv hook, so the version ci.yml computed once is stamped into the
-      # Sentry release name (crates/prisc_rust_core/src/telemetry.rs) and the MSIX manifest.
+      # Sentry release name (crates/prisc_telemetry/src/lib.rs) and the MSIX manifest.
       PRISC_VERSION: ${{ inputs.version }}
       OUT: target/${{ matrix.target }}/release
     steps:
@@ -89,8 +89,8 @@ jobs:
           cargo build --release --target ${{ matrix.target }} $(tools/staging/stage-app.sh packages ${{ matrix.rid }})
 
       # The in-process library gets a cargo invocation of its own: built beside the packages above,
-      # cargo would unify features across them and hand it prisc_rust_core's `telemetry` (Sentry)
-      # from prisc_capture. Fails on cargo's "`default-features` is ignored for X" warning (cargo wraps
+      # cargo would unify features across them and hand it prisc_capture's (all of AppKit, for one).
+      # Fails on cargo's "`default-features` is ignored for X" warning (cargo wraps
       # the key in backticks), which means a dependency line silently enables more than it asks for,
       # and on ld64's "duplicate symbol" warning.
       - name: Build isolated rust libraries

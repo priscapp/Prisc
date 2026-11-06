@@ -31,7 +31,7 @@ use crate::region::Rect;
 // both in density-independent units (see `MouseInfo::scale`). Shared with the
 // video editor's composition (C# `ClickHighlight`), so a click highlighted live
 // and one composed in the editor animate alike.
-use prisc_rust_core::contract::click_highlight::{
+use prisc_shared::contract::click_highlight::{
     DURATION_MS, MAX_OPACITY, RADIUS_GROWTH_DIP as RADIUS_GROWTH, RADIUS_START_DIP as RADIUS_START,
 };
 /// `tracker.png` is 100x100 with the disc inscribed, so its native radius is 50

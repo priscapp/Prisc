@@ -9,7 +9,7 @@ license.workspace = true
 # - `ocr`: PaddleOCR text recognition for the capture overlay. The overlay
 #   (`prisc_capture`) spawns it per OCR press with the selected pixels on
 #   stdin and reads the answer from the `--out` file (contract in
-#   `prisc_rust_core::ocr`).
+#   `prisc_shared::ocr`).
 # - `matte` / `denoise`: Prisc.VideoSDK's sidecar generators (AiClient.cs)
 #   spawn it per job and stream raw frames/samples down stdin; it streams
 #   matte frames / denoised samples back up stdout.
@@ -31,7 +31,7 @@ license.workspace = true
 [dependencies]
 # claim_stdout (the payload-channel guard), the signal handler and the exit codes.
 prisc_ipc.workspace = true
-prisc_rust_core = { workspace = true, features = ["telemetry"] }
+prisc_shared.workspace = true
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 log.workspace = true

@@ -1,13 +1,13 @@
 //! Colour maths (README section 4.10): the accent palette, relative luminance, a sticky note's
 //! ink, OKLCH in both directions and the colour picker's gamut charts, all over
-//! `prisc_rust_core::color`, the one implementation the capture overlay uses too. All rgb values
+//! `prisc_shared::color`, the one implementation the capture overlay uses too. All rgb values
 //! are `0x00RRGGBB`; a set top byte is `PRISC_E_INVALID_ARG`, so an ARGB value passed by mistake is
 //! refused rather than misread. The note ink's paper is the one ARGB parameter, and says so.
 
 use crate::error::{Error, Result};
 use crate::ffi::status::PRISC_OK;
 use crate::{panic, util};
-use prisc_rust_core::color::{self, chart, palette::AccentPalette, OkLch};
+use prisc_shared::color::{self, chart, palette::AccentPalette, OkLch};
 
 /// An OKLCH colour (24 bytes): lightness 0 to 1, chroma, hue in degrees. A value outside sRGB is
 /// valid input; the conversions say whether it is displayable.

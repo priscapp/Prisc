@@ -8,12 +8,14 @@ license.workspace = true
 # this binary scrolls, photographs and stitches. Kept out of the capturer because starting a
 # window or GPU here would put pixels in front of the very content it is about to photograph.
 
-# image, euclid and sentry all reach this crate through prisc_rust_core and are not named directly.
+# image, euclid and sentry reach this crate through prisc_shared and prisc_telemetry and are not named directly.
 [dependencies]
 prisc_ipc.workspace = true
 # The permission preflight and the Esc poll (physical key state), shared with the other helpers.
 prisc_platform.workspace = true
-prisc_rust_core = { workspace = true, features = ["desktop", "telemetry"] }
+prisc_desktop.workspace = true
+prisc_shared.workspace = true
+prisc_telemetry.workspace = true
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 log.workspace = true
@@ -33,7 +35,7 @@ windows = { workspace = true, features = [
 ] }
 
 # The macOS half of input: objc2-core-graphics carries the scroll events and the window ids (the
-# window list, cursor warp and frame grab come through prisc_rust_core::desktop, the Esc poll and
+# window list, cursor warp and frame grab come through prisc_desktop, the Esc poll and
 # the Accessibility preflight through prisc_platform), and objc2-app-kit provides
 # NSRunningApplication for activation.
 [target.'cfg(target_os = "macos")'.dependencies]

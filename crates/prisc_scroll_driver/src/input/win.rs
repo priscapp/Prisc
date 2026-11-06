@@ -26,8 +26,7 @@ use windows::Win32::{
 use windows::Win32::Foundation::HWND;
 
 use super::{WheelDir, RAISE_POLL, RAISE_TIMEOUT};
-use prisc_rust_core::desktop;
-use prisc_rust_core::geometry::{RectExt, ScreenPoint, ScreenRect};
+use prisc_shared::geometry::{RectExt, ScreenPoint, ScreenRect};
 
 /// The window the driver is scrolling. A top-level `HWND` — the marker's
 /// handle when it still holds up, else whatever `WindowFromPoint` reports.
@@ -216,7 +215,7 @@ pub fn describe_window_at(point: ScreenPoint) -> String {
 /// cursor is a question about what the *user* is doing, and re-parking it
 /// would erase the answer.
 pub fn park_cursor(point: ScreenPoint) {
-    if !desktop::set_cursor_position(point) {
+    if !prisc_desktop::set_cursor_position(point) {
         warn!("SetCursorPos({}, {}) failed; wheel events may land elsewhere", point.x, point.y);
     }
 }
@@ -225,7 +224,7 @@ pub fn park_cursor(point: ScreenPoint) {
 /// desktop, a secure-desktop transition). Callers treat that as "no news",
 /// never as "it moved".
 pub fn cursor_pos() -> Option<ScreenPoint> {
-    desktop::cursor_position()
+    prisc_desktop::cursor_position()
 }
 
 /// Is Escape physically down right now?

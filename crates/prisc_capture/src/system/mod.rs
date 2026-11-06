@@ -42,10 +42,9 @@ mod mac_mouse;
 #[cfg(target_os = "macos")]
 mod mac_walker;
 
-use prisc_rust_core::desktop;
 #[cfg(target_os = "macos")]
-use prisc_rust_core::geometry::{LogicalPoint, LogicalSize};
-use prisc_rust_core::geometry::{RectExt, ScreenPoint, ScreenPointF, ScreenRect, WindowPoint};
+use prisc_shared::geometry::{LogicalPoint, LogicalSize};
+use prisc_shared::geometry::{RectExt, ScreenPoint, ScreenPointF, ScreenRect, WindowPoint};
 
 /// What the walker suggests capturing for a point: the rect, plus the
 /// corner radius (physical px, 0 = square) the OS composites that window
@@ -174,11 +173,11 @@ pub struct MonitorInfo {
 #[allow(dead_code)]
 impl MonitorInfo {
     pub fn window_to_screen(&self, pt: WindowPoint) -> ScreenPointF {
-        prisc_rust_core::geometry::window_to_screen(self.bounds, pt)
+        prisc_shared::geometry::window_to_screen(self.bounds, pt)
     }
 
     pub fn screen_to_window(&self, pt: ScreenPointF) -> WindowPoint {
-        prisc_rust_core::geometry::screen_to_window(self.bounds, pt)
+        prisc_shared::geometry::screen_to_window(self.bounds, pt)
     }
 }
 
@@ -247,16 +246,16 @@ pub enum CursorImage {
 
 impl CursorImage {
     /// The overlay's form of a cursor bitmap read off Windows
-    /// (`desktop::read_cursor`). `None` for an empty bitmap.
+    /// (`prisc_desktop::read_cursor`). `None` for an empty bitmap.
     #[cfg_attr(not(windows), allow(dead_code))]
-    fn from_icon(width: u32, height: u32, pixels: desktop::IconPixels) -> Option<Self> {
+    fn from_icon(width: u32, height: u32, pixels: prisc_desktop::IconPixels) -> Option<Self> {
         if width == 0 || height == 0 {
             return None;
         }
         let (w, h) = (width as usize, height as usize);
-        let stride = desktop::mono_stride(width);
+        let stride = prisc_desktop::mono_stride(width);
         match pixels {
-            desktop::IconPixels::Color {
+            prisc_desktop::IconPixels::Color {
                 mut bgra,
                 and_mask,
             } => {
@@ -266,7 +265,7 @@ impl CursorImage {
                 if let Some(and) = and_mask {
                     for y in 0..h {
                         for x in 0..w {
-                            bgra[(y * w + x) * 4 + 3] = if desktop::mono_bit(&and, stride, x, y) { 0 } else { 0xFF };
+                            bgra[(y * w + x) * 4 + 3] = if prisc_desktop::mono_bit(&and, stride, x, y) { 0 } else { 0xFF };
                         }
                     }
                 }
@@ -276,7 +275,7 @@ impl CursorImage {
                     height,
                 })
             }
-            desktop::IconPixels::Mono {
+            prisc_desktop::IconPixels::Mono {
                 and,
                 xor,
             } => {
@@ -284,7 +283,7 @@ impl CursorImage {
                     let mut out = vec![0u8; w * h * 4];
                     for y in 0..h {
                         for x in 0..w {
-                            if desktop::mono_bit(plane, stride, x, y) {
+                            if prisc_desktop::mono_bit(plane, stride, x, y) {
                                 out[(y * w + x) * 4..][..4].fill(0xFF);
                             }
                         }
@@ -298,7 +297,7 @@ impl CursorImage {
                     height,
                 })
             }
-            desktop::IconPixels::Rendered {
+            prisc_desktop::IconPixels::Rendered {
                 over_black,
                 over_white,
             } => Self::from_renders(width, height, &over_black, &over_white),
@@ -398,11 +397,11 @@ pub struct CapturedDesktop {
 
 pub struct SystemInterop;
 
-/// Exit codes, re-exported from `prisc_rust_core::exit` so the existing
+/// Exit codes, re-exported from `prisc_ipc::exit` so the existing
 /// `system::EXIT_*` spelling keeps working. They are defined there because
 /// the scrolling-capture driver exits with the same meanings and the shell
 /// reads both processes' codes through one table.
-pub use prisc_rust_core::exit::{CAPTURE_FAILED as EXIT_CAPTURE_FAILED, NO_SCREEN_PERMISSION as EXIT_NO_SCREEN_PERMISSION};
+pub use prisc_ipc::exit::{CAPTURE_FAILED as EXIT_CAPTURE_FAILED, NO_SCREEN_PERMISSION as EXIT_NO_SCREEN_PERMISSION};
 
 #[cfg(windows)]
 impl SystemInterop {
@@ -412,11 +411,11 @@ impl SystemInterop {
     }
 
     pub fn get_mouse_position(_monitors: &[MonitorInfo]) -> ScreenPoint {
-        desktop::cursor_position().unwrap_or_default()
+        prisc_desktop::cursor_position().unwrap_or_default()
     }
 
     pub fn set_mouse_position(pos: ScreenPoint, _monitors: &[MonitorInfo]) {
-        desktop::set_cursor_position(pos);
+        prisc_desktop::set_cursor_position(pos);
     }
 
     /// Record the shell's pid (`--shell-pid`) for
@@ -484,7 +483,7 @@ impl SystemInterop {
         const LOW_VRAM_BYTES: u64 = 1024 * 1024 * 1024;
         // GDI device name (`\\.\DISPLAY1`) -> the DXGI adapter driving it,
         // which is what the render workers pick their GPU by.
-        let adapters: std::collections::HashMap<String, desktop::AdapterInfo> = desktop::dxgi_outputs()
+        let adapters: std::collections::HashMap<String, prisc_desktop::AdapterInfo> = prisc_desktop::dxgi_outputs()
             .unwrap_or_default()
             .into_iter()
             .filter_map(|o| {
@@ -500,10 +499,10 @@ impl SystemInterop {
             })
             .collect();
 
-        // The shared screen list (desktop::screens, the one Prisc.Ui reads too): rcMonitor bounds,
+        // The shared screen list (prisc_desktop::screens, the one Prisc.Ui reads too): rcMonitor bounds,
         // the effective DPI scale (1.0 when unreadable) and the refresh rate, unknown for the
         // 0 / 1 "hardware default" sentinels, where the overlay targets its own 60 Hz.
-        desktop::screens::list()
+        prisc_desktop::screens::list()
             .expect("Unable to enumerate monitors")
             .into_iter()
             .map(|screen| {
@@ -893,7 +892,7 @@ mod tests {
         let image = CursorImage::from_icon(
             2,
             1,
-            desktop::IconPixels::Color {
+            prisc_desktop::IconPixels::Color {
                 bgra: bgra.clone(),
                 and_mask: None,
             },
@@ -905,12 +904,12 @@ mod tests {
     #[test]
     fn a_masked_color_cursor_takes_its_alpha_from_the_and_mask() {
         // Two pixels: AND=0 (opaque), AND=1 (transparent).
-        let mut and = vec![0u8; desktop::mono_stride(2)];
+        let mut and = vec![0u8; prisc_desktop::mono_stride(2)];
         and[0] = 0b0100_0000;
         let image = CursorImage::from_icon(
             2,
             1,
-            desktop::IconPixels::Color {
+            prisc_desktop::IconPixels::Color {
                 bgra: vec![1, 2, 3, 0, 4, 5, 6, 0],
                 and_mask: Some(and),
             },
@@ -923,7 +922,7 @@ mod tests {
     fn a_mono_cursor_keeps_its_and_and_xor_planes() {
         // 33 px wide, so the DWORD-aligned stride (8 bytes) differs from the
         // packed row (5 bytes); pixel 32 sits in the fifth byte.
-        let stride = desktop::mono_stride(33);
+        let stride = prisc_desktop::mono_stride(33);
         let mut and = vec![0u8; stride];
         let mut xor = vec![0u8; stride];
         and[4] = 0x80;
@@ -931,7 +930,7 @@ mod tests {
         let image = CursorImage::from_icon(
             33,
             1,
-            desktop::IconPixels::Mono {
+            prisc_desktop::IconPixels::Mono {
                 and,
                 xor,
             },
@@ -953,7 +952,7 @@ mod tests {
         let image = CursorImage::from_icon(
             3,
             1,
-            desktop::IconPixels::Rendered {
+            prisc_desktop::IconPixels::Rendered {
                 over_black,
                 over_white,
             },
@@ -970,7 +969,7 @@ mod tests {
         let image = CursorImage::from_icon(
             3,
             1,
-            desktop::IconPixels::Rendered {
+            prisc_desktop::IconPixels::Rendered {
                 over_black: over_black.clone(),
                 over_white: over_white.clone(),
             },
@@ -992,7 +991,7 @@ mod tests {
 
     #[test]
     fn short_renders_and_empty_bitmaps_are_not_composited() {
-        let rendered = desktop::IconPixels::Rendered {
+        let rendered = prisc_desktop::IconPixels::Rendered {
             over_black: vec![0; 4],
             over_white: vec![0; 4],
         };
@@ -1000,7 +999,7 @@ mod tests {
         assert!(CursorImage::from_icon(
             0,
             1,
-            desktop::IconPixels::Mono {
+            prisc_desktop::IconPixels::Mono {
                 and: vec![],
                 xor: vec![]
             }

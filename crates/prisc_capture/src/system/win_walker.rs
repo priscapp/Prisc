@@ -14,8 +14,8 @@ use windows::Win32::{
 };
 
 use super::{HitTestResult, MonitorInfo, ObstructedWindow, WindowCaptureRef, WindowTarget};
-use prisc_rust_core::desktop::{self, WindowFilter};
-use prisc_rust_core::geometry::{RectExt, ScreenPoint, ScreenRect};
+use prisc_desktop::WindowFilter;
+use prisc_shared::geometry::{RectExt, ScreenPoint, ScreenRect};
 
 /// Minimum child window dimension (px) during hit-test child walk.
 const MIN_WINDOW_CHILD_SIZE: i32 = 200;
@@ -88,7 +88,7 @@ impl WindowWalker {
             exclude_own_process: false,
         };
         let mut windows: Vec<WindowEntry> = Vec::new();
-        for window in desktop::top_level_windows(&filter) {
+        for window in prisc_desktop::top_level_windows(&filter) {
             if let Some(entry) = evaluate_window(window, &windows, visibility_threshold, rounded_corners) {
                 windows.push(entry);
             }
@@ -376,7 +376,7 @@ impl WindowWalker {
 /// for the peek feature. `accepted` is every window above this one in
 /// Z-order that survived.
 fn evaluate_window(
-    window: desktop::TopLevelWindow,
+    window: prisc_desktop::TopLevelWindow,
     accepted: &[WindowEntry],
     visibility_threshold: f32,
     rounded_corners: bool,

@@ -17,7 +17,7 @@ namespace Prisc.VideoSDK.Media
     /// <c>crf</c> (0 best – 51 worst, x264's scale) is the single quality knob the caller sees;
     /// each encoder maps it onto its own scale so a given crf lands on comparable bytes and
     /// quality whichever encoder ends up selected. The mapping is the one measured for the
-    /// recorder, and the recorder's own (<c>prisc_rust_core::encoding</c>, through
+    /// recorder, and the recorder's own (<c>prisc_shared::encoding</c>, through
     /// <see cref="H264Quality"/>; its bounds are generated into this class):
     /// </para>
     /// <list type="bullet">

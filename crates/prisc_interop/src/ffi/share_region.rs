@@ -1,4 +1,4 @@
-//! The share-region rectangle rules (README section 4.10) over `prisc_rust_core::share_region`, the
+//! The share-region rectangle rules (README section 4.10) over `prisc_shared::share_region`, the
 //! one implementation the region helper (prisc_share_region) applies to every region it mirrors.
 //! Rects are in capture space: physical pixels in virtual-desktop coordinates on Windows,
 //! CoreGraphics points on macOS; x and y may be negative.
@@ -6,8 +6,8 @@
 use crate::ffi::status::PRISC_OK;
 use crate::ffi::types::PriscRect;
 use crate::{panic, util};
-use prisc_rust_core::geometry::{RectExt, ScreenRect};
-use prisc_rust_core::share_region::{self, Handle};
+use prisc_shared::geometry::{RectExt, ScreenRect};
+use prisc_shared::share_region::{self, Handle};
 
 /// Which part of the region a drag moves: the corners, the edge midpoints, or the body (a move).
 #[repr(i32)]

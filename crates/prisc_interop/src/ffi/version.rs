@@ -6,7 +6,7 @@ use crate::ffi::types::PriscString;
 use crate::{panic, util};
 
 /// This library's version: `PRISC_VERSION` when the build stamped one (CI and build.sh do, the
-/// same value prisc_rust_core's telemetry release uses), else `CARGO_PKG_VERSION`.
+/// same value prisc_telemetry's release uses), else `CARGO_PKG_VERSION`.
 pub(crate) fn version() -> &'static str {
     match option_env!("PRISC_VERSION") {
         Some(stamped) if !stamped.is_empty() => stamped,

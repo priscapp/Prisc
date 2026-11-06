@@ -9,8 +9,8 @@ use std::sync::Mutex;
 use super::mac_corners::{self, CgBounds};
 use super::{HitTestResult, ObstructedWindow, WindowCaptureRef, WindowTarget};
 use crate::system::MonitorInfo;
-use prisc_rust_core::desktop::{self, WindowDescription, WindowFilter, MIN_WINDOW_SIZE, NORMAL_WINDOW_LAYERS};
-use prisc_rust_core::geometry::{RectExt, ScreenPoint, ScreenRect};
+use prisc_desktop::{WindowDescription, WindowFilter, MIN_WINDOW_SIZE, NORMAL_WINDOW_LAYERS};
+use prisc_shared::geometry::{RectExt, ScreenPoint, ScreenRect};
 
 struct WindowEntry {
     window_id: u32,
@@ -55,7 +55,7 @@ impl WindowWalker {
             min_size: 0.0,
         };
         let mut windows: Vec<WindowEntry> = Vec::new();
-        for window in desktop::window_list(&filter) {
+        for window in prisc_desktop::window_list(&filter) {
             if let Some(entry) = evaluate_window(window, &windows, monitors, visibility_threshold) {
                 windows.push(entry);
             }
@@ -317,7 +317,7 @@ fn find_monitor_for_cg_point(x: f64, y: f64, monitors: &[MonitorInfo]) -> Option
 /// Find the scale factor of the display whose logical bounds contain the
 /// given CG point.
 fn display_scale_at_logical_point(x: f64, y: f64) -> f32 {
-    for d in desktop::active_displays().unwrap_or_default() {
+    for d in prisc_desktop::active_displays().unwrap_or_default() {
         let b = d.bounds;
         if x >= b.origin.x && x < b.origin.x + b.size.width && y >= b.origin.y && y < b.origin.y + b.size.height {
             // The mode's pixel width is the true physical pixel count;

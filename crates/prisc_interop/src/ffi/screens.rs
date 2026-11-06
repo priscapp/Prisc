@@ -1,11 +1,11 @@
-//! Screens (README section 4.2), a thin layer over `prisc_rust_core::desktop::screens`, the list
+//! Screens (README section 4.2), a thin layer over `prisc_desktop::screens`, the list
 //! the capture overlay and the share-region prompt read too. Coordinates are the `DesktopScreen`
 //! contract: physical virtual-desktop pixels on Windows, CoreGraphics global points with a
 //! top-left origin on macOS. macOS answers from CoreGraphics only (thread-safe), so it knows no
 //! work area. Elsewhere the list is empty and the lookups answer `PRISC_S_NONE`.
 
-use prisc_rust_core::desktop::screens::{self, Fallback, OsError, Screen};
-use prisc_rust_core::geometry::{RectExt, ScreenPoint, ScreenRect};
+use prisc_desktop::screens::{self, Fallback, OsError, Screen};
+use prisc_shared::geometry::{RectExt, ScreenPoint, ScreenRect};
 
 use crate::error::{Error, Result};
 use crate::ffi::status::{PRISC_OK, PRISC_S_NONE};

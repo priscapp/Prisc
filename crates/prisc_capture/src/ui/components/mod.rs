@@ -20,7 +20,7 @@ use egui::{pos2, Color32, Id, LayerId, Order, Pos2, Rect};
 use crate::interaction::InteractionState;
 use crate::ui::egui_host::{HostInputs, PanelOutcome};
 use crate::ui::shared::UiMonitor;
-use prisc_rust_core::geometry::{RectExt, ScreenRectF};
+use prisc_shared::geometry::{RectExt, ScreenRectF};
 
 /// One host's mapping from virtual-desktop physical px to its own points.
 ///
@@ -172,8 +172,8 @@ mod tests {
     use crate::ui::components::panel::{show as panel_show, theme};
     use crate::ui::egui_host::PanelInputs;
     use egui::epaint::Shape;
-    use prisc_rust_core::geometry::ScreenPointF;
-    use prisc_rust_core::geometry::{RectExt, ScreenRect};
+    use prisc_shared::geometry::ScreenPointF;
+    use prisc_shared::geometry::{RectExt, ScreenRect};
 
     fn monitor() -> UiMonitor {
         UiMonitor {

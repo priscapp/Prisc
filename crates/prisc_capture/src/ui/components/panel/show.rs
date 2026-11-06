@@ -34,7 +34,7 @@ use super::theme::{self, tokens};
 use super::widgets;
 use crate::ui::egui_host::{PanelInputs, PanelOutcome};
 use crate::ui::shared::UiMonitor;
-use prisc_rust_core::geometry::RectExt;
+use prisc_shared::geometry::RectExt;
 
 /// The Area id. One tray per context, so one id per context.
 pub const PANEL_ID: &str = "prisc-tray";
@@ -666,7 +666,7 @@ fn measure_and_place(
     ctx: &egui::Context,
     p: &PanelInputs,
     monitor: UiMonitor,
-) -> (Strip, f32, place::Side, prisc_rust_core::geometry::ScreenRect) {
+) -> (Strip, f32, place::Side, prisc_shared::geometry::ScreenRect) {
     let ppp = monitor.dpi_scale.max(0.1);
     let mut fit = union_fit(ctx, p, ppp);
     let col_inner = col_inner_for(ctx, p, p.set);
@@ -1088,7 +1088,7 @@ mod tests {
     use crate::ui::command::Command;
     use crate::ui::components::panel::model::FEATURE_COMBINATIONS;
     use egui::{Pos2, Rect};
-    use prisc_rust_core::geometry::ScreenRect;
+    use prisc_shared::geometry::ScreenRect;
 
     const DPIS: [f32; 4] = [1.0, 1.25, 1.5, 2.0];
 

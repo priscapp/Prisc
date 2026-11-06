@@ -28,8 +28,8 @@ use objc2_core_graphics::{CGEvent, CGEventSource, CGEventSourceStateID, CGEventT
 use prisc_platform::permissions::{self, Permission};
 
 use super::{WheelDir, RAISE_POLL, RAISE_TIMEOUT};
-use prisc_rust_core::desktop::{self, CGPoint, WindowFilter, NORMAL_WINDOW_LAYERS};
-use prisc_rust_core::geometry::{RectExt, ScreenPoint, ScreenRect};
+use prisc_desktop::{CGPoint, WindowFilter, NORMAL_WINDOW_LAYERS};
+use prisc_shared::geometry::{RectExt, ScreenPoint, ScreenRect};
 
 /// Lines of scrolling per notch, and *line* units rather than pixel ones.
 ///
@@ -291,7 +291,7 @@ pub fn park_cursor(point: ScreenPoint) {
     // physical movement continues from the parked point instead of snapping
     // back to where their hand left it, which the driver would then read as
     // drift and pause over.
-    if let Err(e) = desktop::warp_cursor(as_cg_point(point)) {
+    if let Err(e) = prisc_desktop::warp_cursor(as_cg_point(point)) {
         warn!(
             "CGWarpMouseCursorPosition({}, {}) failed: {e:?}; wheel events may land elsewhere",
             point.x, point.y
@@ -302,7 +302,7 @@ pub fn park_cursor(point: ScreenPoint) {
 /// Where the cursor is now, or `None` if the window server will not say.
 /// Callers treat that as "no news", never as "it moved".
 pub fn cursor_pos() -> Option<ScreenPoint> {
-    let pt = desktop::cursor_location()?;
+    let pt = prisc_desktop::cursor_location()?;
     Some(ScreenPoint::new(pt.x.round() as i32, pt.y.round() as i32))
 }
 
@@ -390,7 +390,7 @@ fn on_screen_windows() -> Vec<WindowEntry> {
         exclude_own_process: false,
         min_size: 0.0,
     };
-    desktop::window_list(&filter)
+    prisc_desktop::window_list(&filter)
         .into_iter()
         .map(|w| WindowEntry {
             id: w.id,
@@ -405,7 +405,7 @@ fn on_screen_windows() -> Vec<WindowEntry> {
 /// window at a fractional position keeps both of its edges where they are —
 /// this rect is compared for equality on every step to detect a window that
 /// moved.
-fn rect_from_cg(rect: desktop::CGRect) -> ScreenRect {
+fn rect_from_cg(rect: prisc_desktop::CGRect) -> ScreenRect {
     ScreenRect::from_exact(
         rect.origin.x.round() as i32,
         rect.origin.y.round() as i32,
@@ -485,9 +485,9 @@ mod tests {
         // A window at a fractional origin must not lose or gain a point of
         // width, or `stop_requested` reads it as having been resized on the
         // very first step.
-        let rect = rect_from_cg(desktop::CGRect::new(
-            desktop::CGPoint::new(10.5, 20.4),
-            desktop::CGSize::new(100.0, 200.0),
+        let rect = rect_from_cg(prisc_desktop::CGRect::new(
+            prisc_desktop::CGPoint::new(10.5, 20.4),
+            prisc_desktop::CGSize::new(100.0, 200.0),
         ));
         assert_eq!(rect, ScreenRect::from_xy_size(11, 20, 100, 200));
     }

@@ -2,7 +2,7 @@
 //!
 //! The whole of the driver's imaging: a single call that hands back the
 //! region's pixels as BGRA, top-down, tightly packed, through the grab every
-//! Prisc reader of screen pixels shares (`prisc_rust_core::desktop::grab`:
+//! Prisc reader of screen pixels shares (`prisc_desktop::grab`:
 //! a GDI blit on Windows, `CGWindowListCreateImage` on macOS). Both leave the
 //! mouse cursor out, because the driver parks the real cursor *inside* the
 //! region for the whole run and a cursor blob baked into every frame is
@@ -33,8 +33,8 @@
 
 use anyhow::Result;
 
-use prisc_rust_core::desktop::grab::{self, GrabError, Options};
-use prisc_rust_core::geometry::ScreenRect;
+use prisc_desktop::grab::{self, GrabError, Options};
+use prisc_shared::geometry::ScreenRect;
 
 /// One capture of the region: raw BGRA, top-down, `width * height * 4`
 /// bytes.

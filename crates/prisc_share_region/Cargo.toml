@@ -8,9 +8,11 @@ license.workspace = true
 # The helper protocol (crates/prisc_capture/HELPER_PROTOCOL.md): stdio channel, commands, lifetime.
 prisc_ipc = { workspace = true }
 # Sentry: panics and release-health sessions, one project with the rest of Prisc. Never built
-# on Linux, so unlike the recorder it needs no cfg (HELPER_PROTOCOL.md §3.4). `desktop` for the
-# shared screen list and the macOS overlay level and collection behaviour (desktop::overlay).
-prisc_rust_core = { workspace = true, features = ["desktop", "telemetry"] }
+# on Linux, so unlike the recorder it needs no cfg (HELPER_PROTOCOL.md §3.4).
+prisc_telemetry.workspace = true
+# The shared screen list and the macOS overlay level and collection behaviour (prisc_desktop::overlay).
+prisc_desktop.workspace = true
+prisc_shared.workspace = true
 prisc_obs = { workspace = true }
 prisc_obs_sys = { workspace = true }
 prisc_obs_platform = { workspace = true }
