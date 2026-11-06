@@ -1,11 +1,14 @@
-//! In-process video → GIF conversion against the bundled FFmpeg libraries.
+//! In-process video → GIF/WebP conversion against the bundled FFmpeg libraries.
 //!
-//! Two passes over the input, mirroring the classic CLI palette pipeline:
-//! pass 1 runs `fps[,scale],palettegen` and keeps the single palette frame in
-//! memory; pass 2 re-opens the input and runs `fps[,scale]` + `paletteuse`
-//! straight into the GIF encoder/muxer. No temp files, no subprocesses; the
-//! source is decoded twice but the palette filters only ever see the small
-//! post-scale frames.
+//! GIF is two passes over the input, mirroring the classic CLI palette
+//! pipeline: pass 1 runs `fps[,scale],palettegen` and keeps the single palette
+//! frame in memory; pass 2 re-opens the input and runs `fps[,scale]` +
+//! `paletteuse` straight into the GIF encoder/muxer. No temp files, no
+//! subprocesses; the source is decoded twice but the palette filters only ever
+//! see the small post-scale frames.
+//!
+//! WebP has no palette to build, so it is one pass: `fps[,scale],format=bgra`
+//! into libwebp's animation encoder (crate::webp).
 
 use std::ffi::{CStr, CString};
 use std::path::Path;
@@ -16,11 +19,14 @@ use prisc_ffmpeg_sys as ff;
 
 use crate::cancel::{CancelToken, Cancelled};
 use crate::progress::PassProgress;
+use crate::webp;
 
 const TIME_BASE_US: ff::AVRational = ff::AVRational {
     num: 1,
     den: 1_000_000,
 };
+
+const TIME_BASE_MS: ff::AVRational = ff::AVRational { num: 1, den: 1000 };
 
 pub struct InputInfo {
     pub width: u32,
@@ -40,8 +46,8 @@ pub fn silence_info_logging() {
     unsafe { ff::av_log_set_level(ff::AV_LOG_ERROR as i32) }
 }
 
-/// Runs the whole conversion, reporting overall 0–100 percent via `emit`.
-pub fn run(
+/// Runs the whole GIF conversion, reporting overall 0–100 percent via `emit`.
+pub fn run_gif(
     input: &Path,
     output: &Path,
     pass1_graph: &str,
@@ -71,6 +77,23 @@ pub fn run(
     )
     .context("gif pass failed")?;
     emit(progress2.done());
+    Ok(())
+}
+
+/// Runs the whole WebP conversion, reporting overall 0–100 percent via `emit`.
+pub fn run_webp(
+    input: &Path,
+    output: &Path,
+    graph: &str,
+    settings: webp::Settings,
+    cancel: &CancelToken,
+    emit: &mut dyn FnMut(u32),
+) -> Result<()> {
+    let mut src = Input::open(input)?;
+    let progress = PassProgress::new(0, 100, src.info().duration_us);
+    webp_pass(&mut src, graph, settings, output, &progress, cancel, emit)
+        .context("webp conversion failed")?;
+    emit(progress.done());
     Ok(())
 }
 
@@ -720,5 +743,52 @@ fn pass2(
     match writer {
         Some(mut w) => w.finish(),
         None => bail!("conversion produced no frames"),
+    }
+}
+
+/// The WebP pass: decode → `fps[,scale],format=bgra` → libwebp, which writes
+/// the whole file once the last frame is in.
+fn webp_pass(
+    input: &mut Input,
+    description: &str,
+    settings: webp::Settings,
+    output: &Path,
+    progress: &PassProgress,
+    cancel: &CancelToken,
+    emit: &mut dyn FnMut(u32),
+) -> Result<()> {
+    let graph = Graph::build(description, &input.buffersrc_args(), None)?;
+    let time_base = unsafe { ff::av_buffersink_get_time_base(graph.sink) };
+    let to_ms = |pts: i64| unsafe { ff::av_rescale_q(pts, time_base, TIME_BASE_MS) };
+
+    let mut encoder: Option<webp::AnimEncoder> = None;
+    // The first frame's pts (the animation starts at 0) and where the latest
+    // frame ends, which closes the last frame.
+    let mut first_pts = None;
+    let mut end_pts = 0;
+    drive(input, &graph, progress, cancel, emit, |frame| unsafe {
+        let f = frame.0;
+        if encoder.is_none() {
+            encoder = Some(webp::AnimEncoder::new((*f).width, (*f).height, settings)?);
+        }
+        let pts = (*f).pts;
+        let first = *first_pts.get_or_insert(pts);
+        // The fps filter emits one frame per tick of its 1/fps time base.
+        end_pts = pts + (*f).duration.max(1);
+
+        let stride = (*f).linesize[0];
+        if stride <= 0 {
+            bail!("unexpected frame layout (linesize {stride})");
+        }
+        let bgra = std::slice::from_raw_parts((*f).data[0], stride as usize * (*f).height as usize);
+        encoder
+            .as_mut()
+            .unwrap()
+            .add(bgra, stride, (to_ms(pts) - to_ms(first)) as i32)
+    })?;
+
+    match (encoder, first_pts) {
+        (Some(e), Some(first)) => e.finish((to_ms(end_pts) - to_ms(first)) as i32, output),
+        _ => bail!("conversion produced no frames"),
     }
 }

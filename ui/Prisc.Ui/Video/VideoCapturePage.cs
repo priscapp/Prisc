@@ -609,6 +609,7 @@ namespace Prisc.UI
             nameof(SettingsRecording.FilenamePattern) => false,
             // read by the GIF conversion tool long after a recording has finished; the recorder has
             // never heard of them.
+            nameof(SettingsRecording.GifFormat) => false,
             nameof(SettingsRecording.GifQuality) => false,
             nameof(SettingsRecording.GifMaxWidth) => false,
             nameof(SettingsRecording.GifMaxHeight) => false,

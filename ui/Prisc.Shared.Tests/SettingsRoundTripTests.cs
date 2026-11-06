@@ -487,24 +487,30 @@ namespace Prisc.Shared.Tests
             // default must stay 0 = "no limit" rather than some large sentinel.
             var loaded = SettingsService.Load(_path);
 
+            Assert.Equal(GifFormat.Gif, loaded.Recording.GifFormat);
             Assert.Equal(GifQuality.Good, loaded.Recording.GifQuality);
             Assert.Equal(0, loaded.Recording.GifMaxWidth);
             Assert.Equal(0, loaded.Recording.GifMaxHeight);
 
             var original = new SettingsRoot();
-            original.Recording.GifQuality = GifQuality.Fair; // enum by name
+            original.Recording.GifFormat = GifFormat.Webp; // enum by name
+            original.Recording.GifQuality = GifQuality.Fair;
             original.Recording.GifMaxWidth = 640;
             original.Recording.GifMaxHeight = 480;
 
             SettingsService.Save(original, _path);
             loaded = SettingsService.Load(_path);
 
+            Assert.Equal(GifFormat.Webp, loaded.Recording.GifFormat);
             Assert.Equal(GifQuality.Fair, loaded.Recording.GifQuality);
             Assert.Equal(640, loaded.Recording.GifMaxWidth);
             Assert.Equal(480, loaded.Recording.GifMaxHeight);
 
             // the lowercase member name is the --quality value prisc_vid2gif accepts
             Assert.Equal("fair", loaded.Recording.GifQuality.ToString().ToLowerInvariant());
+            // and the extension is how prisc_vid2gif picks its encoder
+            Assert.Equal(".webp", loaded.Recording.GifFormat.ToExtension());
+            Assert.Equal(".gif", GifFormat.Gif.ToExtension());
         }
 
         [Fact]

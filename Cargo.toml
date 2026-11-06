@@ -62,6 +62,9 @@ ctrlc = { version = "3", features = ["termination"] }
 clap = "4.6"
 image = { version = "0.25", default-features = false }
 libblur = "0.24"
+# prisc_vid2gif's animated WebP encoder (WebPAnimEncoder). Vendors libwebp's C source and
+# links it statically: the bundled FFmpeg has no libwebp encoder.
+libwebp-sys = "0.14"
 euclid = "0.22"
 libc = "0.2"
 log = "0.4"

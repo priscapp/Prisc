@@ -891,6 +891,9 @@ namespace Prisc.UI
             if (path.EndsWith(".gif", StringComparison.OrdinalIgnoreCase))
                 return "GIF file";
 
+            if (path.EndsWith(".webp", StringComparison.OrdinalIgnoreCase))
+                return "WebP file";
+
             return session.IsVideo ? "video file" : "image file";
         }
 

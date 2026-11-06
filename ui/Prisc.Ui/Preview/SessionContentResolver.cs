@@ -84,9 +84,18 @@ namespace Prisc.UI.Preview
             //    and a GIF conversion all show themselves rather than the still their session was
             //    seeded with — a .gif needs no special case, it decodes through the same avformat
             //    path every other container does.
+            //    A .webp (the other GIF conversion format) is the exception: the bundled FFmpeg
+            //    cannot decode an animated WebP, but Skia's codec can, and gives its first frame.
             if (TryStat(r.VideoPath, out var videoMtime, out var videoLength))
+            {
+                var videoExt = ExtensionOf(r.VideoPath);
+                if (videoExt == ".webp")
+                    return new PreviewSource(PreviewSourceKind.Image, r.VideoPath, videoExt, 0,
+                        videoMtime, videoLength);
+
                 return new PreviewSource(PreviewSourceKind.Video, r.VideoPath,
-                    ExtensionOf(r.VideoPath), PosterTicks(r.DurationMs), videoMtime, videoLength);
+                    videoExt, PosterTicks(r.DurationMs), videoMtime, videoLength);
+            }
 
             // 2b. an UPLOADED image is drawn as its file-type icon, not as itself. A video upload
             //     already resolves to an icon — nothing copies the payload into the session

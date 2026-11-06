@@ -57,12 +57,13 @@ namespace Prisc.Config
 
     /// <summary>
     /// GIF conversion preset, passed straight through to prisc_vid2gif via <c>--quality</c> (the lowercase
-    /// member name is the CLI value). It trades frame rate and dithering fidelity against file size;
-    /// GIFs are palette-limited, so this moves the size far more than a video quality preset does.
+    /// member name is the CLI value). It trades frame rate and fidelity against file size: dithering
+    /// for a GIF, which is palette-limited, so this moves the size far more than a video quality
+    /// preset does; encoder quality for a WebP, which is smaller than a GIF at every preset.
     /// </summary>
     public enum GifQuality
     {
-        [Description("Best (20 fps, smoothest dithering, largest file)")]
+        [Description("Best (20 fps, largest file)")]
         Best,
 
         [Description("Good (15 fps, balanced)")]
@@ -70,6 +71,37 @@ namespace Prisc.Config
 
         [Description("Fair (10 fps, smallest file)")]
         Fair,
+    }
+
+    /// <summary>
+    /// The file a GIF conversion writes. prisc_vid2gif picks its encoder from the extension of its
+    /// output path, so this decides nothing but that extension. Declaration order is dropdown
+    /// order, so the default comes first. Persisted by name.
+    /// </summary>
+    public enum GifFormat
+    {
+        /// <summary>Palette-based, 256 colors; plays everywhere.</summary>
+        [Description("GIF")]
+        Gif,
+
+        /// <summary>Animated WebP: full color and much smaller than a GIF at every quality preset.
+        /// Browsers and chat apps play it; some older image viewers and sites do not.</summary>
+        [Description("WebP")]
+        Webp,
+    }
+
+    public static class GifFormatExtensions
+    {
+        /// <summary>The file extension (with its dot) prisc_vid2gif maps the format to. Written out
+        /// for the same reason as <see cref="VideoContainerExtensions.ToExtension"/>.</summary>
+        public static string ToExtension(this GifFormat format)
+        {
+            switch (format)
+            {
+                case GifFormat.Webp: return ".webp";
+                default: return ".gif";
+            }
+        }
     }
 
     /// <summary>
@@ -425,8 +457,18 @@ namespace Prisc.Config
 
         [Category("GIF")]
         [VisibleWhen(nameof(Mode), Studio, Instant)]
+        [DisplayName("Format")]
+        [Description("GIF plays everywhere, while WebP is full color and much smaller.")]
+        public GifFormat GifFormat
+        {
+            get => _gifFormat;
+            set => Set(ref _gifFormat, value);
+        }
+
+        [Category("GIF")]
+        [VisibleWhen(nameof(Mode), Studio, Instant)]
         [DisplayName("Quality")]
-        [Description("Higher quality GIFs are smoother but much larger.")]
+        [Description("Higher quality GIFs are smoother but larger.")]
         public GifQuality GifQuality
         {
             get => _gifQuality;
@@ -497,6 +539,7 @@ namespace Prisc.Config
         private string _filenamePattern = SharedDefaults.DefaultFilenamePattern;
         private VideoContainer _container = VideoContainer.Mp4;
         private RecordingFinishAction _openWhenFinished = RecordingFinishAction.VideoEditor;
+        private GifFormat _gifFormat = GifFormat.Gif;
         private GifQuality _gifQuality = GifQuality.Good;
         private int _gifMaxWidth = 0;
         private int _gifMaxHeight = 0;

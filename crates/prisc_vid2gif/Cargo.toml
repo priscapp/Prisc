@@ -10,6 +10,8 @@ prisc_ipc = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 anyhow = { workspace = true }
 prisc_ffmpeg_sys = { workspace = true }
+# Encodes the WebP output; FFmpeg still decodes, resamples and scales (src/webp.rs).
+libwebp-sys = { workspace = true }
 
 # Sentry: panics only (init_job), one project with the rest of Prisc. Not on Linux, where
 # vid2gif is built in the manylinux image without the sentry/TLS tree (HELPER_PROTOCOL.md §3.4).

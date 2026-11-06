@@ -1,8 +1,8 @@
 //! End-to-end CLI tests. prisc_vid2gif links the bundled FFmpeg libraries directly,
 //! so these tests are fully self-contained: container inputs come from small
 //! committed fixtures (tests/fixtures/), raw inputs are generated on the fly
-//! as Y4M, and outputs are validated by parsing the GIF byte stream — no
-//! external tools involved.
+//! as Y4M, and outputs are validated by parsing the GIF or WebP byte stream,
+//! with no external tools involved.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -226,6 +226,115 @@ fn gif_frame_count(data: &[u8]) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// WebP validation (byte-level, no external tools)
+// ---------------------------------------------------------------------------
+
+/// What an animated WebP declares: canvas size, loop count, and per frame
+/// its rectangle and duration.
+#[derive(Debug)]
+struct WebpAnim {
+    width: u32,
+    height: u32,
+    loop_count: u16,
+    frames: Vec<WebpFrame>,
+}
+
+#[derive(Debug)]
+struct WebpFrame {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    duration_ms: u32,
+}
+
+impl WebpAnim {
+    fn total_ms(&self) -> u32 {
+        self.frames.iter().map(|f| f.duration_ms).sum()
+    }
+}
+
+fn u24(b: &[u8]) -> u32 {
+    u32::from_le_bytes([b[0], b[1], b[2], 0])
+}
+
+/// Walks the RIFF container chunk by chunk and requires the extended,
+/// animated layout: `VP8X` (animation flag set) first, one `ANIM`, then
+/// `ANMF` frames that each hold a `VP8 `/`VP8L` bitstream and fit the canvas.
+/// Panics on anything malformed, so it doubles as a structural check down to
+/// the last byte.
+fn parse_webp(data: &[u8]) -> WebpAnim {
+    assert!(data.len() > 30, "webp too small: {} bytes", data.len());
+    assert_eq!(&data[..4], b"RIFF", "bad riff magic");
+    assert_eq!(&data[8..12], b"WEBP", "bad webp magic");
+    let riff_size = u32::from_le_bytes(data[4..8].try_into().unwrap()) as usize;
+    assert_eq!(riff_size + 8, data.len(), "RIFF size must cover the whole file");
+
+    let mut anim = None;
+    let mut loop_count = None;
+    let mut frames = Vec::new();
+    let mut pos = 12;
+    while pos < data.len() {
+        let id = &data[pos..pos + 4];
+        let size = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().unwrap()) as usize;
+        let payload = &data[pos + 8..pos + 8 + size];
+        match id {
+            b"VP8X" => {
+                assert_eq!(pos, 12, "VP8X must be the first chunk");
+                assert!(payload[0] & 0x02 != 0, "VP8X animation flag not set");
+                anim = Some((u24(&payload[4..7]) + 1, u24(&payload[7..10]) + 1));
+            }
+            b"ANIM" => {
+                loop_count = Some(u16::from_le_bytes([payload[4], payload[5]]));
+            }
+            b"ANMF" => {
+                let frame = WebpFrame {
+                    x: u24(&payload[0..3]) * 2,
+                    y: u24(&payload[3..6]) * 2,
+                    width: u24(&payload[6..9]) + 1,
+                    height: u24(&payload[9..12]) + 1,
+                    duration_ms: u24(&payload[12..15]),
+                };
+                // the frame's own bitstream, optionally after an ALPH chunk
+                let mut inner = 16;
+                let mut saw_image = false;
+                while inner < payload.len() {
+                    let sub = &payload[inner..inner + 4];
+                    let sub_size = u32::from_le_bytes(payload[inner + 4..inner + 8].try_into().unwrap()) as usize;
+                    match sub {
+                        b"ALPH" => {}
+                        b"VP8 " | b"VP8L" => saw_image = true,
+                        other => panic!("unexpected chunk {:?} inside ANMF", String::from_utf8_lossy(other)),
+                    }
+                    inner += 8 + sub_size + (sub_size & 1);
+                }
+                assert!(saw_image, "ANMF frame without a VP8/VP8L bitstream");
+                frames.push(frame);
+            }
+            other => panic!("unexpected chunk {:?}", String::from_utf8_lossy(other)),
+        }
+        pos += 8 + size + (size & 1);
+    }
+    assert_eq!(pos, data.len(), "chunks must end exactly at the end of the file");
+
+    let (width, height) = anim.expect("no VP8X chunk");
+    let anim = WebpAnim {
+        width,
+        height,
+        loop_count: loop_count.expect("no ANIM chunk"),
+        frames,
+    };
+    assert!(!anim.frames.is_empty(), "no frames");
+    for f in &anim.frames {
+        assert!(
+            f.x + f.width <= width && f.y + f.height <= height,
+            "frame outside the canvas: {f:?} in {width}x{height}"
+        );
+    }
+    anim
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -367,6 +476,137 @@ fn gif_input_without_explicit_output_is_a_usage_error() {
     assert!(input.exists());
 }
 
+#[test]
+fn webp_output_extension_selects_webp() {
+    let dir = test_dir("webp-ext");
+    let out = dir.join("out.webp");
+    let input = fixture("clip.mp4");
+    let (code, msgs) = run_vid2gif(&[input.as_os_str(), out.as_os_str(), "--quality".as_ref(), "fair".as_ref()]);
+    assert_eq!(code, Some(0), "prisc_vid2gif failed: {msgs:?}");
+    let (path, bytes) = expect_success(&msgs);
+    assert_eq!(path, out);
+
+    let data = std::fs::read(&out).unwrap();
+    assert_eq!(bytes, data.len() as u64, "done line must report the real size");
+    let anim = parse_webp(&data);
+    assert_eq!((anim.width, anim.height), (160, 120), "no scaling requested");
+    assert_eq!(anim.loop_count, 0, "must loop forever, like the GIF");
+    // 2 s of input. libwebp folds identical frames into the previous one's
+    // duration, so the frame count can drop but the running time cannot.
+    assert!(
+        (1800..=2200).contains(&anim.total_ms()),
+        "unexpected running time {} ms: {anim:?}",
+        anim.total_ms()
+    );
+}
+
+#[test]
+fn format_flag_without_output_writes_webp_beside_input() {
+    let dir = test_dir("webp-flag");
+    let clip = dir.join("clip.mkv");
+    std::fs::copy(fixture("clip.mkv"), &clip).unwrap();
+
+    let (code, msgs) = run_vid2gif(&[clip.as_os_str(), "--format".as_ref(), "webp".as_ref()]);
+    assert_eq!(code, Some(0), "prisc_vid2gif failed: {msgs:?}");
+    let (path, _) = expect_success(&msgs);
+    assert_eq!(path, dir.join("clip.webp"));
+    parse_webp(&std::fs::read(&path).unwrap());
+    assert!(!dir.join("clip.gif").exists());
+}
+
+#[test]
+fn format_flag_overrides_the_extension() {
+    let dir = test_dir("webp-override");
+    let out = dir.join("out.gif");
+    let input = fixture("clip.mp4");
+    let (code, msgs) = run_vid2gif(&[input.as_os_str(), out.as_os_str(), "--format".as_ref(), "webp".as_ref()]);
+    assert_eq!(code, Some(0), "prisc_vid2gif failed: {msgs:?}");
+    expect_success(&msgs);
+    parse_webp(&std::fs::read(&out).unwrap());
+
+    // and the other way round: --format gif writes a GIF into a .webp path
+    let out = dir.join("out.webp");
+    let (code, msgs) = run_vid2gif(&[input.as_os_str(), out.as_os_str(), "--format".as_ref(), "gif".as_ref()]);
+    assert_eq!(code, Some(0), "prisc_vid2gif failed: {msgs:?}");
+    expect_success(&msgs);
+    gif_frame_count(&std::fs::read(&out).unwrap());
+}
+
+#[test]
+fn webp_every_frame_and_timestamp_survives() {
+    // the gradient moves every frame, so no frame can be folded into another:
+    // 2 s at --fps 12 is exactly 24 frames of 1000/12 ms each.
+    let dir = test_dir("webp-frames");
+    let clip = dir.join("clip.y4m");
+    write_y4m(&clip, 320, 240, 24, 2);
+    let out = dir.join("out.webp");
+    let (code, msgs) = run_vid2gif(&[clip.as_os_str(), out.as_os_str(), "--fps".as_ref(), "12".as_ref()]);
+    assert_eq!(code, Some(0), "prisc_vid2gif failed: {msgs:?}");
+    expect_success(&msgs);
+
+    let anim = parse_webp(&std::fs::read(&out).unwrap());
+    assert_eq!((anim.width, anim.height), (320, 240));
+    assert_eq!(anim.frames.len(), 24, "{anim:?}");
+    for f in &anim.frames {
+        // 83.3 ms, rounded per timestamp to 83 or 84
+        assert!((83..=84).contains(&f.duration_ms), "frame duration {f:?}");
+    }
+    assert!((1999..=2001).contains(&anim.total_ms()), "running time {}", anim.total_ms());
+}
+
+#[test]
+fn webp_max_width_and_height_clamp_most_restrictive() {
+    let dir = test_dir("webp-clamp");
+    let clip = dir.join("clip.y4m");
+    write_y4m(&clip, 320, 240, 15, 1);
+
+    let convert = |extra: &[&str], out: &str| -> (u32, u32) {
+        let out_path = dir.join(out);
+        let mut args: Vec<&std::ffi::OsStr> = vec![clip.as_os_str(), out_path.as_os_str()];
+        args.extend(extra.iter().map(|s| -> &std::ffi::OsStr { s.as_ref() }));
+        let (code, msgs) = run_vid2gif(&args);
+        assert_eq!(code, Some(0), "prisc_vid2gif failed: {msgs:?}");
+        let (path, _) = expect_success(&msgs);
+        let anim = parse_webp(&std::fs::read(path).unwrap());
+        (anim.width, anim.height)
+    };
+
+    assert_eq!(convert(&["--max-width", "120"], "w.webp"), (120, 90));
+    assert_eq!(convert(&["--max-height", "60"], "h.webp"), (80, 60));
+    assert_eq!(convert(&["--max-width", "120", "--max-height", "60"], "wh.webp"), (80, 60));
+    assert_eq!(convert(&["--max-width", "5000"], "big.webp"), (320, 240));
+    // an odd height after scaling (100x75) is fine for WebP
+    assert_eq!(convert(&["--max-width", "100"], "odd.webp"), (100, 75));
+}
+
+#[test]
+fn webp_presets_order_by_size() {
+    let dir = test_dir("webp-presets");
+    let clip = dir.join("clip.y4m");
+    write_y4m(&clip, 320, 240, 20, 2);
+
+    let size = |quality: &str| -> u64 {
+        let out = dir.join(format!("{quality}.webp"));
+        let (code, msgs) = run_vid2gif(&[clip.as_os_str(), out.as_os_str(), "--quality".as_ref(), quality.as_ref()]);
+        assert_eq!(code, Some(0), "prisc_vid2gif failed: {msgs:?}");
+        expect_success(&msgs).1
+    };
+    let (best, good, fair) = (size("best"), size("good"), size("fair"));
+    assert!(best > good && good > fair, "best {best}, good {good}, fair {fair}");
+}
+
+#[test]
+fn webp_input_without_explicit_output_is_a_usage_error() {
+    let dir = test_dir("webpin");
+    let input = dir.join("clip.webp");
+    std::fs::write(&input, b"RIFF").unwrap();
+
+    let (code, msgs) = run_vid2gif(&[input.as_os_str(), "--format".as_ref(), "webp".as_ref()]);
+    let message = expect_fatal(code, &msgs, "usage", 2);
+    assert!(message.contains("equals input"), "unexpected message: {message}");
+    assert!(input.exists());
+}
+
 /// How a mid-conversion cancel is delivered.
 enum CancelBy {
     Quit,
@@ -377,6 +617,11 @@ enum CancelBy {
 /// is demonstrably in flight, sends `bad` (if any) and then cancels; requires a
 /// prompt `done{cancelled}`, exit 0, and no partial output.
 fn cancel_mid_conversion(name: &str, by: CancelBy, bad: Option<&[u8]>) -> Vec<Msg> {
+    cancel_mid_conversion_as(name, by, bad, "gif")
+}
+
+/// [`cancel_mid_conversion`] for the output `format` (`gif` or `webp`).
+fn cancel_mid_conversion_as(name: &str, by: CancelBy, bad: Option<&[u8]>, format: &str) -> Vec<Msg> {
     use std::io::{BufRead, BufReader};
     use std::time::Instant;
 
@@ -386,6 +631,7 @@ fn cancel_mid_conversion(name: &str, by: CancelBy, bad: Option<&[u8]>) -> Vec<Ms
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_prisc_vid2gif"))
         .arg(&clip)
+        .args(["--format", format])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -439,7 +685,7 @@ fn cancel_mid_conversion(name: &str, by: CancelBy, bad: Option<&[u8]>) -> Vec<Ms
         "cancel must stop the conversion promptly, took {latency:?}"
     );
     assert!(
-        !dir.join("clip.gif").exists(),
+        !dir.join(format!("clip.{format}")).exists(),
         "partial output must be removed"
     );
     msgs
@@ -448,6 +694,11 @@ fn cancel_mid_conversion(name: &str, by: CancelBy, bad: Option<&[u8]>) -> Vec<Ms
 #[test]
 fn quit_mid_conversion_cancels_promptly_and_cleans_up() {
     cancel_mid_conversion("cancel", CancelBy::Quit, None);
+}
+
+#[test]
+fn quit_mid_webp_conversion_cancels_promptly_and_cleans_up() {
+    cancel_mid_conversion_as("cancel-webp", CancelBy::Quit, None, "webp");
 }
 
 #[test]

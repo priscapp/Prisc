@@ -1,6 +1,6 @@
-//! prisc_vid2gif — convert a video (mkv/mp4/…) into an optimized GIF by linking the
-//! FFmpeg libraries bundled next to prisc_recorder (no subprocesses, no separate
-//! ffmpeg binary).
+//! prisc_vid2gif: convert a video (mkv/mp4/…) into an optimized GIF or animated
+//! WebP by linking the FFmpeg libraries bundled next to prisc_recorder (no
+//! subprocesses, no separate ffmpeg binary).
 //!
 //! It speaks the `job` catalog of Prisc's helper protocol
 //! (crates/prisc_capture/HELPER_PROTOCOL.md §4.3): `hello`, `progress` lines,
@@ -9,16 +9,18 @@
 //! stdin EOF, a signal or a dead stdout cancel: the in-flight pass stops within
 //! one packet and any partial output is removed.
 //!
-//! The conversion is the classic two-pass palette pipeline, in process:
-//! pass 1 (`fps[,scale],palettegen`) keeps the single palette frame in
-//! memory; pass 2 re-decodes the input through `paletteuse` into the GIF
-//! encoder. Progress derives from input frame timestamps, so it streams
-//! smoothly through both passes.
+//! A GIF is the classic two-pass palette pipeline, in process: pass 1
+//! (`fps[,scale],palettegen`) keeps the single palette frame in memory; pass 2
+//! re-decodes the input through `paletteuse` into the GIF encoder. A WebP is
+//! one pass (`fps[,scale],format=bgra`) into libwebp's animation encoder.
+//! Progress derives from input frame timestamps, so it streams smoothly
+//! through every pass.
 
 mod cancel;
 mod convert;
 mod presets;
 mod progress;
+mod webp;
 
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
@@ -30,9 +32,9 @@ use prisc_ipc::catalog::ErrorCode;
 use prisc_ipc::Inbound;
 
 use cancel::{CancelToken, Cancelled};
-use presets::Quality;
+use presets::{Format, Quality};
 
-/// Convert a video file to an optimized GIF.
+/// Convert a video file to an optimized GIF or animated WebP.
 ///
 /// Speaks Prisc's helper protocol on stdout (`progress`, then `done` or a
 /// fatal `error`). `{"type":"quit"}` on stdin, or closing stdin, cancels.
@@ -42,10 +44,15 @@ struct Args {
     /// Input video file (anything the bundled FFmpeg can decode).
     input: PathBuf,
 
-    /// Output GIF path [default: the input path with a .gif extension]
+    /// Output path [default: the input path with the format's extension]
     output: Option<PathBuf>,
 
-    /// Quality preset; trades frame rate and dithering fidelity for file size.
+    /// Output format [default: from the output's extension (.webp is WebP),
+    /// otherwise gif]
+    #[arg(long, value_enum)]
+    format: Option<Format>,
+
+    /// Quality preset; trades frame rate and fidelity for file size.
     #[arg(long, value_enum, default_value_t = Quality::Good)]
     quality: Quality,
 
@@ -160,7 +167,11 @@ fn run(
             error: anyhow::anyhow!("input file not found: {}", args.input.display()),
         });
     }
-    let output = derive_output(&args.input, args.output.as_deref()).map_err(coded(ErrorCode::Usage))?;
+    let format = args
+        .format
+        .unwrap_or_else(|| args.output.as_deref().map_or(Format::Gif, Format::from_path));
+    let output =
+        derive_output(&args.input, args.output.as_deref(), format).map_err(coded(ErrorCode::Usage))?;
     let info = convert::probe(&args.input)
         .with_context(|| format!("could not read {}", args.input.display()))
         .map_err(coded(ErrorCode::InitFailed))?;
@@ -177,14 +188,24 @@ fn run(
 
     emit(0);
     *written = Some(output.clone());
-    convert::run(
-        &args.input,
-        &output,
-        &presets::pass1_graph(fps, scale_width),
-        &presets::pass2_graph(fps, scale_width, args.quality),
-        cancel,
-        emit,
-    )?;
+    match format {
+        Format::Gif => convert::run_gif(
+            &args.input,
+            &output,
+            &presets::pass1_graph(fps, scale_width),
+            &presets::pass2_graph(fps, scale_width, args.quality),
+            cancel,
+            emit,
+        )?,
+        Format::Webp => convert::run_webp(
+            &args.input,
+            &output,
+            &presets::webp_graph(fps, scale_width),
+            args.quality.webp(),
+            cancel,
+            emit,
+        )?,
+    }
     emit(100);
 
     let bytes = std::fs::metadata(&output)
@@ -194,10 +215,10 @@ fn run(
     Ok((output, bytes))
 }
 
-fn derive_output(input: &Path, explicit: Option<&Path>) -> anyhow::Result<PathBuf> {
+fn derive_output(input: &Path, explicit: Option<&Path>, format: Format) -> anyhow::Result<PathBuf> {
     let output = match explicit {
         Some(p) => p.to_path_buf(),
-        None => input.with_extension("gif"),
+        None => input.with_extension(format.extension()),
     };
     if output == input {
         bail!(
@@ -235,19 +256,21 @@ mod tests {
 
     #[test]
     fn derive_output_swaps_extension() {
-        let out = derive_output(Path::new("C:/x/clip.mkv"), None).unwrap();
+        let out = derive_output(Path::new("C:/x/clip.mkv"), None, Format::Gif).unwrap();
         assert_eq!(out, Path::new("C:/x/clip.gif"));
+        let out = derive_output(Path::new("C:/x/clip.mkv"), None, Format::Webp).unwrap();
+        assert_eq!(out, Path::new("C:/x/clip.webp"));
     }
 
     #[test]
     fn derive_output_honors_explicit() {
-        let out = derive_output(Path::new("in.mkv"), Some(Path::new("out/o.gif"))).unwrap();
+        let out = derive_output(Path::new("in.mkv"), Some(Path::new("out/o.gif")), Format::Gif).unwrap();
         assert_eq!(out, Path::new("out/o.gif"));
     }
 
     #[test]
     fn derive_output_rejects_gif_input_without_output() {
-        let err = derive_output(Path::new("clip.gif"), None).unwrap_err();
+        let err = derive_output(Path::new("clip.gif"), None, Format::Gif).unwrap_err();
         assert!(err.to_string().contains("equals input"), "{err}");
     }
 

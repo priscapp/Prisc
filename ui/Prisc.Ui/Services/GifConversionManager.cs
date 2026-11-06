@@ -92,9 +92,10 @@ namespace Prisc.UI.Services
     }
 
     /// <summary>
-    /// Turns a finished recording into a GIF beside it (<c>video.mp4</c> → <c>video.gif</c>) using
-    /// the external prisc_vid2gif tool. The conversion is surfaced as its own Recent-page entry named
-    /// "GIF - {source name}" carrying an <see cref="SessionInfo.ActiveGifConversion"/> while it runs; when it
+    /// Turns a finished recording into a GIF (or, per <see cref="SettingsRecording.GifFormat"/>, an
+    /// animated WebP) using the external prisc_vid2gif tool. The conversion is surfaced as its own
+    /// Recent-page entry named "GIF - {source name}" carrying an
+    /// <see cref="SessionInfo.ActiveGifConversion"/> while it runs; when it
     /// finishes the entry drops the conversion and behaves like any other video entry, and when it
     /// is canceled or fails the entry is removed again.
     /// </summary>
@@ -145,11 +146,16 @@ namespace Prisc.UI.Services
             if (existing != null)
                 return existing;
 
+            // a snapshot: settings edited while the conversion runs apply to the next one.
+            var recording = SettingsRoot.Current?.Recording;
+            // the extension is the whole format choice: prisc_vid2gif encodes by it.
+            var extension = (recording?.GifFormat ?? GifFormat.Gif).ToExtension();
+
             // a GIF is an output like the recording itself, so it follows the same recording
             // settings: the user's output folder, named with their filename pattern. Beside the
             // video it came from only when no writable output folder can be resolved at all.
-            var gifPath = RecordingOutputPath.GetSavePath(SettingsRoot.Current?.Recording, ".gif")
-                          ?? Path.ChangeExtension(videoPath, ".gif");
+            var gifPath = RecordingOutputPath.GetSavePath(recording, extension)
+                          ?? Path.ChangeExtension(videoPath, extension);
 
             SessionInfo session;
             try
@@ -164,8 +170,6 @@ namespace Prisc.UI.Services
                 return null;
             }
 
-            // a snapshot: settings edited while the conversion runs apply to the next one.
-            var recording = SettingsRoot.Current?.Recording;
             var quality = (recording?.GifQuality ?? GifQuality.Good).ToString().ToLowerInvariant();
             var maxWidth = recording?.GifMaxWidth ?? 0;
             var maxHeight = recording?.GifMaxHeight ?? 0;
