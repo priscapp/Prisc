@@ -10,6 +10,7 @@ pub(crate) mod idle;
 pub(crate) mod permissions;
 pub(crate) mod services;
 pub(crate) mod system;
+pub(crate) mod tracking;
 pub(crate) mod window;
 
 use objc2::MainThreadMarker;

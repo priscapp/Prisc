@@ -102,12 +102,15 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "NSApplication",
     "NSButton",
     "NSControl",
+    # NSEvent.type / .trackingArea and NSTrackingArea.owner (prisc_app_install_tracking_area_fix_macos)
+    "NSEvent",
     # -[NSWindow initWithContentRect:styleMask:backing:defer:] (NSBackingStoreType), in the
     # main-thread window tests
     "NSGraphics",
     "NSPasteboard",
     "NSResponder",
     "NSRunningApplication",
+    "NSTrackingArea",
     "NSView",
     "NSWindow",
     "NSWorkspace",
