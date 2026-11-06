@@ -111,17 +111,13 @@ namespace Prisc.UI.Services
     /// <summary>
     /// Renders an edited recording beside its source (<c>video.mp4</c> → <c>video-edited.mp4</c>)
     /// in the out-of-process <c>Prisc.VideoRender</c> tool. The render is surfaced as its own Recent-page entry
-    /// named "Rendered Video" carrying a <see cref="SessionInfo.ActiveRender"/> while it runs; when it
+    /// named "Rendered - {source name}" carrying a <see cref="SessionInfo.ActiveRender"/> while it runs; when it
     /// finishes the entry drops the render and behaves like any other video entry, and when it is
     /// canceled or fails the entry is removed again. Re-rendering the same recording replaces the
     /// entry it made last time rather than accumulating them.
     /// </summary>
     public static class VideoRenderManager
     {
-        /// <summary>The name every rendered entry carries in Recents, to tell it apart from the
-        /// multi-track "Screen Recording" it was rendered from.</summary>
-        public const string EditedSessionName = "Rendered Video";
-
         /// <summary>Name of the render-args file written into the session directory. Unchanged
         /// from the v1 days: the tool dispatches on the file's version, not on its name.</summary>
         public const string RenderArgsFileName = "render-args.json";
@@ -408,7 +404,9 @@ namespace Prisc.UI.Services
             Directory.CreateDirectory(dir); // CreateSessionInDirectory expects the directory to exist
 
             var session = SessionManager.Current.CreateSessionInDirectory(dir);
-            session.Name = EditedSessionName;
+            // only the starting name, to tell the entry apart from the project it was rendered from:
+            // it can be renamed like any other, and nothing looks an entry up by it.
+            session.Name = "Rendered - " + source.Name;
             session.CreatedUtc = DateTime.UtcNow;
             session.ContentKind = "video";
             session.VideoPath = outputPath;

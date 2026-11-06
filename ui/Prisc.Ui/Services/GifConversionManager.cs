@@ -94,15 +94,12 @@ namespace Prisc.UI.Services
     /// <summary>
     /// Turns a finished recording into a GIF beside it (<c>video.mp4</c> → <c>video.gif</c>) using
     /// the external prisc_vid2gif tool. The conversion is surfaced as its own Recent-page entry named
-    /// "GIF" carrying an <see cref="SessionInfo.ActiveGifConversion"/> while it runs; when it
+    /// "GIF - {source name}" carrying an <see cref="SessionInfo.ActiveGifConversion"/> while it runs; when it
     /// finishes the entry drops the conversion and behaves like any other video entry, and when it
     /// is canceled or fails the entry is removed again.
     /// </summary>
     public static class GifConversionManager
     {
-        /// <summary>The name every GIF entry carries; also how <see cref="FindExisting"/> spots one.</summary>
-        public const string GifSessionName = "GIF";
-
         /// <summary>The GIF entry already made (or being made) from <paramref name="source"/>, or
         /// null. Callers use this to focus the existing entry instead of starting a second
         /// conversion of the same recording.</summary>
@@ -112,8 +109,9 @@ namespace Prisc.UI.Services
             if (String.IsNullOrEmpty(videoPath))
                 return null;
 
+            // matched on SourceVideoPath alone: it is set on GIF entries and nothing else, and the
+            // name is only where an entry starts — the user can rename it.
             return SessionManager.Current.Sessions.FirstOrDefault(s =>
-                String.Equals(s.Name, GifSessionName, StringComparison.Ordinal) &&
                 !String.IsNullOrEmpty(s.SourceVideoPath) &&
                 String.Equals(s.SourceVideoPath, videoPath, StringComparison.OrdinalIgnoreCase));
         }
@@ -190,7 +188,7 @@ namespace Prisc.UI.Services
             Directory.CreateDirectory(dir); // CreateSessionInDirectory expects the directory to exist
 
             var session = SessionManager.Current.CreateSessionInDirectory(dir);
-            session.Name = GifSessionName;
+            session.Name = "GIF - " + source.Name;
             session.CreatedUtc = DateTime.UtcNow;
             session.ContentKind = "video";
             session.VideoPath = gifPath;
