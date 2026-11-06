@@ -192,7 +192,7 @@ namespace Prisc.UI.Services
             Directory.CreateDirectory(dir); // CreateSessionInDirectory expects the directory to exist
 
             var session = SessionManager.Current.CreateSessionInDirectory(dir);
-            session.Name = "GIF - " + source.Name;
+            session.Name = "GIF - " + VideoRenderManager.NameWithoutRenderedPrefix(source);
             session.CreatedUtc = DateTime.UtcNow;
             session.ContentKind = "video";
             session.VideoPath = gifPath;

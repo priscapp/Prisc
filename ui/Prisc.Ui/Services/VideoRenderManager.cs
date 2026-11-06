@@ -111,13 +111,27 @@ namespace Prisc.UI.Services
     /// <summary>
     /// Renders an edited recording beside its source (<c>video.mp4</c> → <c>video-edited.mp4</c>)
     /// in the out-of-process <c>Prisc.VideoRender</c> tool. The render is surfaced as its own Recent-page entry
-    /// named "Rendered - {source name}" carrying a <see cref="SessionInfo.ActiveRender"/> while it runs; when it
+    /// named "Render - {source name}" carrying a <see cref="SessionInfo.ActiveRender"/> while it runs; when it
     /// finishes the entry drops the render and behaves like any other video entry, and when it is
     /// canceled or fails the entry is removed again. Re-rendering the same recording replaces the
     /// entry it made last time rather than accumulating them.
     /// </summary>
     public static class VideoRenderManager
     {
+        private const string RenderedNamePrefix = "Render - ";
+
+        /// <summary><paramref name="session"/>'s name without the prefix a rendered entry starts
+        /// with, for naming something made from it. A rendered entry the user has renamed, or any
+        /// other entry that merely has a name like that, keeps its name as it is.</summary>
+        public static string NameWithoutRenderedPrefix(SessionInfo session)
+        {
+            var name = session.Name;
+            return !String.IsNullOrEmpty(session.EditSourceVideoPath) &&
+                   name != null && name.StartsWith(RenderedNamePrefix, StringComparison.Ordinal)
+                ? name.Substring(RenderedNamePrefix.Length)
+                : name;
+        }
+
         /// <summary>Name of the render-args file written into the session directory. Unchanged
         /// from the v1 days: the tool dispatches on the file's version, not on its name.</summary>
         public const string RenderArgsFileName = "render-args.json";
@@ -406,7 +420,7 @@ namespace Prisc.UI.Services
             var session = SessionManager.Current.CreateSessionInDirectory(dir);
             // only the starting name, to tell the entry apart from the project it was rendered from:
             // it can be renamed like any other, and nothing looks an entry up by it.
-            session.Name = "Rendered - " + source.Name;
+            session.Name = RenderedNamePrefix + source.Name;
             session.CreatedUtc = DateTime.UtcNow;
             session.ContentKind = "video";
             session.VideoPath = outputPath;
