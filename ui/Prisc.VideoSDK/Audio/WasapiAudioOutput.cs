@@ -4,6 +4,10 @@ using System.Runtime.Versioning;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
+// NAudio 3 marks WasapiOut [Obsolete] in favour of WasapiPlayer. The legacy class still ships and
+// its shared-mode path is unchanged, so it stays until playback is moved over deliberately.
+#pragma warning disable CS0618
+
 namespace Prisc.VideoSDK.Audio
 {
     /// <summary>
@@ -25,7 +29,7 @@ namespace Prisc.VideoSDK.Audio
             private readonly WasapiAudioOutput _owner;
             public CallbackWaveProvider(WasapiAudioOutput owner) { _owner = owner; }
             public WaveFormat WaveFormat => _owner._format;
-            public int Read(byte[] buffer, int offset, int count) => _owner.Read(buffer, offset, count);
+            public int Read(Span<byte> buffer) => _owner.Read(buffer);
         }
 
         private WaveFormat _format;
@@ -72,13 +76,13 @@ namespace Prisc.VideoSDK.Audio
             _device?.Stop();
         }
 
-        private int Read(byte[] buffer, int offset, int count)
+        private int Read(Span<byte> buffer)
         {
-            // interpret the byte buffer as floats in place; count is always a multiple of the
-            // float-stereo block align in shared mode.
-            var floats = MemoryMarshal.Cast<byte, float>(buffer.AsSpan(offset, count & ~3));
+            // interpret the byte buffer as floats in place; its length is always a multiple of
+            // the float-stereo block align in shared mode.
+            var floats = MemoryMarshal.Cast<byte, float>(buffer[..(buffer.Length & ~3)]);
             _render(floats);
-            return count;
+            return buffer.Length;
         }
 
         public void Dispose()
