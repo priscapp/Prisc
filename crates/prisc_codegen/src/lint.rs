@@ -233,7 +233,7 @@ impl FfiLint<'_> {
             syn::Type::Ptr(p) => self.check_type(&p.elem, Ctx::Inner, what),
             syn::Type::Array(a) => self.check_type(&a.elem, Ctx::Inner, what),
             syn::Type::Paren(p) => self.check_type(&p.elem, ctx, what),
-            syn::Type::BareFn(f) => self.check_fn_type(f, what),
+            syn::Type::FnPtr(f) => self.check_fn_type(f, what),
             syn::Type::Path(p) if p.qself.is_none() => {
                 let Some(last) = p.path.segments.last() else {
                     return;
@@ -241,7 +241,7 @@ impl FfiLint<'_> {
                 let name = last.ident.to_string();
                 if name == "Option" {
                     if let syn::PathArguments::AngleBracketed(args) = &last.arguments {
-                        if let Some(syn::GenericArgument::Type(syn::Type::BareFn(f))) = args.args.first() {
+                        if let Some(syn::GenericArgument::Type(syn::Type::FnPtr(f))) = args.args.first() {
                             self.check_fn_type(f, what);
                             return;
                         }
@@ -287,7 +287,7 @@ impl FfiLint<'_> {
         }
     }
 
-    fn check_fn_type(&mut self, f: &syn::TypeBareFn, what: &str) {
+    fn check_fn_type(&mut self, f: &syn::TypeFnPtr, what: &str) {
         for input in &f.inputs {
             self.check_type(&input.ty, Ctx::Param, &format!("{what} (callback parameter)"));
         }
@@ -476,7 +476,7 @@ impl FfiLint<'_> {
             .as_ref()
             .and_then(|abi| abi.name.as_ref())
             .is_some_and(|n| n.value() == "C");
-        if f.sig.unsafety.is_none() || !abi_c {
+        if !matches!(f.sig.safety, syn::Safety::Unsafe(_)) || !abi_c {
             self.push(span, "7-export", format!("{name} must be `pub unsafe extern \"C\" fn`"));
         }
         let reader = LAST_ERROR_READERS
