@@ -21,10 +21,10 @@
     <PackageReference Include="Avalonia" Version="12.1.5" />
     <PackageReference Include="Avalonia.Desktop" Version="12.1.5" />
     <PackageReference Include="Semi.Avalonia" Version="12.1.0.1" />
-    <PackageReference Include="Irihi.Ursa" Version="2.2.0" />
-    <PackageReference Include="Irihi.Ursa.Themes.Semi" Version="2.2.0" />
+    <PackageReference Include="Irihi.Ursa" Version="2.3.0" />
+    <PackageReference Include="Irihi.Ursa.Themes.Semi" Version="2.3.0" />
     <!-- WASAPI via built-in COM interop; all call sites are OperatingSystem.IsWindows()-guarded -->
-    <PackageReference Include="NAudio.Wasapi" Version="2.4.0" />
+    <PackageReference Include="NAudio.Wasapi" Version="3.3.0" />
     <PackageReference Include="Velopack" Version="1.2.161" />
     <PackageReference Include="Sentry" Version="6.12.1" />
   </ItemGroup>
