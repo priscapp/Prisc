@@ -173,6 +173,21 @@ namespace Prisc
                 // the library's callback panics and teardown failures reach the app only here
                 InteropLogReporter.Install();
 
+                // macOS: Avalonia sets the arrow cursor whenever the pointer leaves any tracking
+                // area, and macOS 26 leaves a stale one behind at every window size, so a control's
+                // cursor would flip to the arrow partway across it (MacApp.InstallTrackingAreaFix).
+                if (OperatingSystem.IsMacOS())
+                {
+                    try
+                    {
+                        Prisc.Interop.MacApp.InstallTrackingAreaFix();
+                    }
+                    catch (Exception ex)
+                    {
+                        SentryConfig.CaptureHandled(ex, "macos.tracking-area-fix");
+                    }
+                }
+
                 // hidden spike harness (`--video-spike file.mp4`): a bare playback window used to
                 // measure the video engine. Must run BEFORE single-instance forwarding — a spike
                 // process must never forward its args to (or be swallowed by) a resident Prisc.

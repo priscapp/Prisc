@@ -106,6 +106,14 @@ namespace Prisc.Interop.Tests
         }
 
         [Fact]
+        public void The_tracking_area_fix_is_refused_off_the_main_thread()
+        {
+            InteropTestGate.Require();
+            var e = Assert.Throws<InteropException>(() => MacApp.InstallTrackingAreaFix());
+            Assert.Equal(MainThreadRefusal, e.Status);
+        }
+
+        [Fact]
         public void The_services_provider_is_refused_off_the_main_thread_and_checks_its_arguments()
         {
             InteropTestGate.Require();
