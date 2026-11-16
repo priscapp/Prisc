@@ -1,6 +1,7 @@
-﻿using Microsoft.WindowsAzure.Storage;
-using Microsoft.WindowsAzure.Storage.Blob;
-using Microsoft.WindowsAzure.Storage.Core.Util;
+﻿﻿using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+using Azure.Storage.Blobs.Specialized;
+using Azure.Storage.Sas;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -12,21 +13,6 @@ using Prisc.Upload.Accelerate;
 
 namespace Prisc.Upload
 {
-    public class AzureProgressHandler : IProgress<StorageProgress>
-    {
-        private readonly Action<StorageProgress> func;
-
-        public AzureProgressHandler(Action<StorageProgress> func)
-        {
-            this.func = func;
-        }
-
-        public void Report(StorageProgress value)
-        {
-            this.func(value);
-        }
-    }
-
     public class AzureUploadProvider : UploadProviderBase, IAccelerateProvider
     {
         public override string Name => "Azure Storage";
@@ -109,18 +95,16 @@ namespace Prisc.Upload
                 return await UploadUnseekableAsync(fileStream, progress, uploadName, cancelToken);
 
             var key = GetNewBlobKey();
-            var blob = await CreateBlobAsync(key);
+            var blob = (await PrepareContainerAsync(key, cancelToken)).GetBlobClient(key);
+            var mimeType = GetMimeType(uploadName);
 
-            var prg = new AzureProgressHandler((p) => progress(p.BytesTransferred));
-            await blob.UploadFromStreamAsync(fileStream,
-                null,
-                new BlobRequestOptions { },
-                new OperationContext { },
-                prg,
-                cancelToken
-            );
+            await blob.UploadAsync(fileStream, new BlobUploadOptions
+            {
+                HttpHeaders = GetHttpHeaders(uploadName, mimeType),
+                ProgressHandler = progress == null ? null : new ProgressAdapter(progress),
+            }, cancelToken);
 
-            return await SetPropertiesAndGetResult(blob, uploadName, false);
+            return GetResult(blob, uploadName, mimeType);
         }
 
         public override Task<UploadResult> UploadAsync(Stream fileStream, UploadProgressHandler progress, UploadUrlHandler urlAvailable,
@@ -137,7 +121,8 @@ namespace Prisc.Upload
             const int blockBufferSize = 8 * 1024 * 1024;
 
             var key = GetNewBlobKey();
-            var blob = await CreateBlobAsync(key);
+            var blob = (await PrepareContainerAsync(key, cancelToken)).GetBlockBlobClient(key);
+            var mimeType = GetMimeType(uploadName);
 
             var blockIds = new List<string>();
             var buffer = new byte[blockBufferSize];
@@ -151,8 +136,7 @@ namespace Prisc.Upload
 
                 // block ids must be base64 strings of equal pre-encoding length
                 var blockId = Convert.ToBase64String(Encoding.ASCII.GetBytes(blockIds.Count.ToString("d6")));
-                await blob.PutBlockAsync(blockId, new MemoryStream(buffer, 0, filled, false), null,
-                    null, new BlobRequestOptions { }, new OperationContext { }, cancelToken);
+                await blob.StageBlockAsync(blockId, new MemoryStream(buffer, 0, filled, false), cancellationToken: cancelToken);
 
                 blockIds.Add(blockId);
                 uploaded += filled;
@@ -162,9 +146,12 @@ namespace Prisc.Upload
                     break;
             }
 
-            await blob.PutBlockListAsync(blockIds, null, new BlobRequestOptions { }, new OperationContext { }, cancelToken);
+            await blob.CommitBlockListAsync(blockIds, new CommitBlockListOptions
+            {
+                HttpHeaders = GetHttpHeaders(uploadName, mimeType),
+            }, cancelToken);
 
-            return await SetPropertiesAndGetResult(blob, uploadName, false);
+            return GetResult(blob, uploadName, mimeType);
         }
 
         private static async Task<int> FillBufferAsync(Stream stream, byte[] buffer, CancellationToken cancelToken)
@@ -184,33 +171,24 @@ namespace Prisc.Upload
         private async Task<UploadResult> UploadAcceleratedAsync(Stream fileStream, UploadProgressHandler progress,
             UploadUrlHandler urlAvailable, string uploadName, CancellationToken cancelToken)
         {
-            var mimeType = _mimeDb.GetMimeFromExtension(Path.GetExtension(uploadName)).ContentType;
+            var mimeType = GetMimeType(uploadName);
 
             // null for a non-seekable source: the SAS destination is count-free, so unknown-length
             // sessions differ only in the create request and the ?final=1 marking of the last chunk.
             long? contentLength = fileStream.CanSeek ? fileStream.Length : null;
 
             var key = GetNewBlobKey();
-            var account = CloudStorageAccount.Parse(ConnectionString);
-            var container = account.CreateCloudBlobClient().GetContainerReference(ContainerName);
-            var blob = container.GetBlockBlobReference(key);
+            var blob = GetContainerClient().GetBlobClient(key);
 
             // a blob-level SAS with create+write only — the server never sees the account key.
-            var sas = blob.GetSharedAccessSignature(new SharedAccessBlobPolicy
-            {
-                Permissions = SharedAccessBlobPermissions.Create | SharedAccessBlobPermissions.Write,
-                SharedAccessExpiryTime = DateTimeOffset.UtcNow.AddHours(48),
-            });
-
-            var finalUrl = String.IsNullOrWhiteSpace(CustomDomain)
-                ? blob.Uri.ToString()
-                : $"https://{CustomDomain}/{ContainerName}/{blob.Name}";
+            var sasUri = blob.GenerateSasUri(BlobSasPermissions.Create | BlobSasPermissions.Write,
+                DateTimeOffset.UtcNow.AddHours(48));
 
             var descriptor = new DestinationDescriptor
             {
                 Type = "azure-blob",
-                BlobSasUrl = blob.Uri + sas,
-                FinalUrl = finalUrl,
+                BlobSasUrl = sasUri.ToString(),
+                FinalUrl = GetPublicUrl(blob),
             };
 
             return await AcceleratedUploadRunner.RunAsync(
@@ -226,10 +204,8 @@ namespace Prisc.Upload
         public override async Task DeleteAsync(UploadDeleteInfo info, CancellationToken cancelToken)
         {
             // delete the destination blob with the account's own credentials (as always).
-            var account = CloudStorageAccount.Parse(ConnectionString);
-            var container = account.CreateCloudBlobClient().GetContainerReference(ContainerName);
-            var blob = container.GetBlockBlobReference(info.UploadKey);
-            await blob.DeleteIfExistsAsync();
+            var blob = GetContainerClient().GetBlobClient(info.UploadKey);
+            await blob.DeleteIfExistsAsync(cancellationToken: cancelToken);
 
             // accelerated records also carry a clwd.app short link — remove it too.
             if (AcceleratedDeleteToken.TryParse(info.DeleteKey, out var id, out var token))
@@ -238,61 +214,66 @@ namespace Prisc.Upload
 
         private string GetNewBlobKey() => Guid.NewGuid().ToString().Replace("-", "");
 
-        private async Task<CloudBlockBlob> CreateBlobAsync(string key)
-        {
-            //var container = await Task.Run(async () =>
-            //{
-            var account = CloudStorageAccount.Parse(ConnectionString);
-            var storage = account.CreateCloudBlobClient();
-            var serviceProperties = await storage.GetServicePropertiesAsync();
-            serviceProperties.DefaultServiceVersion = AZURE_SERVICE_VERSION;
-            await storage.SetServicePropertiesAsync(serviceProperties);
-            var container = storage.GetContainerReference(ContainerName);
-            //return storage.GetContainerReference(ContainerName);
-            //});
+        private BlobContainerClient GetContainerClient()
+            => new BlobServiceClient(ConnectionString).GetBlobContainerClient(ContainerName);
 
-            var containerExists = await container.ExistsAsync();
-            if (!containerExists)
+        /// <summary>Validates the configured container and that <paramref name="key"/> is still free.</summary>
+        private async Task<BlobContainerClient> PrepareContainerAsync(string key, CancellationToken cancelToken)
+        {
+            var storage = new BlobServiceClient(ConnectionString);
+
+            // anonymous reads of the public blobs are served at the account's default service
+            // version; pin a modern one so browsers get range requests and Content-Disposition.
+            BlobServiceProperties serviceProperties = await storage.GetPropertiesAsync(cancelToken);
+            if (serviceProperties.DefaultServiceVersion != AZURE_SERVICE_VERSION)
+            {
+                serviceProperties.DefaultServiceVersion = AZURE_SERVICE_VERSION;
+                await storage.SetPropertiesAsync(serviceProperties, cancelToken);
+            }
+
+            var container = storage.GetBlobContainerClient(ContainerName);
+            if (!await container.ExistsAsync(cancelToken))
                 throw new InvalidOperationException("Configured Azure storage container does not exist");
 
-            var blob = container.GetBlockBlobReference(key);
-            if (await blob.ExistsAsync())
+            var existing = container.GetBlobClient(key);
+            if (await existing.ExistsAsync(cancelToken))
                 throw new InvalidOperationException("A blob with this key already exists");
 
-            return blob;
+            return container;
         }
 
-        private async Task<UploadResult> SetPropertiesAndGetResult(CloudBlockBlob blob, string fileName, bool gzip)
+        private string GetMimeType(string fileName)
+            => _mimeDb.GetMimeFromExtension(Path.GetExtension(fileName)).ContentType;
+
+        // we want to give the browser a filename hint, and also tell it to render it inline (if it can).
+        // if it can't be rendered inline, the browser will just download it anyway.
+        private static BlobHttpHeaders GetHttpHeaders(string fileName, string mimeType) => new()
         {
-            var mimeType = _mimeDb.GetMimeFromExtension(Path.GetExtension(fileName)).ContentType;
+            ContentDisposition = $"inline; filename=\"{fileName}\"",
+            ContentType = mimeType,
+        };
 
-            // we want to give the browser a filename hint, and also tell it to render it inline (if it can).
-            // if it can't be rendered inline, the browser will just download it anyway.
-            blob.Properties.ContentDisposition = $"inline; filename=\"{fileName}\"";
-            blob.Properties.ContentType = mimeType;
-            if (gzip)
-                blob.Properties.ContentEncoding = "gzip";
+        private string GetPublicUrl(BlobBaseClient blob)
+            => String.IsNullOrWhiteSpace(CustomDomain)
+                ? blob.Uri.ToString()
+                : $"https://{CustomDomain}/{ContainerName}/{blob.Name}";
 
-            await blob.SetPropertiesAsync();
-
-            var url = blob.Uri.ToString();
-
-            if (!String.IsNullOrWhiteSpace(CustomDomain))
-                url = $"https://{CustomDomain}/{ContainerName}/{blob.Name}";
-
-            //var url = String.IsNullOrWhiteSpace(_options.CustomUrlPattern)
-            //    ? blob.Uri.ToString()
-            //    : UploadUtil.SubstituteUploadUrl(_options.CustomUrlPattern, mimeType, blob.Name);
-
+        private UploadResult GetResult(BlobBaseClient blob, string fileName, string mimeType)
+        {
             return new UploadResult()
             {
                 Provider = this,
-                PublicUrl = url,
+                PublicUrl = GetPublicUrl(blob),
                 FileName = fileName,
                 ContentType = mimeType,
                 UploadKey = blob.Name,
                 UploadTime = DateTimeOffset.UtcNow,
             };
+        }
+
+        private sealed class ProgressAdapter(UploadProgressHandler handler) : IProgress<long>
+        {
+            public void Report(long value) => handler(value);
         }
     }
 }

@@ -42,7 +42,6 @@ SHIPPED_CSPROJ=(
 # keep the list complete. Verify the license before adding an entry.
 declare -A LICENSE_OVERRIDES=(
     [YamlDotNet]="MIT"           # repo LICENSE.txt is MIT
-    [WindowsAzure.Storage]="MIT" # azure-storage-net LICENSE.txt is MIT
 )
 
 # Shipped components no dependency manifest can enumerate: the model weights
