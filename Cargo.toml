@@ -59,7 +59,7 @@ base64 = "0.23"
 # 1-byte structs (vec2/vec3/vec4/obs_transform_info/obs_audio_data/
 # obs_source_frame) whose layout asserts then fail with E0080. See the
 # assert_no_opaque_regressions guard in crates/prisc_obs_sys/build.rs.
-bindgen = "0.72"
+bindgen = "0.73"
 ctrlc = { version = "3", features = ["termination"] }
 clap = "4.6"
 image = { version = "0.25", default-features = false }
@@ -108,7 +108,7 @@ egui = { version = "0.37", default-features = false, features = ["bytemuck"] }
 egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 egui_plot = "0.38"
 arboard = "3.6"
-rfd = { version = "0.17", default-features = false }
+rfd = { version = "0.18", default-features = false }
 xdialog = "4.1"
 windows = "0.62"
 objc2 = "0.6"
