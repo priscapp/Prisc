@@ -146,7 +146,7 @@ case "$mode" in
   debug-files)
     src=${3:?usage: stage-app.sh debug-files <rid> <cargo profile dir>}
     # Named artifacts rather than the directory, which would recurse into
-    # deps/ and upload every dependency's intermediates. The binary goes up
+    # build/ and upload every dependency's intermediates. The binary goes up
     # beside its debug file for its symbol table.
     while IFS= read -r f; do
       case "$rid" in

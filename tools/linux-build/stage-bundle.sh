@@ -33,7 +33,7 @@ rm -rf "$dist"; mkdir -p "$dist"
 # 1. Executables (shipped.sh's recorder_binaries), the shared libraries
 #    build.rs staged under their SONAMEs (libobs.so.30, libobs-opengl.so.30,
 #    the FFmpeg set) and the plugin/data trees. Explicit items only, so
-#    cargo's build junk (deps/, build/, *.rlib, *.d) stays behind.
+#    cargo's build junk (build/, *.rlib, *.d) stays behind.
 for bin in "${binaries[@]}"; do
   cp -a "$src/$bin" "$dist/"
 done
@@ -56,7 +56,7 @@ for required in "${binaries[@]}" \
 done
 
 # 2. Relocate: the Rust executables carry $ORIGIN followed by absolute
-#    build-tree entries (so they, and the cargo test binaries in deps/, also
+#    build-tree entries (so they, and the cargo test binaries under build/, also
 #    resolve libobs/FFmpeg in place). The shipped copies keep only $ORIGIN.
 #    Everything else was staged by build.rs with a relative RUNPATH already.
 # shellcheck disable=SC2016 # a literal $ORIGIN, for the loader

@@ -95,10 +95,9 @@ jobs:
 
       - name: Test (release, unit tests only)
         run: |
-          # prisc_recorder links obs.dll (import lib), so the test exe in
-          # target/release/deps needs the runtime DLLs (assembled in
-          # target/release) on PATH.
-          $env:PATH = "$(Resolve-Path target/release);$env:PATH"
+          # prisc_recorder links obs.dll (import lib). Its build.rs assembles
+          # the runtime DLLs in target/release, which cargo test puts on the
+          # test executables' PATH.
           cargo test --release -p prisc_recorder -p prisc_obs_platform -p prisc_share_region
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # prisc_vid2gif links the bundled FFmpeg DLLs; its tests are fully
@@ -205,7 +204,7 @@ jobs:
         uses: ./.github/actions/setup-obs-build
         with:
           arch: ${{ matrix.arch }}
-          obs-build-path: ${{ matrix.outdir }}/build/prisc_obs_sys-*/out
+          obs-build-path: ${{ matrix.outdir }}/build/prisc_obs_sys/*/out
 
       - name: Build (release)
         run: cargo build --release -p prisc_recorder -p prisc_share_region -p prisc_vid2gif ${{ matrix.target_flag }}

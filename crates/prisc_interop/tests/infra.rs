@@ -1,7 +1,7 @@
 //! The infra exports through the library's public surface (README section 4.1): status mapping,
 //! the last-error slot, panics, re-entry, strings, and the ABI hash as the C# loader reads it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use prisc_interop::ffi::error::{prisc_last_error_code, prisc_last_error_message};
 use prisc_interop::ffi::selftest::{prisc_interop_selftest, PriscSelftestKind as K};
@@ -129,15 +129,36 @@ fn the_version_is_an_owned_string_freed_once() {
     assert_eq!(unsafe { prisc_string_free(std::ptr::null_mut()) }, S::InvalidArg as i32);
 }
 
-/// The built cdylib beside this test binary (target/<profile>/deps or target/<profile>).
+/// The newest built cdylib. This test binary lives in `target/<profile>/build/prisc_interop/<hash>/out/`;
+/// cargo leaves the cdylib in a sibling unit dir there and copies it up to `target/<profile>/` only
+/// when it is built as a root (`cargo build -p prisc_interop`), so either can be the current one.
 fn built_library() -> PathBuf {
     let name = format!("{}prisc_interop{}", std::env::consts::DLL_PREFIX, std::env::consts::DLL_SUFFIX);
     let exe = std::env::current_exe().unwrap();
-    let deps = exe.parent().unwrap();
-    [deps.join(&name), deps.parent().unwrap().join(&name)]
+    let profile = exe
+        .ancestors()
+        .find(|p| p.file_name().is_some_and(|n| n == "build"))
+        .and_then(Path::parent)
+        .unwrap_or_else(|| panic!("{} is not under a cargo build dir", exe.display()));
+    let crate_units = profile
+        .join("build")
+        .join(env!("CARGO_PKG_NAME"));
+    let built_at = |p: PathBuf| {
+        let modified = std::fs::metadata(&p)
+            .and_then(|m| m.modified())
+            .ok()?;
+        Some((modified, p))
+    };
+    std::fs::read_dir(&crate_units)
         .into_iter()
-        .find(|p| p.is_file())
-        .unwrap_or_else(|| panic!("{name} was not built next to {}", deps.display()))
+        .flatten()
+        .flatten()
+        .map(|unit| unit.path().join("out").join(&name))
+        .chain([profile.join(&name)])
+        .filter_map(built_at)
+        .max()
+        .map(|(_, p)| p)
+        .unwrap_or_else(|| panic!("{name} was not built under {}", profile.display()))
 }
 
 /// What the C# loader does: open the library, call `prisc_interop_abi_hash` by name, compare with

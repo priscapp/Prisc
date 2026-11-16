@@ -45,7 +45,7 @@ Capture it, annotate it, record it, edit it, share it. Every feature is a switch
 | macOS Apple Silicon | [Prisc-osx-arm64-Setup.pkg](https://github.com/priscapp/Prisc/releases/latest/download/Prisc-osx-arm64-Setup.pkg) | [Prisc-osx-arm64-Portable.zip](https://github.com/priscapp/Prisc/releases/latest/download/Prisc-osx-arm64-Portable.zip) |
 | macOS Intel | [Prisc-osx-x64-Setup.pkg](https://github.com/priscapp/Prisc/releases/latest/download/Prisc-osx-x64-Setup.pkg) | [Prisc-osx-x64-Portable.zip](https://github.com/priscapp/Prisc/releases/latest/download/Prisc-osx-x64-Portable.zip) |
 
-Requires Windows 10+ or macOS 13+.
+Requires Windows 10+ or macOS 13.4+.
 
 ---
 

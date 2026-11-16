@@ -50,6 +50,7 @@ mod ocr;
 
 use std::io::Read;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use anyhow::bail;
 use clap::{Parser, Subcommand};
@@ -256,52 +257,67 @@ pub enum CoreMl {
 /// no unused parameter to silence on the targets that ignore it, and no
 /// `Vec::new()` that only some targets go on to push to (clippy reads that
 /// last shape as `vec_init_then_push`, which it is, on Windows).
+///
+/// `.build()` type-erases each provider into ort's `ExecutionProviderDispatch`,
+/// which keeps its name and `register` (`ExecutionProvider` itself is not dyn
+/// compatible).
 #[cfg(windows)]
-fn platform_providers(_coreml: CoreMl) -> Vec<Box<dyn ort::ep::ExecutionProvider>> {
+fn platform_providers(_coreml: CoreMl) -> Vec<ort::ep::ExecutionProviderDispatch> {
     // DirectML takes both models here, so nothing declines it — the parameter
     // exists for the macOS arm and is deliberately unread.
-    vec![Box::new(ort::ep::DirectML::default())]
+    vec![ort::ep::DirectML::default().build()]
 }
 
 #[cfg(target_os = "macos")]
-fn platform_providers(coreml: CoreMl) -> Vec<Box<dyn ort::ep::ExecutionProvider>> {
+fn platform_providers(coreml: CoreMl) -> Vec<ort::ep::ExecutionProviderDispatch> {
     if coreml != CoreMl::Allowed {
         log::info!("CoreML skipped: this model measured faster on the CPU provider");
         return Vec::new();
     }
 
-    vec![Box::new(
-        ort::ep::CoreML::default()
-            // MLProgram, not the `NeuralNetwork` default. That default is an
-            // fp16 format, and the precision is not academic: RVM's first
-            // frames come back visibly wrong on it — mean |Δalpha| 37.8/255
-            // against the fp32 reference on frame 0, decaying over the next
-            // ~10 frames as the recurrent state warms, i.e. a wrong matte at
-            // the head of every clip. MLProgram matches the CPU to within one
-            // 8-bit step everywhere. It also rank-pads nothing, which is what
-            // makes the speech enhancer merely slow rather than broken (see
-            // [`CoreMl::Declined`]). The cost is session build time: ~1.0 s
-            // against ~0.37 s, paid once per job.
-            .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
-            // Not the `ALL` default, which measured 10-30% slower and far
-            // noisier (48-50 ms/frame against 53-67 for RVM at 960x540).
-            // `ALL` lets CoreML's planner shop partitions around the GPU;
-            // narrowing the choice skips that, and costs nothing real, because
-            // the ANE does not take these graphs anyway and the work lands on
-            // the CPU under either setting.
-            .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndNeuralEngine),
-    )]
+    vec![ort::ep::CoreML::default()
+        // MLProgram, not the `NeuralNetwork` default. That default is an
+        // fp16 format, and the precision is not academic: RVM's first
+        // frames come back visibly wrong on it — mean |Δalpha| 37.8/255
+        // against the fp32 reference on frame 0, decaying over the next
+        // ~10 frames as the recurrent state warms, i.e. a wrong matte at
+        // the head of every clip. MLProgram matches the CPU to within one
+        // 8-bit step everywhere. It also rank-pads nothing, which is what
+        // makes the speech enhancer merely slow rather than broken (see
+        // [`CoreMl::Declined`]). The cost is session build time: ~1.0 s
+        // against ~0.37 s, paid once per job.
+        .with_model_format(ort::ep::coreml::ModelFormat::MLProgram)
+        // Not the `ALL` default, which measured 10-30% slower and far
+        // noisier (48-50 ms/frame against 53-67 for RVM at 960x540).
+        // `ALL` lets CoreML's planner shop partitions around the GPU;
+        // narrowing the choice skips that, and costs nothing real, because
+        // the ANE does not take these graphs anyway and the work lands on
+        // the CPU under either setting.
+        .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndNeuralEngine)
+        .build()]
 }
 
 /// No hardware provider we ship for; ONNX Runtime's own CPU provider takes
 /// everything.
 #[cfg(not(any(windows, target_os = "macos")))]
-fn platform_providers(_coreml: CoreMl) -> Vec<Box<dyn ort::ep::ExecutionProvider>> {
+fn platform_providers(_coreml: CoreMl) -> Vec<ort::ep::ExecutionProviderDispatch> {
     Vec::new()
 }
 
+/// The process's ONNX Runtime environment, created on first use and shared by
+/// every session. Default options: the execution providers are registered per
+/// session by [`ep_session_builder`], so each outcome is logged.
+pub fn ort_environment() -> ort::Result<&'static ort::environment::Environment> {
+    static ENV: OnceLock<ort::environment::Environment> = OnceLock::new();
+    if let Some(env) = ENV.get() {
+        return Ok(env);
+    }
+    let env = ort::init().build()?;
+    Ok(ENV.get_or_init(|| env))
+}
+
 pub fn ep_session_builder(coreml: CoreMl) -> anyhow::Result<ort::session::builder::SessionBuilder> {
-    let mut builder = ort::session::Session::builder()?;
+    let mut builder = ort::session::Session::builder(ort_environment()?)?;
     // DirectML requires both of these (the DML allocator cannot serve the
     // memory-pattern planner, and parallel execution is CPU-only); they only
     // cost anything when every hardware provider fails, in which case CPU

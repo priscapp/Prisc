@@ -40,11 +40,9 @@ fn video(w: u32, h: u32) -> VideoInfo {
 fn placement_after_canvas_reset_is_exact() {
     prisc_obs_platform::init_process().expect("platform init");
     let context = ObsContext::new("en-US").expect("obs_startup");
-    // The test binary lives in target/<profile>/deps; the staged runtime
-    // (data/libobs) is one level up, next to prisc_recorder.
-    let exe = std::env::current_exe().unwrap();
-    let profile_dir = exe.parent().unwrap().parent().unwrap();
-    let paths = prisc_obs_platform::default_obs_paths(profile_dir);
+    // The staged runtime (data/libobs) sits next to the prisc_recorder binary.
+    let recorder = std::path::Path::new(env!("CARGO_BIN_EXE_prisc_recorder"));
+    let paths = prisc_obs_platform::default_obs_paths(recorder.parent().unwrap());
     let data = paths
         .libobs_data
         .expect("libobs data dir not found next to the binaries; build the workspace first");

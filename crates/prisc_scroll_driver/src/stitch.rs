@@ -1160,8 +1160,8 @@ mod tests {
             let off: i32 = if y % 2 == 0 { 25 } else { -25 };
             for x in 0..W as usize {
                 let i = y * stride + x * 4;
-                for c in i..i + 3 {
-                    frame.bgra[c] = (frame.bgra[c] as i32 + off).clamp(0, 255) as u8;
+                for b in &mut frame.bgra[i..i + 3] {
+                    *b = (*b as i32 + off).clamp(0, 255) as u8;
                 }
             }
         }

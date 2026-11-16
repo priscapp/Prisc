@@ -408,9 +408,10 @@ fn build_linux() {
     );
 
     // $ORIGIN first: the shipped binary resolves libobs and FFmpeg beside
-    // itself. The absolute build-tree paths after it serve this crate's test
-    // executables in `deps/` (same as the macOS branch's absolute rpaths; the
-    // release staging rewrites the RUNPATH to plain $ORIGIN). cargo passes
+    // itself. The absolute build-tree paths after it serve this crate's cargo
+    // test executables, which do not sit beside the staged copies (same as
+    // the macOS branch's absolute rpaths; the release staging rewrites the
+    // RUNPATH to plain $ORIGIN). cargo passes
     // link args without a shell, so `$ORIGIN` reaches the linker verbatim.
     println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
     prisc_build_support::link_obs_rpaths();

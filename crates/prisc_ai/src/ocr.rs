@@ -286,11 +286,11 @@ fn read_request() -> anyhow::Result<OcrRequest> {
     })
 }
 
-/// A CPU-only session over an embedded model. Plain `Session::builder()`, not
+/// A CPU-only session over an embedded model. Plain `Session::builder`, not
 /// `ep_session_builder()` — see the module docs for why OCR stays off the
 /// hardware providers.
 fn cpu_session(model: &'static [u8]) -> ort::Result<Session> {
-    Session::builder()?.commit_from_memory(model)
+    Session::builder(crate::ort_environment()?)?.commit_from_memory(model)
 }
 
 /// The detector, created on first use. `Option` caches a failed init too — a

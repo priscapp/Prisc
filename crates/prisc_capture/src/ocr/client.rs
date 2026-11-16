@@ -309,8 +309,8 @@ mod tests {
 
     /// Opt-in round trip through the REAL recognizer: point
     /// `PRISC_HELPERS_DIR` at the directory of a built `prisc_ai` and run
-    /// (sibling resolution cannot work from a test binary, which cargo puts in
-    /// `target/<profile>/deps/` rather than beside the recognizer). Exercises the half
+    /// (sibling resolution cannot work from a test binary, which cargo does not
+    /// put beside the recognizer). Exercises the half
     /// of this module that unit tests cannot reach — header framing, the
     /// pixel upload, the wait, and parsing the response file — against the
     /// actual child rather than a stand-in.

@@ -171,11 +171,15 @@ pub fn link_obs_rpaths() {
 /// The cargo profile dir (`target[/<triple>]/{debug,release}`) a build script
 /// stages runtime files into, beside the executables.
 pub fn cargo_profile_dir() -> PathBuf {
-    // OUT_DIR = <profile>/build/<crate>-<hash>/out
-    PathBuf::from(env::var("OUT_DIR").unwrap())
+    // OUT_DIR is <profile>/build/<crate>/<hash>/out since cargo 1.100, and was
+    // <profile>/build/<crate>-<hash>/out before. The profile dir is the parent
+    // of the nearest `build` dir in either layout.
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    out_dir
         .ancestors()
-        .nth(3)
-        .expect("could not resolve the cargo profile dir from OUT_DIR")
+        .find(|p| p.file_name().is_some_and(|n| n == "build"))
+        .and_then(Path::parent)
+        .unwrap_or_else(|| panic!("could not resolve the cargo profile dir from OUT_DIR {}", out_dir.display()))
         .to_path_buf()
 }
 
