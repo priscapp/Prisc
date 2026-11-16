@@ -9,9 +9,9 @@
 ///
 /// The ONNX Runtime itself is `ort-sys`'s job (the `ort` crate's build): it
 /// downloads pyke's prebuilt runtime for the cargo TARGET and links it
-/// statically. On Windows this script stages the DirectML EP's helper dylib
-/// (DirectML.dll) from that download beside the built exe; see
-/// [`stage_directml`].
+/// statically, and its `copy-dylibs` feature stages the DirectML EP's helper
+/// dylib (DirectML.dll) beside the built exe. macOS needs two things on top,
+/// see [`macos`].
 const SHARED_MANIFEST: &str = "../prisc_build_support/app.manifest";
 
 fn main() {
@@ -59,56 +59,37 @@ fn main() {
             println!("cargo:rustc-link-arg=/DEFAULTLIB:{lib}.lib");
         }
     }
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        stage_directml();
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        macos();
     }
 }
 
-/// Copies DirectML.dll from ort-sys's extracted download into the cargo
-/// profile dir, beside the exe; `cargo test` puts that dir on the test
-/// executables' PATH, and CI packages the DLL from there.
+/// pyke's ONNX Runtime 1.31 objects are built for macOS 13.4, so this binary
+/// is too (dyld then refuses it cleanly on older systems, instead of it dying
+/// on a missing symbol mid-inference). The rest of the workspace keeps Rust's
+/// default deployment target.
 ///
-/// ort's own `copy-dylibs` feature did this until cargo 1.100 moved build
-/// script output dirs one level deeper (`build/<pkg>/<hash>/out`): ort-sys
-/// 2.0.0-rc.13 still derives the profile dir with `OUT_DIR.ancestors().nth(3)`
-/// and panics. rc.14+ handle the new layout, but they are held back (they need
-/// macOS 13.4). Once ort is upgraded, this can go back to `copy-dylibs`.
-///
-/// ort-sys extracts into `<cache>/dfbin/<TARGET>/<dist hash>/`, where `<cache>`
-/// is `ORT_CACHE_DIR` or `%LOCALAPPDATA%\ort.pyke.io` (ort-sys's
-/// `internal::dirs::cache_dir`). It runs first: cargo runs a crate's build
-/// script after those of its direct `links` dependencies, which is why this
-/// crate depends on ort-sys directly as well as through ort. The dist hash is
-/// not exported, so this takes the most recently extracted dist that carries
-/// the DLL; every dist of one ONNX Runtime release ships the same DirectML.dll.
-fn stage_directml() {
-    use std::path::PathBuf;
+/// Their CoreML code also calls `__isPlatformVersionAtLeast` (Clang's
+/// `@available`). Rust's std defines that symbol, but only weakly, and the
+/// release profile's LTO drops it because no Rust code references it, which
+/// fails the release link. Linking compiler-rt supplies the real one, as
+/// ort-sys did itself up to rc.13.
+fn macos() {
+    println!("cargo:rustc-env=MACOSX_DEPLOYMENT_TARGET=13.4");
 
-    let cache = std::env::var_os("ORT_CACHE_DIR")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("ort.pyke.io")))
-        .expect("neither ORT_CACHE_DIR nor LOCALAPPDATA is set");
-    let dists = cache
-        .join("dfbin")
-        .join(std::env::var("TARGET").unwrap());
-    let extracted = |dist: std::fs::DirEntry| {
-        let dll = dist.path().join("DirectML.dll");
-        let modified = std::fs::metadata(&dll)
-            .and_then(|m| m.modified())
-            .ok()?;
-        Some((modified, dll))
-    };
-    let src = std::fs::read_dir(&dists)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(extracted)
-        .max()
-        .map(|(_, dll)| dll)
-        .unwrap_or_else(|| panic!("DirectML.dll not found in ort-sys's downloads under {}", dists.display()));
-
-    let dst = prisc_build_support::cargo_profile_dir().join("DirectML.dll");
-    println!("cargo:rerun-if-changed={}", src.display());
-    println!("cargo:rerun-if-changed={}", dst.display());
-    prisc_build_support::copy_if_newer(&src, &dst);
+    println!("cargo:rerun-if-env-changed=CC");
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    let output = std::process::Command::new(&cc)
+        .arg("--print-resource-dir")
+        .output()
+        .unwrap_or_else(|e| panic!("running `{cc} --print-resource-dir`: {e}"));
+    assert!(output.status.success(), "`{cc} --print-resource-dir` failed: {}", output.status);
+    let darwin = std::path::Path::new(String::from_utf8_lossy(&output.stdout).trim()).join("lib/darwin");
+    assert!(
+        darwin.join("libclang_rt.osx.a").is_file(),
+        "compiler-rt (libclang_rt.osx.a) not found in {}",
+        darwin.display()
+    );
+    println!("cargo:rustc-link-search=native={}", darwin.display());
+    println!("cargo:rustc-link-lib=static=clang_rt.osx");
 }
