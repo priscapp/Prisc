@@ -6,15 +6,16 @@ use prisc_build_support::copy_if_newer;
 /// Runtime plumbing for the FFmpeg libraries prisc_vid2gif links (via prisc_ffmpeg_sys):
 ///
 /// - Windows: copy the FFmpeg DLLs (and their dependency DLLs) from the
-///   obs-deps bundle next to the binary AND into the `deps` dir, so both
-///   `prisc_vid2gif.exe` and the cargo test executables load without PATH setup.
+///   obs-deps bundle next to the binary. `cargo test` puts that profile dir on
+///   the test executables' PATH, so they load the same copies.
 /// - macOS: add rpaths so the dylibs resolve from the obs-deps bundle during
 ///   development and from `@executable_path/Frameworks` in the shipped
 ///   bundle (the release staging strips the absolute rpath).
 /// - Linux: both of the above — copy the bundle's FFmpeg shared objects next
 ///   to the binary (under their SONAMEs, see prisc_build_support) and link with
 ///   RUNPATH `$ORIGIN` so the profile dir is self-contained, plus an absolute
-///   RUNPATH into the bundle for the test executables in `deps/`.
+///   RUNPATH into the bundle for the cargo test executables, which do not sit
+///   beside the copies.
 ///
 /// The bundle location comes from prisc_ffmpeg_sys (`links = "ffmpeg"`), NOT from a
 /// scan of `.deps` here: that ordering guarantee is the point. prisc_ffmpeg_sys
@@ -60,7 +61,6 @@ fn windows() {
         println!("cargo:rerun-if-changed={}", src.display());
         if src.exists() {
             copy_if_newer(&src, &profile_dir.join(name));
-            copy_if_newer(&src, &profile_dir.join("deps").join(name));
         } else {
             println!(
                 "cargo:warning=prisc_vid2gif: not found in obs-deps: {}",
@@ -100,8 +100,8 @@ fn linux() {
     let bundle = prisc_build_support::linux::FfmpegBundle { root };
 
     // $ORIGIN first, so a staged or relocated prisc_vid2gif always prefers the copies
-    // beside it; the absolute bundle path serves the test executables in
-    // `deps/` (the release staging strips it). `$ORIGIN` reaches the linker
+    // beside it; the absolute bundle path serves the cargo test executables
+    // (the release staging strips it). `$ORIGIN` reaches the linker
     // verbatim: cargo passes link args without a shell.
     println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}", bundle.lib().display());

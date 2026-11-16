@@ -79,7 +79,7 @@ namespace Prisc.Interop.Tests
         }
 
         [Fact]
-        public void The_probe_walks_up_to_the_newer_cargo_build_including_deps()
+        public void The_probe_walks_up_to_the_newer_cargo_build_including_unit_outputs()
         {
             var app = Path.Combine(_root, "ui", "App", "bin");
             Directory.CreateDirectory(app);
@@ -91,9 +91,11 @@ namespace Prisc.Interop.Tests
             File.SetLastWriteTimeUtc(debug, DateTime.UtcNow.AddMinutes(-10));
             Assert.Equal(debug, NativeProbe.Find(name, null, app, library: true));
 
-            var deps = Touch("target", "debug", "deps", name);
-            File.SetLastWriteTimeUtc(deps, DateTime.UtcNow);
-            Assert.Equal(deps, NativeProbe.Find(name, null, app, library: true));
+            var older = Touch("target", "debug", "build", "prisc_interop", "1111", "out", name);
+            File.SetLastWriteTimeUtc(older, DateTime.UtcNow.AddMinutes(-5));
+            var unit = Touch("target", "debug", "build", "prisc_interop", "2222", "out", name);
+            File.SetLastWriteTimeUtc(unit, DateTime.UtcNow);
+            Assert.Equal(unit, NativeProbe.Find(name, null, app, library: true));
             Assert.Equal(debug, NativeProbe.Find(name, null, app, library: false));
         }
 

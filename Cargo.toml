@@ -78,8 +78,9 @@ serde_json = "1.0"
 # pyke's prebuilt, attested ONNX Runtime binaries per target and links the
 # runtime statically; execution-provider features (directml/coreml) are
 # enabled per target in prisc_ai's own manifest, since no one binary
-# build carries every EP. copy-dylibs stages the EP helper dylib
-# (DirectML.dll) beside the built exe; CI packages it from there.
+# build carries every EP. prisc_ai's build.rs stages the EP helper dylib
+# (DirectML.dll) beside the built exe, as copy-dylibs did before cargo 1.100
+# broke it in this ort-sys (see stage_directml there); CI packages it from there.
 # NOTE: pyke's libs are compiled /MD — prisc_ai's build.rs swaps that
 # one binary off this workspace's `+crt-static` at link time (see there).
 # Default features minus `tracing`: with `tracing` on and no subscriber
@@ -91,7 +92,6 @@ ort = { version = "2.0.0-rc.13", default-features = false, features = [
     "ndarray",
     "download-binaries",
     "tls-native",
-    "copy-dylibs",
     "api-27",
 ] }
 # prisc_ai's STFT/ISTFT for the 48 kHz denoiser.

@@ -150,10 +150,9 @@ jobs:
 
       - name: Test (release, unit tests only)
         run: |
-          # No LD_LIBRARY_PATH needed (unlike Windows' PATH): every test
-          # executable in target/release/deps carries absolute RUNPATHs to the
-          # OBS build tree and the FFmpeg bundle, set by the crates' build
-          # scripts. prisc_vid2gif links the bundled FFmpeg directly; its
+          # No LD_LIBRARY_PATH needed: every test executable carries absolute
+          # RUNPATHs to the OBS build tree and the FFmpeg bundle, set by the
+          # crates' build scripts. prisc_vid2gif links the bundled FFmpeg directly; its
           # integration tests are self-contained. prisc_ffmpeg_sys verifies
           # linkage + ABI version. prisc_recorder's smoke tests stay #[ignore]d
           # here, as on the other platforms; verify-bundle.sh records for real

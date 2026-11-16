@@ -3699,6 +3699,8 @@ dependencies = [
  "image",
  "log",
  "ort",
+ "ort-sys",
+ "prisc_build_support",
  "prisc_ipc",
  "prisc_shared",
  "realfft",

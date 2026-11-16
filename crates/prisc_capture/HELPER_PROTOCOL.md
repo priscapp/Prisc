@@ -701,7 +701,7 @@ Probe order for file name `f` = `NativeProbe.ExeName(stem)`, first existing wins
 3. Dev walk-up from `AppContext.BaseDirectory`: at each ancestor holding `Cargo.toml`, probe
    `target/debug/f` and `target/release/f` and take the newer by last-write time (debug wins a
    tie; `CaptureBinaryLocator`'s rule). The prisc_interop loader also probes
-   `target/{debug,release}/deps/f`, newer wins: building a crate that depends on prisc_interop
+   `target/{debug,release}/build/prisc_interop/*/out/f`, newest wins: building a crate that depends on prisc_interop
    leaves the library there without copying it up, so `target/<profile>/f` alone can be a stale
    copy that fails the ABI check. Stem `Prisc.VideoRender` instead probes
    `ui/Prisc.VideoRender/bin/{Debug,Release}/net10.0/f` at each ancestor, newer wins. Keep

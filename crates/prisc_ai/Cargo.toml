@@ -50,6 +50,10 @@ ort.workspace = true
 # STFT/ISTFT for the DPDFNet denoiser (src/denoise.rs).
 realfft.workspace = true
 
+[build-dependencies]
+# cargo_profile_dir + copy_if_newer, for staging DirectML.dll (build.rs).
+prisc_build_support.workspace = true
+
 [dev-dependencies]
 # png/jpeg are only for the env-gated diagnostic tests in src/ocr.rs.
 image = { workspace = true, features = ["png", "jpeg"] }
@@ -60,6 +64,11 @@ image = { workspace = true, features = ["png", "jpeg"] }
 # will never have, so it could only ever fall back.
 [target.'cfg(windows)'.dependencies]
 ort = { workspace = true, features = ["directml"] }
+# Not used from code: a direct dependency on the `links` crate is what makes
+# cargo run ort-sys's build script (the runtime download) before ours, which
+# stages DirectML.dll out of that download. Same pin as ort's own; features
+# come from ort.
+ort-sys = { version = "=2.0.0-rc.13", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ort = { workspace = true, features = ["coreml"] }

@@ -138,7 +138,7 @@ cargo build -p prisc_interop
 
 The loader finds it like a helper (above), with two additions: `PRISC_INTEROP_PATH` names the file
 outright (set but not an existing file means unavailable, no fallback), and the dev walk-up also
-looks in `target/{debug,release}/deps/`, where building a dependent crate leaves it. A Debug build of
+looks in `target/{debug,release}/build/prisc_interop/*/out/`, where building a dependent crate leaves it. A Debug build of
 `ui/Prisc.Interop` warns when no library is found. A library built from different `src/ffi` sources
 than the C# bindings is refused at load (the ABI hash, README section E): run `cargo codegen`, then
 build again.

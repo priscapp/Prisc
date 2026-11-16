@@ -11,8 +11,8 @@ namespace Prisc.Interop
     /// list), then its <c>recorder/</c> subdirectory;</item>
     /// <item>the base directory, then its <c>recorder/</c> subdirectory (the release layout);</item>
     /// <item>the dev walk-up: at each ancestor holding <c>Cargo.toml</c>, the newer of
-    /// <c>target/debug</c> and <c>target/release</c> (debug wins a tie), plus their <c>deps/</c> for a
-    /// library. Prisc.VideoRender instead probes <c>ui/Prisc.VideoRender/bin/{Debug,Release}/net10.0</c>
+    /// <c>target/debug</c> and <c>target/release</c> (debug wins a tie), plus their
+    /// <c>build/&lt;crate&gt;/*/out/</c> for a library. Prisc.VideoRender instead probes <c>ui/Prisc.VideoRender/bin/{Debug,Release}/net10.0</c>
     /// at each ancestor. The walk carries on past a <c>Cargo.toml</c> with nothing built under it.</item>
     /// </list>
     /// Prisc.Ipc's <c>HelperLocator</c> is the facade most callers use; it delegates here.
@@ -33,8 +33,8 @@ namespace Prisc.Interop
             : OperatingSystem.IsMacOS() ? "lib" + stem + ".dylib"
             : "lib" + stem + ".so";
 
-        /// <summary>The probe. <paramref name="library"/> adds <c>target/&lt;profile&gt;/deps/</c> to the
-        /// dev walk-up: a crate built as a dependency (or by <c>cargo test</c>) leaves its library there
+        /// <summary>The probe. <paramref name="library"/> adds <c>target/&lt;profile&gt;/build/&lt;crate&gt;/*/out/</c>
+        /// to the dev walk-up: a crate built as a dependency (or by <c>cargo test</c>) leaves its library there
         /// without copying it up, and probing only <c>target/&lt;profile&gt;/</c> would load a stale copy.
         /// Null when nothing is found.</summary>
         public static string? Find(string fileName, string? envDirs, string? baseDirectory, bool library)
@@ -77,8 +77,8 @@ namespace Prisc.Interop
                     hit = Newer(Path.Combine(target, "debug", fileName), Path.Combine(target, "release", fileName));
                     if (library)
                     {
-                        hit = Newer(hit, Newer(Path.Combine(target, "debug", "deps", fileName),
-                                               Path.Combine(target, "release", "deps", fileName)));
+                        hit = Newer(hit, Newer(InBuildDir(target, "debug", fileName),
+                                               InBuildDir(target, "release", fileName)));
                     }
                 }
                 else
@@ -115,6 +115,32 @@ namespace Prisc.Interop
             }
 
             return null;
+        }
+
+        /// <summary>The newest <paramref name="fileName"/> in cargo's per-unit output dirs for its crate,
+        /// <c>target/&lt;profile&gt;/build/&lt;crate&gt;/&lt;hash&gt;/out/</c>, or null when there is none.</summary>
+        private static string? InBuildDir(string target, string profile, string fileName)
+        {
+            var crate = Path.GetFileNameWithoutExtension(fileName);
+            if (!OperatingSystem.IsWindows() && crate.StartsWith("lib", StringComparison.Ordinal))
+                crate = crate.Substring(3);
+
+            var crateDir = Path.Combine(target, profile, "build", crate);
+            string? newest = null;
+            try
+            {
+                if (Directory.Exists(crateDir))
+                {
+                    foreach (var unit in Directory.EnumerateDirectories(crateDir))
+                        newest = Newer(newest, Path.Combine(unit, "out", fileName));
+                }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // a cargo build pruning unit dirs meanwhile leaves whatever was found so far
+            }
+
+            return newest;
         }
 
         /// <summary>Whichever of the two exists, or the more recently written when both do. Strictly

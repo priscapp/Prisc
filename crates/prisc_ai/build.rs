@@ -7,10 +7,11 @@
 /// that silently drifted would make one binary read virtualized coordinates
 /// and photograph the wrong pixels.
 ///
-/// The ONNX Runtime itself needs nothing from this script: `ort-sys` (the
-/// `ort` crate's build) downloads pyke's prebuilt runtime for the cargo
-/// TARGET and links it statically, and its `copy-dylibs` feature stages the
-/// DirectML EP's helper dylib (DirectML.dll) beside the built exe.
+/// The ONNX Runtime itself is `ort-sys`'s job (the `ort` crate's build): it
+/// downloads pyke's prebuilt runtime for the cargo TARGET and links it
+/// statically. On Windows this script stages the DirectML EP's helper dylib
+/// (DirectML.dll) from that download beside the built exe; see
+/// [`stage_directml`].
 const SHARED_MANIFEST: &str = "../prisc_build_support/app.manifest";
 
 fn main() {
@@ -58,4 +59,56 @@ fn main() {
             println!("cargo:rustc-link-arg=/DEFAULTLIB:{lib}.lib");
         }
     }
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        stage_directml();
+    }
+}
+
+/// Copies DirectML.dll from ort-sys's extracted download into the cargo
+/// profile dir, beside the exe; `cargo test` puts that dir on the test
+/// executables' PATH, and CI packages the DLL from there.
+///
+/// ort's own `copy-dylibs` feature did this until cargo 1.100 moved build
+/// script output dirs one level deeper (`build/<pkg>/<hash>/out`): ort-sys
+/// 2.0.0-rc.13 still derives the profile dir with `OUT_DIR.ancestors().nth(3)`
+/// and panics. rc.14+ handle the new layout, but they are held back (they need
+/// macOS 13.4). Once ort is upgraded, this can go back to `copy-dylibs`.
+///
+/// ort-sys extracts into `<cache>/dfbin/<TARGET>/<dist hash>/`, where `<cache>`
+/// is `ORT_CACHE_DIR` or `%LOCALAPPDATA%\ort.pyke.io` (ort-sys's
+/// `internal::dirs::cache_dir`). It runs first: cargo runs a crate's build
+/// script after those of its direct `links` dependencies, which is why this
+/// crate depends on ort-sys directly as well as through ort. The dist hash is
+/// not exported, so this takes the most recently extracted dist that carries
+/// the DLL; every dist of one ONNX Runtime release ships the same DirectML.dll.
+fn stage_directml() {
+    use std::path::PathBuf;
+
+    let cache = std::env::var_os("ORT_CACHE_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("ort.pyke.io")))
+        .expect("neither ORT_CACHE_DIR nor LOCALAPPDATA is set");
+    let dists = cache
+        .join("dfbin")
+        .join(std::env::var("TARGET").unwrap());
+    let extracted = |dist: std::fs::DirEntry| {
+        let dll = dist.path().join("DirectML.dll");
+        let modified = std::fs::metadata(&dll)
+            .and_then(|m| m.modified())
+            .ok()?;
+        Some((modified, dll))
+    };
+    let src = std::fs::read_dir(&dists)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(extracted)
+        .max()
+        .map(|(_, dll)| dll)
+        .unwrap_or_else(|| panic!("DirectML.dll not found in ort-sys's downloads under {}", dists.display()));
+
+    let dst = prisc_build_support::cargo_profile_dir().join("DirectML.dll");
+    println!("cargo:rerun-if-changed={}", src.display());
+    println!("cargo:rerun-if-changed={}", dst.display());
+    prisc_build_support::copy_if_newer(&src, &dst);
 }

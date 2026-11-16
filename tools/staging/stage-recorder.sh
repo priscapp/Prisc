@@ -84,11 +84,11 @@ stage_macos() {
   mkdir -p "$dist/Frameworks" "$dist/obs-plugins"
 
   # Locate the OBS build tree prisc_obs_sys assembled (OUT_DIR/obs-build).
-  # Several prisc_obs_sys-<hash>/out/obs-build dirs can accumulate (a restored
+  # Several prisc_obs_sys/<hash>/out/obs-build dirs can accumulate (a restored
   # CI cache, prisc_obs_sys/build.rs changing across commits), so pick the
   # newest one that actually holds the built framework.
   # shellcheck disable=SC2045 # build dirs have no spaces; ls -t sorts by age
-  for cand in $(ls -dt "$src"/build/prisc_obs_sys-*/out/obs-build 2>/dev/null); do
+  for cand in $(ls -dt "$src"/build/prisc_obs_sys/*/out/obs-build 2>/dev/null); do
     if [ -d "$cand/libobs/$config/libobs.framework" ]; then obs_build="$cand"; break; fi
   done
   echo "OBS build tree: ${obs_build:-<none found>}"
