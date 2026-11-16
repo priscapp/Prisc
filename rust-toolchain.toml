@@ -1,0 +1,20 @@
+# Pinned to the last toolchain CI was green on. cargo 1.100 always uses its new
+# build-dir layout (build-script OUT_DIR is now build/<pkg>/<hash>/out and test
+# executables live there instead of deps/), which breaks code that walks up a
+# fixed number of directories: prisc_build_support::cargo_profile_dir(),
+# tools/staging/stage-recorder.sh, the recorder/interop test fixtures, and
+# ort-sys 2.0.0-rc.13's copy-dylibs. Remove this pin once those handle both
+# layouts (see the Dependency Report).
+[toolchain]
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
+# The cross targets CI builds (build-rust.yml / build-recorder.yml). Listed here
+# because dtolnay/rust-toolchain installs its `targets:` onto `stable`, not onto
+# this pinned channel.
+targets = [
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
