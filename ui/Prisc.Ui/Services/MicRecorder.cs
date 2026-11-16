@@ -439,9 +439,9 @@ namespace Prisc.UI.Services
             }
             else
             {
-                var wanted = _resampler.ResamplePrepare(frames, 1, out var inBuffer, out var inOffset);
+                var wanted = _resampler.ResamplePrepare(frames, 1, out var inBuffer);
                 var inFrames = Math.Min(frames, wanted);
-                Array.Copy(_monoBuffer, 0, inBuffer, inOffset, inFrames);
+                _monoBuffer.AsSpan(0, inFrames).CopyTo(inBuffer);
 
                 // The ratio plus a little slack: the resampler carries a fractional position
                 // between calls, so a given input block can yield a frame more than the ratio
@@ -451,7 +451,7 @@ namespace Prisc.UI.Services
                     _resampleBuffer = new float[capacity];
 
                 source = _resampleBuffer;
-                count = _resampler.ResampleOut(_resampleBuffer, 0, inFrames, capacity, 1);
+                count = _resampler.ResampleOut(_resampleBuffer, inFrames, capacity, 1);
             }
 
             if (count <= 0)
