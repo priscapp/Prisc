@@ -117,7 +117,7 @@ namespace Prisc.UI.VideoEditor.Timeline
                 return;
 
             // a wheel event can land outside the drawing area (the track-header column maps to
-            // negative surface x, the vertical scroll bar past the width); keeping an off-screen
+            // negative surface x); keeping an off-screen
             // tick stationary would pan the view instead of zooming it, so anchor at the nearest
             // visible edge instead.
             anchorX = Math.Clamp(anchorX, 0, Math.Max(0, _viewportWidth));

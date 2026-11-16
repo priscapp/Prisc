@@ -31,6 +31,39 @@ namespace Prisc.VideoSDK.Tests
 
         private static MediaContent Media() => new MediaContent { SourceId = Guid.NewGuid(), StreamIndex = 0 };
 
+        // --------------------------------------------------------------------------- compact rows
+
+        [Fact]
+        public void Compact_rows_give_video_rows_the_audio_height_and_leave_every_other_row_alone()
+        {
+            var project = BuildProject(out var screen, out var webcam, out var titles, out _, out var mic, out _);
+
+            var full = TimelineRowLayout.Build(project);
+            var compact = TimelineRowLayout.Build(project, compact: true);
+
+            Assert.Equal(full.Select(r => r.TrackId), compact.Select(r => r.TrackId));
+            double HeightIn(IReadOnlyList<TimelineRow> rows, Track t) => rows.Single(r => r.TrackId == t.Id).Height;
+            Assert.Equal(TimelineRowLayout.VideoRowHeight, HeightIn(full, screen));
+            Assert.Equal(TimelineRowLayout.AudioRowHeight, HeightIn(compact, screen));
+            Assert.Equal(TimelineRowLayout.AudioRowHeight, HeightIn(compact, webcam));
+            Assert.Equal(HeightIn(full, titles), HeightIn(compact, titles));
+            Assert.Equal(HeightIn(full, mic), HeightIn(compact, mic));
+            var videoRows = full.Count(r => r.Kind == TimelineRowKind.Video);
+            Assert.Equal(TimelineRowLayout.TotalHeight(full) - videoRows * (TimelineRowLayout.VideoRowHeight - TimelineRowLayout.AudioRowHeight),
+                TimelineRowLayout.TotalHeight(compact));
+        }
+
+        [Theory]
+        [InlineData(300, 260, 1000, false)] // well under half the shared height
+        [InlineData(500, 460, 1000, false)] // exactly half still leaves the preview its share
+        [InlineData(501, 461, 1000, true)]  // past half: the preview would be the smaller of the two
+        [InlineData(700, 700, 1000, false)] // no video rows: compacting saves nothing
+        [InlineData(700, 600, 0, false)]    // no height to judge by yet
+        [InlineData(700, 600, double.PositiveInfinity, false)]
+        public void Video_rows_compact_once_the_timeline_would_take_more_than_half_the_shared_height(
+            double full, double compact, double shared, bool expected) =>
+            Assert.Equal(expected, TimelineRowLayout.ShouldCompact(full, compact, shared));
+
         /// <summary>A recording-shaped project plus a text row, an image row, an audio row and an
         /// empty row — one of every classification the layout can produce.</summary>
         private static Project BuildProject(out Track screen, out Track webcam, out Track titles,

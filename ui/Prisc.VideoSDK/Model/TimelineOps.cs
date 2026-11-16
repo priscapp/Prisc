@@ -483,9 +483,10 @@ public static class TimelineOps
     // ----------------------------------------------------------------------------------- gaps
 
     /// <summary>The empty stretch of <paramref name="trackId"/> around <paramref name="ticks"/>:
-    /// from the end of the item before it (or the origin) to the start of the item after it.
-    /// Null when an item covers the instant, or when no item follows it — the open run past a
-    /// row's last item is the end of the row, not a gap in it.</summary>
+    /// from the end of the item before it (or the origin) to the start of the item after it, or
+    /// to the end of the timeline (<see cref="Project.GetDurationTicks"/>) when none follows. Null
+    /// when an item covers the instant, when the row is empty, and past the end of the
+    /// timeline.</summary>
     public static TimelineGap? FindGap(Project project, Guid trackId, long ticks)
     {
         if (ticks < 0)
@@ -511,7 +512,12 @@ public static class TimelineOps
         }
 
         if (right == null)
-            return null;
+        {
+            var end = project.GetDurationTicks();
+            return left != null && ticks < end
+                ? new TimelineGap(trackId, left.TimelineEndTicks, end, left.Id, null)
+                : null;
+        }
 
         var start = left?.TimelineEndTicks ?? 0;
         return right.TimelineStartTicks > start
@@ -528,7 +534,9 @@ public static class TimelineOps
     /// <summary>
     /// Closes a gap: everything at or past its end on the row and the rest of the row's group
     /// slides left onto the gap's start, so a recording's other rows (its audio, its cursor) stay
-    /// in sync. Clips before the gap stay put, and other rows do not move. Returns false when the
+    /// in sync. Clips before the gap stay put, and other rows do not move. A trailing gap closes
+    /// the other way: everything before it on those rows slides right onto the end of the
+    /// timeline, so the row's last clip ends with the video. Returns false when the
     /// gap is not current, or when a clip on another row of the group overlaps the gap: closing
     /// past it would put that row out of step, cutting it would delete material on a row the user
     /// did not point at, and <see cref="RippleCloseGap"/> is the explicit way to remove the time
@@ -546,7 +554,10 @@ public static class TimelineOps
             return false;
 
         var span = gap.DurationTicks;
-        ShiftItems(project, onRows.Where(i => i.TimelineStartTicks >= gap.EndTicks), _ => -span);
+        if (gap.IsTrailing)
+            ShiftItems(project, onRows.Where(i => i.TimelineEndTicks <= gap.StartTicks), _ => span);
+        else
+            ShiftItems(project, onRows.Where(i => i.TimelineStartTicks >= gap.EndTicks), _ => -span);
 
         return true;
     }
@@ -555,11 +566,13 @@ public static class TimelineOps
     /// The gap's span cut out of the whole timeline: whatever any other row plays inside it is
     /// removed (trimmed, split or dropped exactly as <see cref="RippleDelete"/> cuts its rows), then
     /// everything at or past the gap shifts left by its length. Cross-row sync survives because
-    /// every row loses the same span. Returns false when the gap is not current.
+    /// every row loses the same span. Returns false when the gap is not current, and for a trailing
+    /// gap, where nothing follows to close up and the cut would only take the end off every other
+    /// row.
     /// </summary>
     public static bool RippleCloseGap(Project project, TimelineGap gap)
     {
-        if (!IsCurrentGap(project, gap))
+        if (gap.IsTrailing || !IsCurrentGap(project, gap))
             return false;
 
         CutRange(project, project.Items, gap.StartTicks, gap.EndTicks);
@@ -594,7 +607,7 @@ public static class TimelineOps
         if (!CanFillGapWithFreeze(project, gap, fromLeft))
             return null;
 
-        var neighbor = Require(project, fromLeft ? gap.LeftItemId.Value : gap.RightItemId);
+        var neighbor = Require(project, fromLeft ? gap.LeftItemId.Value : gap.RightItemId.Value);
 
         var item = neighbor.Clone();
         item.TimelineStartTicks = gap.StartTicks;
@@ -639,7 +652,7 @@ public static class TimelineOps
     /// themselves.</summary>
     public static bool CanExtendIntoGap(Project project, TimelineGap gap, bool fromLeft)
     {
-        if (!IsCurrentGap(project, gap) || (fromLeft && gap.LeftItemId == null))
+        if (!IsCurrentGap(project, gap) || (fromLeft ? gap.LeftItemId : gap.RightItemId) == null)
             return false;
 
         return ExtendIntoGapCore(Project.FromJson(project.ToJson()), gap, fromLeft);
@@ -659,7 +672,7 @@ public static class TimelineOps
         if (!CanExtendIntoGap(project, gap, fromLeft) || !ExtendIntoGapCore(project, gap, fromLeft))
             return false;
 
-        RebaseOverlays(project, Require(project, fromLeft ? gap.LeftItemId.Value : gap.RightItemId),
+        RebaseOverlays(project, Require(project, fromLeft ? gap.LeftItemId.Value : gap.RightItemId.Value),
             gap.StartTicks, gap.EndTicks);
         return true;
     }
@@ -669,7 +682,7 @@ public static class TimelineOps
         var span = gap.DurationTicks;
         return fromLeft
             ? TrimEnd(project, gap.LeftItemId.Value, span) == span
-            : TrimStart(project, gap.RightItemId, -span) == -span;
+            : TrimStart(project, gap.RightItemId.Value, -span) == -span;
     }
 
     /// <summary>
@@ -680,11 +693,11 @@ public static class TimelineOps
     /// </summary>
     public static bool CanRejoinGap(Project project, TimelineGap gap)
     {
-        if (!IsCurrentGap(project, gap) || gap.LeftItemId is not Guid leftId)
+        if (!IsCurrentGap(project, gap) || gap.LeftItemId is not Guid leftId || gap.RightItemId is not Guid rightId)
             return false;
 
         var left = project.Items.FirstOrDefault(i => i.Id == leftId);
-        var right = project.Items.FirstOrDefault(i => i.Id == gap.RightItemId);
+        var right = project.Items.FirstOrDefault(i => i.Id == rightId);
         if (left?.Content is not MediaContent lm || right?.Content is not MediaContent rm)
             return false;
 
@@ -712,7 +725,7 @@ public static class TimelineOps
             return false;
 
         var left = Require(project, gap.LeftItemId.Value);
-        var right = Require(project, gap.RightItemId);
+        var right = Require(project, gap.RightItemId.Value);
         var lm = (MediaContent)left.Content;
         var rm = (MediaContent)right.Content;
         var speed = SpeedOf(lm);
@@ -821,6 +834,19 @@ public static class TimelineOps
         return clip;
     }
 
+    /// <summary>Where a one-row <paramref name="clip"/> pasted into <paramref name="gap"/> aimed at
+    /// <paramref name="at"/> starts: at <paramref name="at"/> when it fits from there, moved earlier
+    /// just enough to end with the gap when it does not, and at the gap's start when it is longer
+    /// than the gap (where <see cref="Paste"/> trims it).</summary>
+    public static long GapPasteAnchor(Project clip, TimelineGap gap, long at)
+    {
+        if (clip.Items.Count == 0)
+            return gap.StartTicks;
+
+        var span = clip.Items.Max(i => i.TimelineEndTicks) - clip.Items.Min(i => i.TimelineStartTicks);
+        return Math.Max(gap.StartTicks, Math.Min(at, gap.EndTicks - span));
+    }
+
     /// <summary>Whether a <see cref="Paste"/> of <paramref name="clip"/> can fit it into the gap: the
     /// clip has one row, of the gap's row's kind, the row can host all of it
     /// (<see cref="CanHost"/>), and the gap is current and at least
@@ -860,11 +886,17 @@ public static class TimelineOps
     /// <para>A screen clip landing on a grouped row hands the overlays already there its time
     /// (<see cref="RebaseOverlays"/>). Pasted overlays keep the clocks they came with, and new rows
     /// have no others to reach.</para>
+    ///
+    /// <para>With <paramref name="restoreRows"/>, which only a paste into the project the clip was
+    /// lifted from may set, a block's row that is no longer here (a cut or delete removed it with its
+    /// last clip) counts as one of its own rows: when the block can return, that row is put back as
+    /// it was, with its id, name, group and place in the row order, rather than the block going to
+    /// new rows. Cut then paste of a whole row therefore lands where it was.</para>
     /// </summary>
     /// <returns>The pasted clips, how many rows were made for them (not counting a speed row), and
     /// whether the speed row refused the paste.</returns>
     public static (IReadOnlyList<Guid> Pasted, int NewRows, bool Refused) Paste(Project project, Project clip, long anchor,
-        TimelineGap? fitGap = null)
+        TimelineGap? fitGap = null, bool restoreRows = false)
     {
         if (clip.Items.Count == 0)
             return (Array.Empty<Guid>(), 0, false);
@@ -957,9 +989,24 @@ public static class TimelineOps
                 continue;
             }
 
-            var origins = block.Select(r => project.Tracks.FirstOrDefault(t => t.Id == r.Id)).ToList();
-            var reuse = origins.All(o => o != null) && origins.All(o => Fits(o, clipsOn[o.Id]));
-            var rows = reuse ? origins.ToDictionary(o => o.Id) : InsertNewRows(project, clip, block);
+            // a row that is gone stands for itself, empty, when it may be restored
+            var gone = block.Where(r => project.Tracks.All(t => t.Id != r.Id)).ToList();
+            var targets = block.Select(r => project.Tracks.FirstOrDefault(t => t.Id == r.Id) ?? r).ToList();
+            var reuse = (gone.Count == 0 || restoreRows) && targets.All(o => Fits(o, clipsOn[o.Id]));
+            if (reuse)
+            {
+                // back into its own slot when nothing has taken it, so no other row moves; else
+                // ascending, so each one lands where it was among the rows that stayed
+                foreach (var row in gone.OrderBy(r => r.Order).ThenBy(r => r.Id))
+                {
+                    if (project.Tracks.Any(t => t.Order == row.Order))
+                        InsertTrackAt(project, row, row.Order);
+                    else
+                        project.Tracks.Add(row);
+                }
+            }
+
+            var rows = reuse ? targets.ToDictionary(o => o.Id) : InsertNewRows(project, clip, block);
             if (!reuse)
                 newRows += block.Count;
 

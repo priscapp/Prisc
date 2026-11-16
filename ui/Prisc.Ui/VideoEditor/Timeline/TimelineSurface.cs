@@ -86,6 +86,7 @@ namespace Prisc.UI.VideoEditor.Timeline
         private EditorSession _session;
         private ITimelinePreviewProvider _previewProvider = NullTimelinePreviewProvider.Instance;
         private IReadOnlyList<TimelineRow> _rows = Array.Empty<TimelineRow>();
+        private bool _compactRows;
         private long _positionTicks;
         private long? _hoverTicks;
 
@@ -265,13 +266,30 @@ namespace Prisc.UI.VideoEditor.Timeline
         /// it is on.</summary>
         public bool SnapEnabled { get; set; } = true;
 
+        /// <summary>Whether video rows are laid out at the audio row's height
+        /// (<see cref="TimelineRowLayout.ShouldCompact"/>). The parent sets it, and a change lays
+        /// the rows out again.</summary>
+        public bool CompactRows
+        {
+            get => _compactRows;
+            set
+            {
+                if (_compactRows == value)
+                    return;
+                _compactRows = value;
+                RebuildRows();
+                InvalidateMeasure();
+                InvalidateVisual();
+            }
+        }
+
         /// <summary>Rebuilds the row layout from the live project — the parent calls this on
         /// Structural changes (and session swaps). Also prunes caches keyed by item ids that no
         /// longer exist.</summary>
         public void RebuildRows()
         {
             var project = _session?.Project;
-            _rows = project == null ? Array.Empty<TimelineRow>() : TimelineRowLayout.Build(project);
+            _rows = project == null ? Array.Empty<TimelineRow>() : TimelineRowLayout.Build(project, _compactRows);
 
             if (project == null)
             {
@@ -395,6 +413,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             {
                 _contextItemId = Guid.Empty;
                 _contextGap = gap;
+                _contextTicks = gap.StartTicks; // the chip stands for the whole gap, not a moment in it
                 if (ContextMenu is { } menu && PopulateMenu(menu))
                     menu.Open(this);
                 e.Handled = true;
@@ -839,6 +858,7 @@ namespace Prisc.UI.VideoEditor.Timeline
                 // a right-click anywhere in a gap opens the same menu its button does
                 _contextGap = GapAt(pos);
                 _contextEmptySpace = _contextGap == null;
+                _contextTicks = _viewport.XToTicksClamped(pos.X);
                 return;
             }
 
@@ -881,7 +901,10 @@ namespace Prisc.UI.VideoEditor.Timeline
                 if (!_session.CanPaste)
                     return false;
 
+                var here = _contextTicks;
                 menu.Items.Clear();
+                menu.Items.Add(NewMenuItem(TimelineViewMath.PasteAtCursorLabel(_session.ClipboardSize.Clips), true,
+                    () => _session.PasteAt(here, this), tip: TimelineViewMath.PasteAtCursorTip));
                 menu.Items.Add(NewPasteAtPlayheadItem());
                 return true;
             }
@@ -985,10 +1008,19 @@ namespace Prisc.UI.VideoEditor.Timeline
                 return false;
 
             menu.Items.Clear();
-            menu.Items.Add(NewMenuItem("Close Gap", _session.CanCloseGap(gap), () => _session.CloseGap(gap, this),
-                "Another track in this group has a clip in this gap. Ripple Close Gap removes this time from every track."));
-            menu.Items.Add(NewMenuItem("Ripple Close Gap (All Tracks)", true,
-                () => _session.RippleCloseGap(gap, this)));
+            if (gap.IsTrailing)
+            {
+                // nothing follows to close up: the clips before it slide right to end with the video
+                menu.Items.Add(NewMenuItem("Close Gap (Move to End)", _session.CanCloseGap(gap), () => _session.CloseGap(gap, this),
+                    "Another track in this group has a clip in this gap."));
+            }
+            else
+            {
+                menu.Items.Add(NewMenuItem("Close Gap", _session.CanCloseGap(gap), () => _session.CloseGap(gap, this),
+                    "Another track in this group has a clip in this gap. Ripple Close Gap removes this time from every track."));
+                menu.Items.Add(NewMenuItem("Ripple Close Gap (All Tracks)", true,
+                    () => _session.RippleCloseGap(gap, this)));
+            }
 
             var fills = new List<MenuItem>();
             if (TimelineOps.CanRejoinGap(project, gap))
@@ -1012,9 +1044,11 @@ namespace Prisc.UI.VideoEditor.Timeline
 
             var clipboard = _session.ClipboardSize;
             menu.Items.Add(new Separator());
-            menu.Items.Add(NewMenuItem(TimelineViewMath.GapPasteLabel(clipboard.Clips, clipboard.Rows),
-                _session.CanPasteIntoGap(gap), () => _session.PasteIntoGap(gap, this),
+            var at = _contextTicks;
+            menu.Items.Add(NewMenuItem(TimelineViewMath.PasteAtCursorLabel(clipboard.Clips),
+                _session.CanPasteIntoGap(gap), () => _session.PasteIntoGap(gap, at, this),
                 tip: TimelineViewMath.GapPasteTip(clipboard.Rows)));
+            menu.Items.Add(NewPasteAtPlayheadItem());
             return true;
         }
 

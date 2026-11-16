@@ -877,22 +877,42 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void A_row_with_no_clips_does_not_keep_a_group_alive_and_holds_its_id_while_others_do()
+        public void A_row_a_delete_empties_goes_and_its_group_lives_on_while_two_rows_hold_clips()
         {
             var project = NewProject();
             var group = Guid.NewGuid();
             var a = Clip(project, Row(project, group), 0, 5);
             var b = Clip(project, Row(project, group), 0, 5);
             var c = Clip(project, Row(project, group), 0, 5);
-            var emptied = project.TrackOf(c);
             var session = new EditorSession(project, null, null);
 
             session.DeleteItems(new[] { c.Id });
-            Assert.Equal(group, session.Project.Tracks.Single(t => t.Id == emptied.Id).GroupId);
+            Assert.DoesNotContain(session.Project.Tracks, t => t.Id == c.TrackId);
+            Assert.Equal(group, session.Project.TrackOf(Live(session, a)).GroupId);
+            Assert.Equal(group, session.Project.TrackOf(Live(session, b)).GroupId);
+
+            session.DeleteItems(new[] { b.Id });
+            Assert.All(session.Project.Tracks, t => Assert.Null(t.GroupId));
+        }
+
+        /// <summary>A row that holds nothing (one a file was saved with, say) keeps its group id but
+        /// does not count towards keeping the group alive.</summary>
+        [Fact]
+        public void A_row_with_no_clips_does_not_keep_a_group_alive_and_holds_its_id_while_others_do()
+        {
+            var project = NewProject();
+            var group = Guid.NewGuid();
+            var a = Clip(project, Row(project, group), 0, 5);
+            var b = Clip(project, Row(project, group), 0, 5);
+            var empty = Row(project, group);
+            var session = new EditorSession(project, null, null);
+
+            Assert.Equal(group, session.Project.Tracks.Single(t => t.Id == empty.Id).GroupId);
             Assert.Equal(group, session.Project.TrackOf(Live(session, a)).GroupId);
 
             session.DeleteItems(new[] { b.Id });
             Assert.All(session.Project.Tracks, t => Assert.Null(t.GroupId));
+            Assert.Contains(session.Project.Tracks, t => t.Id == empty.Id); // not the delete's to remove
         }
 
         /// <summary>Any row can be grouped, and a zoom or speed clip then moves with what it

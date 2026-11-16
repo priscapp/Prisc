@@ -103,12 +103,102 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void FindGap_is_null_on_a_clip_and_past_the_last_clip()
+        public void FindGap_is_null_on_a_clip_and_past_the_end_of_the_timeline()
         {
             var project = GappedProject(out var screenTrack, out _, out _, out _);
 
             Assert.Null(TimelineOps.FindGap(project, screenTrack.Id, Ms(1_000)));
             Assert.Null(TimelineOps.FindGap(project, screenTrack.Id, Ms(20_000)));
+        }
+
+        // ---- the trailing gap ----
+
+        /// <summary>A row of cards over the 13 s recording: [1s, 2s) and [3s, 4s), so its trailing
+        /// gap runs [4s, 13s).</summary>
+        private static Project TrailingProject(out Track cards, out Item first, out Item last)
+        {
+            var project = GappedProject(out _, out _, out _, out _);
+            cards = AddTrack(project, TrackKind.Video);
+            first = AddItem(project, cards, Ms(1_000), Ms(1_000), new TextContent { Text = "one" });
+            last = AddItem(project, cards, Ms(3_000), Ms(1_000), new TextContent { Text = "two" });
+            Assert.Equal(Ms(13_000), project.GetDurationTicks());
+            return project;
+        }
+
+        [Fact]
+        public void FindGap_finds_the_trailing_gap_from_a_rows_last_clip_to_the_end_of_the_timeline()
+        {
+            var project = TrailingProject(out var cards, out _, out var last);
+
+            var gap = TimelineOps.FindGap(project, cards.Id, Ms(8_000));
+
+            Assert.Equal(new TimelineGap(cards.Id, Ms(4_000), Ms(13_000), last.Id, null), gap);
+            Assert.True(gap.Value.IsTrailing);
+            Assert.Null(TimelineOps.FindGap(project, cards.Id, Ms(13_000)));
+        }
+
+        [Fact]
+        public void Closing_the_trailing_gap_slides_the_row_right_to_end_with_the_video()
+        {
+            var project = TrailingProject(out var cards, out var first, out var last);
+            var gap = TimelineOps.FindGap(project, cards.Id, Ms(8_000)).Value;
+
+            Assert.True(TimelineOps.CloseGap(project, gap));
+
+            Assert.Equal(Ms(10_000), first.TimelineStartTicks);
+            Assert.Equal(Ms(12_000), last.TimelineStartTicks);
+            Assert.Equal(Ms(13_000), last.TimelineEndTicks);
+            Assert.Equal(Ms(13_000), project.GetDurationTicks());
+            Assert.Empty(project.Validate());
+        }
+
+        [Fact]
+        public void Closing_a_trailing_gap_is_refused_while_a_grouped_row_plays_in_it()
+        {
+            var project = GappedProject(out var screenTrack, out _, out _, out var screenRight);
+            Assert.Equal(Ms(-2_000), TimelineOps.TrimEnd(project, screenRight.Id, Ms(-2_000)));
+            var gap = TimelineOps.FindGap(project, screenTrack.Id, Ms(12_000)).Value;
+            Assert.Equal(Ms(11_000), gap.StartTicks);
+            var before = project.ToJson();
+
+            // the webcam and audio still play to 13 s, so the screen cannot end there alone
+            Assert.False(TimelineOps.CloseGap(project, gap));
+            Assert.Equal(before, project.ToJson());
+        }
+
+        [Fact]
+        public void A_trailing_gap_offers_only_what_its_left_clip_can_do()
+        {
+            var project = GappedProject(out var screenTrack, out _, out _, out var screenRight);
+            Assert.Equal(Ms(-2_000), TimelineOps.TrimEnd(project, screenRight.Id, Ms(-2_000)));
+            var gap = TimelineOps.FindGap(project, screenTrack.Id, Ms(12_000)).Value;
+
+            Assert.False(TimelineOps.RippleCloseGap(project, gap));
+            Assert.False(TimelineOps.CanRejoinGap(project, gap));
+            Assert.False(TimelineOps.CanFillGapWithFreeze(project, gap, fromLeft: false));
+            Assert.False(TimelineOps.CanExtendIntoGap(project, gap, fromLeft: false));
+            Assert.True(TimelineOps.CanFillGapWithFreeze(project, gap, fromLeft: true));
+            Assert.True(TimelineOps.CanExtendIntoGap(project, gap, fromLeft: true));
+
+            Assert.True(TimelineOps.ExtendIntoGap(project, gap, fromLeft: true));
+            Assert.Equal(Ms(13_000), screenRight.TimelineEndTicks);
+        }
+
+        [Fact]
+        public void A_paste_into_the_trailing_gap_is_trimmed_at_the_end_of_the_timeline()
+        {
+            var project = TrailingProject(out var cards, out _, out _);
+            var other = AddTrack(project, TrackKind.Video);
+            var longCard = AddItem(project, other, 0, Ms(9_000), new TextContent { Text = "long" });
+            var clip = TimelineOps.Lift(project, new[] { longCard.Id });
+            var gap = TimelineOps.FindGap(project, cards.Id, Ms(8_000)).Value;
+
+            var pasted = TimelineOps.Paste(project, clip, gap.StartTicks, gap).Pasted;
+
+            var copy = project.Items.Single(i => i.Id == Assert.Single(pasted));
+            Assert.Equal(cards.Id, copy.TrackId);
+            Assert.Equal(Ms(4_000), copy.TimelineStartTicks);
+            Assert.Equal(Ms(13_000), copy.TimelineEndTicks);
         }
 
         [Fact]

@@ -193,7 +193,9 @@ namespace Prisc.VideoSDK.Editing
 
         private readonly IEditorPersistence _persist;
         private readonly Action<Action> _saveScheduler;
-        private readonly HashSet<Guid> _initialTrackIds;
+        /// <summary>Who this session is to the process-wide clipboard: a paste restores the rows a
+        /// cut took away only into the session that made the cut (<see cref="PasteClipboard"/>).</summary>
+        private readonly Guid _clipboardIdentity = Guid.NewGuid();
         private readonly List<UndoEntry> _undo = new List<UndoEntry>();
         private readonly List<UndoEntry> _redo = new List<UndoEntry>();
         private readonly HashSet<Guid> _selectedIds = new HashSet<Guid>();
@@ -229,7 +231,6 @@ namespace Prisc.VideoSDK.Editing
             Project = project;
             _persist = persist;
             _saveScheduler = saveScheduler ?? (save => save());
-            _initialTrackIds = project.Tracks.Select(t => t.Id).ToHashSet();
         }
 
         /// <summary>The live model. The instance is <b>replaced</b> by <see cref="Undo"/>/<see cref="Redo"/>
@@ -733,9 +734,9 @@ namespace Prisc.VideoSDK.Editing
         }
 
         /// <summary>Wraps <see cref="TimelineOps.RippleDelete"/> (the clip's span cut out of its
-        /// group's rows, gap closes on all tracks), then prunes any non-initial track that lost its
-        /// last item — inside the same mutation, so one undo restores tracks and items
-        /// together.</summary>
+        /// group's rows, gap closes on all tracks), then prunes every row that lost its last item
+        /// (<see cref="PruneEmptiedTracks"/>) — inside the same mutation, so one undo restores
+        /// tracks and items together.</summary>
         public void RippleDeleteItem(Guid itemId, object origin = null) =>
             Mutate("Delete", ProjectChangeKind.Structural, null, origin, p => RippleDeleteAndPrune(p, itemId));
 
@@ -748,23 +749,27 @@ namespace Prisc.VideoSDK.Editing
             return true;
         });
 
-        private void RippleDeleteAndPrune(Project project, Guid itemId)
+        private static void RippleDeleteAndPrune(Project project, Guid itemId)
         {
+            var held = RowsHoldingClips(project);
             TimelineOps.RippleDelete(project, itemId);
-            PruneEmptyTracks(project);
+            PruneEmptiedTracks(project, held);
         }
 
         /// <summary>Wraps <see cref="TimelineOps.Delete"/> over exactly these clips (no ripple), with
         /// the same track prune as <see cref="RippleDeleteItem"/>, in one undo entry.</summary>
         public void DeleteItems(IEnumerable<Guid> itemIds, object origin = null) =>
-            Mutate("Delete", ProjectChangeKind.Structural, null, origin, p =>
-            {
-                var deleted = false;
-                foreach (var id in itemIds)
-                    deleted |= TimelineOps.Delete(p, id);
-                if (deleted)
-                    PruneEmptyTracks(p);
-            });
+            Mutate("Delete", ProjectChangeKind.Structural, null, origin, p => DeleteAndPrune(p, itemIds));
+
+        /// <summary>The body <see cref="DeleteItems"/> and <see cref="CutItems"/> share, so a row
+        /// either one empties goes the same way.</summary>
+        private static void DeleteAndPrune(Project project, IEnumerable<Guid> itemIds)
+        {
+            var held = RowsHoldingClips(project);
+            foreach (var id in itemIds)
+                TimelineOps.Delete(project, id);
+            PruneEmptiedTracks(project, held);
+        }
 
         // ---------------------------------------------------------------------------------- gaps
 
@@ -788,9 +793,10 @@ namespace Prisc.VideoSDK.Editing
         public bool RippleCloseGap(TimelineGap gap, object origin = null) =>
             Mutate("Ripple Close Gap", ProjectChangeKind.Structural, null, origin, p =>
             {
+                var held = RowsHoldingClips(p);
                 if (!TimelineOps.RippleCloseGap(p, gap))
                     return false;
-                PruneEmptyTracks(p);
+                PruneEmptiedTracks(p, held);
                 return true;
             }, failureValue: false);
 
@@ -821,6 +827,10 @@ namespace Prisc.VideoSDK.Editing
         /// </summary>
         private static string s_clipboard;
 
+        /// <summary>The <see cref="_clipboardIdentity"/> of the session that filled
+        /// <see cref="s_clipboard"/>.</summary>
+        private static Guid s_clipboardOwner;
+
         /// <summary>Copies exactly these clips (a drag's time-linked clips are not brought along).
         /// Returns false, leaving the clipboard alone, when none of them is in the project.</summary>
         public bool CopyItems(IEnumerable<Guid> itemIds)
@@ -830,29 +840,22 @@ namespace Prisc.VideoSDK.Editing
                 return false;
 
             s_clipboard = clip.ToJson();
+            s_clipboardOwner = _clipboardIdentity;
             return true;
         }
 
-        /// <summary>Copies exactly these clips and deletes them in one undo entry. Their rows stay
-        /// even when emptied, so a paste returns to them and a zoom reaches the rows it did (a row
-        /// made this session, and any effect row, goes at the next delete). The exception is the
-        /// speed row, which only its items can identify and which a paste puts back on top, in its
-        /// group, anyway. Returns false, changing nothing, when <see cref="CanCut"/> is false or none
-        /// of them is in the project.</summary>
+        /// <summary>Copies exactly these clips and deletes them in one undo entry, emptied rows going
+        /// exactly as <see cref="DeleteItems"/> takes them (<see cref="PruneEmptiedTracks"/>). A paste
+        /// in this session puts such a row back as it was (<see cref="PasteClipboard"/>).
+        /// Returns false, changing nothing, when <see cref="CanCut"/> is false or none of them is in
+        /// the project.</summary>
         public bool CutItems(IEnumerable<Guid> itemIds, object origin = null)
         {
             var ids = itemIds.ToList();
             if (!CanCut || !CopyItems(ids))
                 return false;
 
-            return Mutate("Cut", ProjectChangeKind.Structural, null, origin, p =>
-            {
-                var speedRow = TimelineOps.FindSpeedTrack(p);
-                foreach (var id in ids)
-                    TimelineOps.Delete(p, id);
-                if (speedRow != null && p.Items.All(i => i.TrackId != speedRow.Id))
-                    p.Tracks.Remove(speedRow);
-            });
+            return Mutate("Cut", ProjectChangeKind.Structural, null, origin, p => DeleteAndPrune(p, ids));
         }
 
         /// <summary>Whether a Cut can run now: neither a drag nor a voice take owns the model.</summary>
@@ -893,10 +896,24 @@ namespace Prisc.VideoSDK.Editing
             return clip.Tracks.Count > 1 || TimelineOps.CanFitInGap(Project, clip, gap);
         }
 
-        /// <summary>The gap menu's Paste: at the gap's start, and fitted to the gap if the clipboard
-        /// has one row. Otherwise as <see cref="PasteAt"/>.</summary>
+        /// <summary>The gap menu's Paste, aimed at the gap's start (see the overload).</summary>
         public IReadOnlyList<Guid> PasteIntoGap(TimelineGap gap, object origin = null) =>
-            CanPasteIntoGap(gap) ? PasteClipboard(gap.StartTicks, gap, origin) : Array.Empty<Guid>();
+            PasteIntoGap(gap, gap.StartTicks, origin);
+
+        /// <summary>The gap menu's Paste at Cursor, aimed at <paramref name="at"/>. A clipboard with
+        /// one row is fitted to the gap: it starts as close to <paramref name="at"/> as it can while
+        /// still fitting (<see cref="TimelineOps.GapPasteAnchor"/>), and one longer than the gap
+        /// starts at its start and is trimmed. A clipboard with several rows starts at
+        /// <paramref name="at"/>, as <see cref="PasteAt"/> does.</summary>
+        public IReadOnlyList<Guid> PasteIntoGap(TimelineGap gap, long at, object origin = null)
+        {
+            if (!CanPasteIntoGap(gap))
+                return Array.Empty<Guid>();
+
+            var clip = Project.FromJson(s_clipboard);
+            var anchor = clip.Tracks.Count == 1 ? TimelineOps.GapPasteAnchor(clip, gap, at) : at;
+            return PasteClipboard(anchor, gap, origin);
+        }
 
         private IReadOnlyList<Guid> PasteClipboard(long anchor, TimelineGap? fitGap, object origin)
         {
@@ -910,7 +927,9 @@ namespace Prisc.VideoSDK.Editing
             IReadOnlyList<Guid> none = Array.Empty<Guid>();
             var pasted = Mutate("Paste", ProjectChangeKind.Structural, null, origin, p =>
             {
-                var result = TimelineOps.Paste(p, clip, anchor, fitGap);
+                // a row a cut (or delete) took away comes back as itself, where it was, but only
+                // here: in another project its id, group and place mean nothing
+                var result = TimelineOps.Paste(p, clip, anchor, fitGap, restoreRows: s_clipboardOwner == _clipboardIdentity);
                 newRows = result.NewRows;
                 refused = result.Refused;
                 return result.Pasted;
@@ -1979,9 +1998,8 @@ namespace Prisc.VideoSDK.Editing
 
         /// <summary>
         /// Drops a source and everything that plays it: every item referencing it, and any track
-        /// those items left empty — including a row the session opened with, which
-        /// <see cref="PruneEmptyTracks"/> deliberately protects but which has nothing left to hold
-        /// once its file is gone. The missing-media dialog's "Remove"; one undo entry restores
+        /// those items left empty, as <see cref="PruneEmptiedTracks"/> takes them for a delete. The
+        /// missing-media dialog's "Remove"; one undo entry restores
         /// source, items and rows together. False means no such source (or nothing changed).
         /// </summary>
         public bool RemoveSource(Guid sourceId, object origin = null) =>
@@ -2782,14 +2800,18 @@ namespace Prisc.VideoSDK.Editing
                 TimelineOps.OrderAboveEverything(project));
 
 
-        /// <summary>Removes tracks that were created during this session (not part of the project
-        /// the session opened with) and no longer carry any item. Effect rows are pruned regardless
-        /// of when they were created: the timeline classifies an effect row by its items' content,
-        /// so an empty one reads only as a zoom row with nothing on it, and only a
-        /// <see cref="CutItems"/> waiting for its paste has a use for that.</summary>
-        private void PruneEmptyTracks(Project project) =>
-            project.Tracks.RemoveAll(t => (t.Kind == TrackKind.Effect || !_initialTrackIds.Contains(t.Id)) &&
-                                          project.Items.All(i => i.TrackId != t.Id));
+        /// <summary>The rows holding at least one clip, taken before an edit that removes clips so
+        /// that <see cref="PruneEmptiedTracks"/> can tell which rows the edit emptied.</summary>
+        private static HashSet<Guid> RowsHoldingClips(Project project) =>
+            project.Items.Select(i => i.TrackId).ToHashSet();
+
+        /// <summary>Removes the rows the edit emptied: those in <paramref name="heldBefore"/> that hold
+        /// no clip now. A row goes with its last clip, whatever made it, because an empty row says
+        /// nothing about what it is for (the timeline reads a row's kind from its clips). A row that
+        /// was empty already (a voice take's row before its first take, say) is not the edit's to
+        /// remove. A paste in the same session brings a removed row back (<see cref="PasteClipboard"/>).</summary>
+        private static void PruneEmptiedTracks(Project project, HashSet<Guid> heldBefore) =>
+            project.Tracks.RemoveAll(t => heldBefore.Contains(t.Id) && project.Items.All(i => i.TrackId != t.Id));
 
         /// <summary>Probe → <see cref="SourceStream"/> list, video then audio — the identical
         /// mapping <see cref="RecordingProject.Build"/> applies to a recording's own streams.</summary>

@@ -17,20 +17,22 @@ namespace Prisc.UI.VideoEditor.Timeline
 {
     /// <summary>
     /// The multi-track timeline, assembled in code: a pinned <see cref="TimelineRuler"/> on top
-    /// (with a corner cell over the header column), a shared vertical-only ScrollViewer holding
-    /// the native <see cref="TrackHeaderPanel"/> beside the custom-drawn
-    /// <see cref="TimelineSurface"/>, and a native horizontal ScrollBar at the bottom driving the
+    /// (with a corner cell over the header column), the native <see cref="TrackHeaderPanel"/>
+    /// beside the custom-drawn <see cref="TimelineSurface"/>, and a native horizontal ScrollBar at
+    /// the bottom driving the
     /// <b>virtual</b> horizontal axis (a <see cref="TimelineViewport"/> — there is no
     /// million-pixel control).
     ///
-    /// Wheel gestures are tunnel-handled here so the inner ScrollViewer only sees the ones meant
-    /// for it. What each one means is per-platform and lives in <see cref="TimelineScrollInput"/>:
-    /// on Windows plain (and Ctrl) wheel = anchored zoom around the pointer, Shift+wheel =
-    /// horizontal scroll, Alt+wheel = the ScrollViewer's vertical scroll; on macOS a two-finger
-    /// scroll takes its meaning from the axis it moved along — up/down zooms around the pointer
-    /// like the Windows wheel, sideways pans — Cmd/Ctrl+scroll zooms, Alt+scroll goes to that same
-    /// ScrollViewer, and the pinch — a bubbling <c>PointerTouchPadGestureMagnify</c>, not a wheel —
-    /// is the primary zoom.
+    /// The rows never scroll vertically: every row is always in view, and the control is as tall
+    /// as its rows. When they would crowd the preview, video rows drop to the audio row's height
+    /// (<see cref="SharedHeight"/>, <see cref="TimelineRowLayout.ShouldCompact"/>).
+    ///
+    /// Wheel gestures are tunnel-handled here. What each one means is per-platform and lives in
+    /// <see cref="TimelineScrollInput"/>: on Windows plain (and Ctrl) wheel = anchored zoom around
+    /// the pointer, Shift+wheel = horizontal scroll; on macOS a two-finger scroll takes its meaning
+    /// from the axis it moved along — up/down zooms around the pointer like the Windows wheel,
+    /// sideways pans — Cmd/Ctrl+scroll zooms, and the pinch — a bubbling
+    /// <c>PointerTouchPadGestureMagnify</c>, not a wheel — is the primary zoom.
     /// Everything the timeline edits goes through
     /// <see cref="Session"/>; the control re-reads <c>Session.Project</c> on every
     /// <c>ProjectChanged</c> and rebuilds rows/headers only on Structural changes.
@@ -166,15 +168,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             scrollContent.Children.Add(_headers);
             scrollContent.Children.Add(_surface);
 
-            _scrollHost = new Border
-            {
-                Child = new ScrollViewer
-                {
-                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                    Content = scrollContent,
-                },
-            };
+            _scrollHost = new Border { Child = scrollContent };
 
             var grid = new Grid
             {
@@ -199,8 +193,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             grid.Children.Add(_hscroll);
             Child = grid;
 
-            // tunnel so the ScrollViewer never sees a modified wheel (it would eat Ctrl+wheel as
-            // a plain vertical scroll before the zoom could run).
+            // tunnel, so the gesture is decided here before anything inside sees it
             AddHandler(PointerWheelChangedEvent, OnTunnelPointerWheel, RoutingStrategies.Tunnel);
             AddHandler(PointerTouchPadGestureMagnifyEvent, OnTouchPadMagnify);
 
@@ -227,6 +220,12 @@ namespace Prisc.UI.VideoEditor.Timeline
             {
                 RefreshChrome();
                 _headers.Rebuild();
+            };
+
+            _hscroll.PropertyChanged += (_, e) =>
+            {
+                if (e.Property == IsVisibleProperty)
+                    UpdateCompactRows();
             };
 
             RefreshChrome();
@@ -286,6 +285,7 @@ namespace Prisc.UI.VideoEditor.Timeline
                 // a new project opens at the default scale, not fitted: one second is always the
                 // same width, whatever the length of the recording or the size of the window.
                 _viewport.ResetZoom();
+                UpdateCompactRows();
             }
         }
 
@@ -309,6 +309,47 @@ namespace Prisc.UI.VideoEditor.Timeline
         {
             get => GetValue(PositionProperty);
             set => SetValue(PositionProperty, value);
+        }
+
+        /// <summary>
+        /// The height the preview and this timeline split between them, which the window sets as it
+        /// lays itself out. It is what decides whether video rows compact
+        /// (<see cref="TimelineRowLayout.ShouldCompact"/>); 0 until the window has a size.
+        /// </summary>
+        public double SharedHeight
+        {
+            get => _sharedHeight;
+            set
+            {
+                if (_sharedHeight == value)
+                    return;
+                _sharedHeight = value;
+                UpdateCompactRows();
+            }
+        }
+
+        private double _sharedHeight;
+
+        /// <summary>Whether video rows are at the audio row's height right now.</summary>
+        internal bool CompactRows => _surface.CompactRows;
+
+        /// <summary>Compacts the video rows, or lets them back to full height, for the current rows
+        /// and <see cref="SharedHeight"/>. Judged from the full-height layout, so the answer does not
+        /// depend on the mode it is deciding.</summary>
+        private void UpdateCompactRows()
+        {
+            var project = _session?.Project;
+            var compact = false;
+            if (project != null)
+            {
+                var chrome = TimelineRuler.RulerHeight + (_hscroll.IsVisible ? _hscroll.Bounds.Height : 0);
+                var full = chrome + TimelineRowLayout.TotalHeight(TimelineRowLayout.Build(project));
+                var small = chrome + TimelineRowLayout.TotalHeight(TimelineRowLayout.Build(project, compact: true));
+                compact = TimelineRowLayout.ShouldCompact(full, small, _sharedHeight);
+            }
+
+            _surface.CompactRows = compact;
+            _headers.CompactRows = compact;
         }
 
         /// <summary>When true the view scrolls to keep the playhead comfortably visible as
@@ -404,6 +445,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             {
                 _surface.RebuildRows();
                 _headers.Rebuild();
+                UpdateCompactRows();
             }
             else if (e.Kind == ProjectChangeKind.Mapping)
             {
@@ -529,7 +571,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             {
                 case TimelineScrollAction.Zoom:
                     // The anchor x is measured in the surface's space so ruler and rows zoom
-                    // identically; a wheel over the header column or the vertical scroll bar lands
+                    // identically; a wheel over the header column lands
                     // outside [0, width] and the viewport clamps it to the nearest surface edge
                     // (zooming around an off-screen tick would pan, not zoom).
                     _viewport.SetZoomAnchored(_viewport.TicksPerPixel * decision.ZoomFactor,
@@ -542,8 +584,6 @@ namespace Prisc.UI.VideoEditor.Timeline
                     e.Handled = true;
                     break;
 
-                // ScrollRows and None are left unhandled on purpose: the tunnel handler declining
-                // the event is exactly how the inner ScrollViewer gets to see it.
             }
         }
 

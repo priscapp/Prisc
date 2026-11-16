@@ -457,6 +457,12 @@ namespace Prisc.UI.VideoEditor
             RestoreWindowBounds();
 
             Opened += VideoEditorWindow_Opened;
+
+            // the timeline decides whether to compact its video rows from the height it and the
+            // preview split: the whole editor less the tool bar and the transport bar
+            rootGrid.SizeChanged += (_, _) => UpdateTimelineSharedHeight();
+            TopBar.SizeChanged += (_, _) => UpdateTimelineSharedHeight();
+            transportBar.SizeChanged += (_, _) => UpdateTimelineSharedHeight();
             Closing += VideoEditorWindow_Closing;
         }
 
@@ -3001,6 +3007,9 @@ namespace Prisc.UI.VideoEditor
         /// the preview takes its space (the chevron flips to point the way back). Per-window and
         /// transient, like the sidebar.</summary>
         private void ToggleTimelineVisible() => SetTimelineVisible(!timelineBorder.IsVisible);
+
+        private void UpdateTimelineSharedHeight() =>
+            timeline.SharedHeight = Math.Max(0, rootGrid.Bounds.Height - TopBar.Bounds.Height - transportBar.Bounds.Height);
 
         /// <summary>Shows or hides the timeline strip, keeping the toggle's chevron and tooltip
         /// pointing the way back.</summary>

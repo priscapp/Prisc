@@ -390,12 +390,19 @@ namespace Prisc.UI.VideoEditor.Timeline
 
         public static string UngroupLabel(int rows) => rows > 1 ? $"Ungroup {rows} Tracks" : "Ungroup Track";
 
-        /// <summary>The gap menu's Paste. A clipboard with several rows does not go into the gap, so
-        /// it says so.</summary>
-        public static string GapPasteLabel(int clips, int rows) => rows > 1 ? $"Paste {clips} Clips at Gap Start" : "Paste";
+        /// <summary>"Paste at Cursor", in a gap or other empty space, beside "Paste at Playhead"
+        /// (and named like the clip menu's "Split at Cursor").</summary>
+        public static string PasteAtCursorLabel(int clips) => clips > 1 ? $"Paste {clips} Clips at Cursor" : "Paste at Cursor";
 
-        public static string GapPasteTip(int rows) =>
-            rows > 1 ? "Clips return to their own tracks, or new tracks if those are occupied." : null;
+        /// <summary>What "Paste at Cursor" does in a gap: one row of clips goes into it, as near the
+        /// click as fits, while several rows only start there.</summary>
+        public static string GapPasteTip(int rows) => rows > 1
+            ? PasteAtCursorTip
+            : "Starts where you clicked, or earlier if it needs the room, and is trimmed if the gap is too short.";
+
+        /// <summary>What "Paste at Cursor" does in empty space that is not a gap.</summary>
+        public const string PasteAtCursorTip =
+            "Starts where you clicked. Clips return to their own tracks, or new tracks if those are occupied.";
 
         /// <summary>The shortcut modifier as its key is named on this OS.</summary>
         private static string PrimaryKey(bool isMacOS) => isMacOS ? "Cmd" : "Ctrl";

@@ -16,10 +16,6 @@ namespace Prisc.UI.VideoEditor.Timeline
         /// <summary>Scroll the virtual horizontal axis by
         /// <see cref="TimelineScrollDecision.PanPixels"/>.</summary>
         PanHorizontal,
-
-        /// <summary>Not ours: leave the event unhandled so the rows' ScrollViewer scrolls the
-        /// track stack vertically.</summary>
-        ScrollRows,
     }
 
     /// <summary>The modifier state a scroll decision depends on. Deliberately <i>not</i> Avalonia's
@@ -180,9 +176,6 @@ namespace Prisc.UI.VideoEditor.Timeline
         public static readonly TimelineScrollDecision None =
             new TimelineScrollDecision(TimelineScrollAction.None, 0, 1);
 
-        public static readonly TimelineScrollDecision ScrollRows =
-            new TimelineScrollDecision(TimelineScrollAction.ScrollRows, 0, 1);
-
         public static TimelineScrollDecision Pan(double pixels) =>
             pixels == 0 ? None : new TimelineScrollDecision(TimelineScrollAction.PanHorizontal, pixels, 1);
 
@@ -204,16 +197,15 @@ namespace Prisc.UI.VideoEditor.Timeline
     /// <c>DrawingCanvas.OnPointerWheelChanged</c> and issue #68). Hence:
     ///
     /// <list type="bullet">
-    /// <item>Windows — unchanged: a wheel over a timeline zooms around the pointer (the rows are
-    /// rarely tall enough to have anywhere to scroll to), Shift+wheel pans, Alt+wheel goes to the
-    /// rows' scroller.</item>
+    /// <item>Windows — a wheel over a timeline zooms around the pointer, and Shift+wheel pans. The
+    /// rows never scroll vertically (every row is always in view), so no gesture is kept for
+    /// that.</item>
     /// <item>macOS — a two-finger scroll splits by its dominant axis, so the timeline reads it the
     /// way the Windows wheel reads its two: sideways pans, up/down zooms around the pointer
     /// (proportionally, since the deltas arrive as fractions of a notch rather than as whole
     /// clicks). Cmd/Ctrl+scroll zooms too — the Mac affordance, and harmless now that the plain
     /// gesture agrees with it — and the pinch stays the primary zoom, arriving as a separate
-    /// magnify event (<see cref="ZoomFactorForMagnification"/>) rather than as a scroll. The rows'
-    /// own vertical scroll is Alt+scroll and the scroll bar, exactly as on Windows.</item>
+    /// magnify event (<see cref="ZoomFactorForMagnification"/>) rather than as a scroll.</item>
     /// </list>
     /// </summary>
     internal static class TimelineScrollInput
@@ -226,12 +218,10 @@ namespace Prisc.UI.VideoEditor.Timeline
         public const double WheelScrollPxPerNotch = 60;
 
         /// <summary>
-        /// How far one unit of macOS scroll delta pans. 50 is not arbitrary: it is exactly what
-        /// Avalonia's own <c>ScrollContentPresenter</c> multiplies a wheel delta by, and the rows'
-        /// ScrollViewer — the control immediately underneath, handling the vertical half of the very
-        /// same gesture — uses it. Matching it is what makes a diagonal two-finger drag feel like
-        /// one movement instead of two axes at different speeds. It also lands at 1:1 with the
-        /// finger for precise deltas, since the backend divided those by 50 on the way in.
+        /// How far one unit of macOS scroll delta pans. 50 is exactly what Avalonia's own
+        /// <c>ScrollContentPresenter</c> multiplies a wheel delta by, so the timeline pans at the
+        /// speed every scrolled list in the app does. It also lands at 1:1 with the finger for
+        /// precise deltas, since the backend divided those by 50 on the way in.
         /// </summary>
         public const double MacScrollPxPerDelta = 50;
 
@@ -264,11 +254,6 @@ namespace Prisc.UI.VideoEditor.Timeline
                 if ((modifiers & TimelineScrollModifiers.Shift) != 0)
                     return TimelineScrollDecision.Pan(-notches * WheelScrollPxPerNotch);
 
-                // the rows' vertical scroll, which the plain wheel used to carry — it is also
-                // still on the ScrollViewer's own scroll bar.
-                if ((modifiers & TimelineScrollModifiers.Alt) != 0)
-                    return TimelineScrollDecision.ScrollRows;
-
                 // plain wheel, and Ctrl+wheel (the habit): anchored zoom.
                 return TimelineScrollDecision.Zoom(Math.Pow(ZoomStepPerNotch, -notches));
             }
@@ -287,9 +272,6 @@ namespace Prisc.UI.VideoEditor.Timeline
                     : TimelineScrollDecision.Zoom(Math.Pow(ZoomStepPerNotch, -notches));
             }
 
-            if ((modifiers & TimelineScrollModifiers.Alt) != 0)
-                return TimelineScrollDecision.ScrollRows;
-
             if ((modifiers & TimelineScrollModifiers.Shift) != 0)
             {
                 // macOS usually swaps the axes itself while Shift is held, but not for every device
@@ -307,8 +289,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             // holds it steady for the length of the swipe; falling back to this event's own dominant
             // axis when there is no latch keeps a lone event decidable on its own. Once the axis is
             // settled the other component is simply dropped — a horizontal gesture's stray dy does
-            // not zoom, and a vertical one's stray dx does not pan. The rows' vertical scroll is
-            // Alt+scroll and the scroll bar, as on Windows.
+            // not zoom, and a vertical one's stray dx does not pan.
             var isHorizontal = axis switch
             {
                 TimelineScrollAxis.Horizontal => true,

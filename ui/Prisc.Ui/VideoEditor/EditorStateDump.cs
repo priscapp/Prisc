@@ -33,7 +33,8 @@ namespace Prisc.UI.VideoEditor
         DumpRect RowHeaders,
         DumpRect RowsViewport,
         DumpRect Surface,
-        Func<double, double, PixelPoint> SurfaceToScreen);
+        Func<double, double, PixelPoint> SurfaceToScreen,
+        bool CompactRows = false);
 
     /// <summary>The state document's body. Pure, so the test suite can hold it to a known layout.</summary>
     internal static class EditorStateFormat
@@ -66,7 +67,7 @@ namespace Prisc.UI.VideoEditor
                 json.WriteEndArray();
 
                 json.WriteStartArray("rows");
-                var rows = TimelineRowLayout.Build(project);
+                var rows = TimelineRowLayout.Build(project, view.CompactRows);
                 for (var i = 0; i < rows.Count; i++)
                     WriteRow(json, project, rows[i], i, selected, view);
                 json.WriteEndArray();
@@ -277,7 +278,8 @@ namespace Prisc.UI.VideoEditor
                 ScreenRect(_sources.RowHeaders),
                 ScreenRect(_sources.RowsViewport),
                 ScreenRect(surface),
-                (x, y) => surface.PointToScreen(new Point(x, y)));
+                (x, y) => surface.PointToScreen(new Point(x, y)),
+                _timeline.CompactRows);
 
             var state = EditorStateFormat.Build(_session.Project, _session.SelectedItemIds, view);
 
