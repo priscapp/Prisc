@@ -8,11 +8,10 @@ using Xunit;
 
 namespace Prisc.VideoSDK.Tests
 {
-    // The timeline's input-capture rows: how the layout classifies them, how it pins each one
-    // directly above its own screen row whatever the track Order says, and how the reorder math
-    // keeps them (and the boundaries either side of them) out of every drag — against the same
-    // EditorSession refusals the drop would hit. Pure model math, no Avalonia runtime — Prisc.Ui
-    // exposes its internals to this project via InternalsVisibleTo.
+    // The timeline's input-capture rows: how the layout classifies them, and that they are ordinary
+    // rows of the video block in the reorder math, against the session the drop goes to. Pure model
+    // math, no Avalonia runtime — Prisc.Ui exposes its internals to this project via
+    // InternalsVisibleTo.
     public class TimelineInputOverlayRowTests
     {
         private static long Ms(long ms) => ms * TimeSpan.TicksPerMillisecond;
@@ -54,18 +53,14 @@ namespace Prisc.VideoSDK.Tests
         {
             Assert.Equal(26, TimelineRowLayout.HeightOf(TimelineRowKind.Cursor));
             Assert.Equal(26, TimelineRowLayout.HeightOf(TimelineRowKind.Keyboard));
-            Assert.True(TimelineRowLayout.IsInputOverlay(TimelineRowKind.Cursor));
-            Assert.True(TimelineRowLayout.IsInputOverlay(TimelineRowKind.Keyboard));
-            Assert.False(TimelineRowLayout.IsInputOverlay(TimelineRowKind.Video));
         }
 
         // -------------------------------------------------------------------------------- layout
 
-        /// <summary>The pin is a relation, not a number: a webcam row whose Order sits between the
-        /// screen row and its overlays still draws above them, because the overlays are laid out
-        /// against their own screen row rather than against the layer run they came out of.</summary>
+        /// <summary>An overlay row is drawn where its Order puts it, like any row: a webcam row whose
+        /// Order sits between the screen row and its overlays draws between them.</summary>
         [Fact]
-        public void Build_pins_the_overlay_rows_directly_above_their_screen_row()
+        public void Build_draws_the_overlay_rows_where_their_order_puts_them()
         {
             var sourceId = Guid.NewGuid();
             var screen = NewTrack(TrackKind.Video, 0, "Screen");
@@ -89,97 +84,32 @@ namespace Prisc.VideoSDK.Tests
 
             var rows = TimelineRowLayout.Build(project);
 
-            Assert.Equal(new[] { webcam.Id, cursor.Id, keys.Id, screen.Id, audio.Id },
+            Assert.Equal(new[] { cursor.Id, webcam.Id, keys.Id, screen.Id, audio.Id },
                 rows.Select(r => r.TrackId).ToArray());
             Assert.Equal(new[]
             {
-                TimelineRowKind.Video, TimelineRowKind.Cursor, TimelineRowKind.Keyboard,
+                TimelineRowKind.Cursor, TimelineRowKind.Video, TimelineRowKind.Keyboard,
                 TimelineRowKind.Video, TimelineRowKind.Audio,
             }, rows.Select(r => r.Kind).ToArray());
-            Assert.Equal(new[] { 56d, 26d, 26d, 56d, 36d }, rows.Select(r => r.Height).ToArray());
-        }
-
-        /// <summary>The overlays glue to the row playing the source's <b>screen stream</b>, not to
-        /// whatever row of the source is backmost: a webcam row dragged behind the screen row
-        /// plays the same source, and pinning to it would draw the overlays under the screen row
-        /// while they composite above it.</summary>
-        [Fact]
-        public void Build_pins_to_the_screen_row_even_when_the_webcam_row_is_behind_it()
-        {
-            var sourceId = Guid.NewGuid();
-            var webcam = NewTrack(TrackKind.Video, 0, "Webcam"); // dropped behind the screen row
-            var screen = NewTrack(TrackKind.Video, 1, "Screen");
-            var keys = NewTrack(TrackKind.Video, 2, "Keys");
-            var cursor = NewTrack(TrackKind.Video, 3, "Cursor");
-
-            var project = new Project
-            {
-                Tracks = { webcam, screen, keys, cursor },
-                Items =
-                {
-                    NewItem(screen, new MediaContent { SourceId = sourceId, StreamIndex = 0 }),
-                    NewItem(webcam, new MediaContent { SourceId = sourceId, StreamIndex = 1 }),
-                    NewItem(keys, new KeyboardContent { SourceId = sourceId }),
-                    NewItem(cursor, new CursorContent { SourceId = sourceId }),
-                },
-                Sources = { new Source { Id = sourceId, Path = @"C:\rec\in.mp4" } },
-            };
-
-            var rows = TimelineRowLayout.Build(project);
-
-            Assert.Equal(new[] { cursor.Id, keys.Id, screen.Id, webcam.Id },
-                rows.Select(r => r.TrackId).ToArray());
-        }
-
-        /// <summary>An overlay whose screen row is gone draws nothing and pins to nothing — it
-        /// keeps its natural place in the layer run rather than dropping out of the list.</summary>
-        [Fact]
-        public void Build_keeps_an_orphaned_overlay_row_in_the_video_block()
-        {
-            var cursor = NewTrack(TrackKind.Video, 1, "Cursor");
-            var overlay = NewTrack(TrackKind.Video, 0, "Overlay");
-
-            var project = new Project
-            {
-                Tracks = { cursor, overlay },
-                Items =
-                {
-                    NewItem(cursor, new CursorContent { SourceId = Guid.NewGuid() }),
-                    NewItem(overlay, new TextContent { Text = "hi" }),
-                },
-            };
-
-            var rows = TimelineRowLayout.Build(project);
-
-            Assert.Equal(new[] { cursor.Id, overlay.Id }, rows.Select(r => r.TrackId).ToArray());
+            Assert.Equal(new[] { 26d, 56d, 26d, 56d, 36d }, rows.Select(r => r.Height).ToArray());
         }
 
         // ------------------------------------------------------------------------------- reorder
 
         /// <summary>The stack a recording with both overlays draws: webcam, cursor, keys, screen,
-        /// then the audio row — in the canonical model order, where the display is the exact
-        /// reverse and the video-block layer indexes run 3 down to 0. The overlays are glued to
-        /// the screen row (row 3), as <see cref="TimelineRowLayout.Build"/> would glue them.</summary>
+        /// then the audio row.</summary>
         private static IReadOnlyList<TimelineRow> Stack()
         {
-            var kinds = new[]
+            var rows = new List<TimelineRow>();
+            double top = 0;
+            foreach (var kind in new[]
             {
                 TimelineRowKind.Video, TimelineRowKind.Cursor, TimelineRowKind.Keyboard,
                 TimelineRowKind.Video, TimelineRowKind.Audio,
-            };
-            var screenId = Guid.NewGuid();
-            var videoLayer = kinds.Count(k => k != TimelineRowKind.Audio);
-            var audioLayer = 0;
-            var rows = new List<TimelineRow>();
-            double top = 0;
-            for (var i = 0; i < kinds.Length; i++)
+            })
             {
-                var kind = kinds[i];
                 var height = TimelineRowLayout.HeightOf(kind);
-                var layer = kind == TimelineRowKind.Audio ? audioLayer++ : --videoLayer;
-                var id = i == 3 ? screenId : Guid.NewGuid();
-                var pinnedTo = TimelineRowLayout.IsInputOverlay(kind) ? screenId : (Guid?)null;
-                rows.Add(new TimelineRow(id, kind, top, height, layer, pinnedTo));
+                rows.Add(new TimelineRow(Guid.NewGuid(), kind, top, height));
                 top += height;
             }
 
@@ -187,141 +117,42 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void Build_glues_the_overlay_rows_to_their_screen_row()
-        {
-            var session = OverlaySession(out var screen, out var webcam);
-            var rows = TimelineRowLayout.Build(session.Project);
-
-            Assert.Null(rows.Single(r => r.TrackId == webcam.Id).PinnedTo);
-            Assert.Null(rows.Single(r => r.TrackId == screen.Id).PinnedTo);
-            Assert.All(rows.Where(r => TimelineRowLayout.IsInputOverlay(r.Kind)),
-                r => Assert.Equal(screen.Id, r.PinnedTo));
-        }
-
-        /// <summary>The unit is the screen row and the overlays glued above it, asked from any of
-        /// them; every other row is a unit of one.</summary>
-        [Fact]
-        public void UnitRange_spans_the_screen_row_and_its_glued_overlays()
+        public void Overlay_rows_have_a_grip_and_share_the_video_block()
         {
             var rows = Stack();
 
-            Assert.Equal((0, 0), TimelineReorder.UnitRange(rows, 0));
-            Assert.Equal((1, 3), TimelineReorder.UnitRange(rows, 1));
-            Assert.Equal((1, 3), TimelineReorder.UnitRange(rows, 2));
-            Assert.Equal((1, 3), TimelineReorder.UnitRange(rows, 3));
-            Assert.Equal((4, 4), TimelineReorder.UnitRange(rows, 4));
+            for (var row = 0; row <= 3; row++)
+            {
+                Assert.True(TimelineReorder.CanDrag(rows, row));
+                Assert.Equal((0, 3), TimelineReorder.GroupRange(rows, row));
+            }
 
-            // an orphaned overlay (its screen row gone) is glued to nothing
-            var orphan = new TimelineRow(Guid.NewGuid(), TimelineRowKind.Cursor, 0, 26, 0);
-            var screen = new TimelineRow(Guid.NewGuid(), TimelineRowKind.Video, 26, 56, 1);
-            Assert.Equal((0, 0), TimelineReorder.UnitRange(new[] { orphan, screen }, 0));
-            Assert.Equal((1, 1), TimelineReorder.UnitRange(new[] { orphan, screen }, 1));
-        }
-
-        /// <summary>The grip: the screen row has one (its unit can change places with the webcam
-        /// row), the overlays never do, and a screen row whose block holds nothing but its own
-        /// unit has nowhere to go.</summary>
-        [Fact]
-        public void CanDrag_needs_a_row_outside_the_unit_to_change_places_with()
-        {
-            var rows = Stack();
-
-            Assert.True(TimelineReorder.CanDrag(rows, 0));
-            Assert.False(TimelineReorder.CanDrag(rows, 1));
-            Assert.False(TimelineReorder.CanDrag(rows, 2));
-            Assert.True(TimelineReorder.CanDrag(rows, 3));
             Assert.False(TimelineReorder.CanDrag(rows, 4)); // the only audio row
-
-            // cursor, keys, screen and nothing else in the video block
-            var alone = rows.Skip(1).Select(r => r with { Top = r.Top - rows[1].Top }).ToList();
-            Assert.False(TimelineReorder.CanDrag(alone, 2));
         }
 
+        /// <summary>Every boundary of the block is a slot, the ones beside an overlay row included.</summary>
         [Fact]
-        public void GroupRange_makes_each_overlay_row_a_block_of_one()
+        public void A_drop_can_land_on_every_boundary_of_the_block()
         {
             var rows = Stack();
 
-            // …which is what denies them a grip in the header panel
-            Assert.Equal((1, 1), TimelineReorder.GroupRange(rows, 1));
-            Assert.Equal((2, 2), TimelineReorder.GroupRange(rows, 2));
-
-            // the video block still runs across them: the rows either side of an overlay are one
-            // block, or a webcam could never be dragged past the screen row
-            Assert.Equal((0, 3), TimelineReorder.GroupRange(rows, 0));
-            Assert.Equal((0, 3), TimelineReorder.GroupRange(rows, 3));
-            Assert.Equal((4, 4), TimelineReorder.GroupRange(rows, 4));
-        }
-
-        [Fact]
-        public void Overlay_rows_never_produce_a_move()
-        {
-            var rows = Stack();
-
-            for (var drop = 0; drop <= rows.Count; drop++)
-            {
-                Assert.Null(TimelineReorder.TargetLayerIndex(rows, 1, drop));
-                Assert.Null(TimelineReorder.TargetLayerIndex(rows, 2, drop));
-            }
-        }
-
-        /// <summary>No drop may land between a screen row and the overlays pinned above it: the
-        /// layout would put the row somewhere else entirely, so the indicator is pushed up past
-        /// the whole overlay run instead of promising a landing that cannot happen.</summary>
-        [Fact]
-        public void No_drop_lands_between_a_screen_row_and_its_overlays()
-        {
-            var rows = Stack();
-
-            for (var slot = 0; slot <= 4; slot++)
-            {
-                var coerced = TimelineReorder.CoerceDropIndex(rows, 0, slot);
-                Assert.False(coerced > 0 && TimelineRowLayout.IsInputOverlay(rows[coerced - 1].Kind),
-                    $"slot {slot} coerced to {coerced}, which is inside the overlay run");
-                Assert.Equal(coerced, TimelineReorder.CoerceDropIndex(rows, 0, coerced)); // idempotent
-            }
-
-            // slots 2 and 3 are the two illegal ones; both collapse to the boundary above the run
-            Assert.Equal(1, TimelineReorder.CoerceDropIndex(rows, 0, 2));
-            Assert.Equal(1, TimelineReorder.CoerceDropIndex(rows, 0, 3));
-            Assert.Equal(4, TimelineReorder.CoerceDropIndex(rows, 0, 4));
-
-            // …and the pointer-driven entry point agrees, wherever the pointer is
+            var slots = new HashSet<int>();
             for (var y = -20d; y <= TimelineRowLayout.TotalHeight(rows) + 20; y += 1)
-            {
-                var slot = TimelineReorder.DropIndexAt(rows, 0, y);
-                Assert.False(slot > 0 && TimelineRowLayout.IsInputOverlay(rows[slot - 1].Kind));
-            }
+                slots.Add(TimelineReorder.DropIndexAt(rows, 0, y));
+
+            Assert.Equal(new[] { 0, 1, 2, 3, 4 }, slots.OrderBy(s => s).ToArray());
         }
 
-        /// <summary>The other half of the pin: the screen row is dragged <i>with</i> its overlays.
-        /// Its only other place is above the webcam row; any pointer over the unit itself is the
-        /// drag coming home (the indicator sits at the top of the unit, not between its rows), and
-        /// the drop it sends counts among the rows outside the unit — one webcam row, so the
-        /// unit's places are 0 and 1.</summary>
         [Fact]
-        public void The_screen_row_is_dragged_together_with_its_overlays()
+        public void A_cursor_row_drop_flips_into_the_models_layer_order()
         {
-            var rows = Stack();
+            var rows = Stack(); // the video block is rows 0..3, so layer indexes run 3..0 down it
 
-            // slot 0 is above the webcam: the unit goes in front of it — index 1 of [webcam]
-            Assert.Equal(1, TimelineReorder.TargetLayerIndex(rows, 3, 0));
-
-            // every other slot — the unit's own top edge, inside its run, or just under it —
-            // is home
-            for (var slot = 1; slot <= 4; slot++)
-                Assert.Null(TimelineReorder.TargetLayerIndex(rows, 3, slot));
-
-            // …and inside the run the indicator is pushed to the top of the unit
-            Assert.Equal(1, TimelineReorder.CoerceDropIndex(rows, 3, 2));
-            Assert.Equal(1, TimelineReorder.CoerceDropIndex(rows, 3, 3));
-            Assert.Equal(4, TimelineReorder.CoerceDropIndex(rows, 3, 4));
-
-            for (var y = -20d; y <= TimelineRowLayout.TotalHeight(rows) + 20; y += 1)
-            {
-                var slot = TimelineReorder.DropIndexAt(rows, 3, y);
-                Assert.True(slot is 0 or 1 or 4, $"y={y} asked for slot {slot}");
-            }
+            Assert.Equal(3, TimelineReorder.TargetLayerIndex(rows, 1, 0)); // above the webcam
+            Assert.Equal(0, TimelineReorder.TargetLayerIndex(rows, 1, 4)); // below the screen
+            Assert.Equal(1, TimelineReorder.TargetLayerIndex(rows, 1, 3)); // between keys and screen
+            Assert.Null(TimelineReorder.TargetLayerIndex(rows, 1, 1));     // a drag that came home
+            Assert.Null(TimelineReorder.TargetLayerIndex(rows, 1, 2));
         }
 
         // --------------------------------------------------------- agreement with EditorSession
@@ -357,7 +188,7 @@ namespace Prisc.VideoSDK.Tests
                     {
                         Id = sourceId,
                         Path = @"C:\rec\in.mp4",
-                        InputCapturePath = @"C:\rec\input-capture.jsonl",
+                        InputCapturePath = TestPath.ExistingCapture,
                         Streams =
                         {
                             new SourceStream { Index = 0, Kind = StreamKind.Video, Width = 1920, Height = 1080 },
@@ -376,7 +207,7 @@ namespace Prisc.VideoSDK.Tests
             return new EditorSession(project, null, save => save());
         }
 
-        /// <summary>The factories glue the new row to the screen row even when the webcam row —
+        /// <summary>The factories put the new row above the screen row even when the webcam row —
         /// which plays the same source — has been dragged behind it: measuring from the webcam
         /// row would insert the overlay beneath the screen frame, where it composes invisibly
         /// (and the default cursor overlay stands down because a cursor item exists).</summary>
@@ -407,12 +238,11 @@ namespace Prisc.VideoSDK.Tests
             Assert.Empty(session.Project.Validate());
         }
 
-        /// <summary>Every legal drop, driven all the way through the session: the layer index the
-        /// panel would send must land the dragged row where the indicator showed it (measured
-        /// against the rows that can move — the overlays travel with their screen row), and the
-        /// pin must survive the move.</summary>
+        /// <summary>Every drop of every row, driven all the way through the session: the layer index
+        /// the panel would send must land the row exactly where the indicator showed it, so the
+        /// display must be the exact reverse of the model.</summary>
         [Fact]
-        public void Every_legal_drop_lands_where_the_drag_showed_it()
+        public void Every_drop_lands_where_the_drag_showed_it()
         {
             var shape = TimelineRowLayout.Build(OverlaySession().Project);
             Assert.Equal(new[]
@@ -421,28 +251,25 @@ namespace Prisc.VideoSDK.Tests
                 TimelineRowKind.Video, TimelineRowKind.Audio,
             }, shape.Select(r => r.Kind).ToArray());
 
-            AssertEveryLegalDropLands(OverlaySession);
+            AssertEveryDropLands(OverlaySession);
         }
 
-        /// <summary>The same sweep over the state whose display is <b>not</b> the exact reverse of
-        /// the model: a text row on top and the webcam row stepped down inside the overlay run
-        /// (screen, keys, webcam, cursor, text back to front) — the session permits that step, the
-        /// glued display hides it, and a display-position flip would land drops a layer away from
-        /// the indicator. The drop math counts in layer space precisely for this state.</summary>
+        /// <summary>The same sweep with a text row on top and the webcam row stepped down between the
+        /// overlays: there is no arrangement a drop cannot be counted in.</summary>
         [Fact]
-        public void Every_legal_drop_lands_even_when_a_row_sits_inside_the_overlay_run()
+        public void Every_drop_lands_with_a_row_between_the_overlays()
         {
-            var shape = TimelineRowLayout.Build(AnomalousSession().Project);
+            var shape = TimelineRowLayout.Build(SteppedSession().Project);
             Assert.Equal(new[]
             {
-                TimelineRowKind.Text, TimelineRowKind.Video, TimelineRowKind.Cursor,
+                TimelineRowKind.Text, TimelineRowKind.Cursor, TimelineRowKind.Video,
                 TimelineRowKind.Keyboard, TimelineRowKind.Video, TimelineRowKind.Audio,
             }, shape.Select(r => r.Kind).ToArray());
 
-            AssertEveryLegalDropLands(AnomalousSession);
+            AssertEveryDropLands(SteppedSession);
         }
 
-        private static EditorSession AnomalousSession()
+        private static EditorSession SteppedSession()
         {
             var session = OverlaySession(out _, out var webcam);
             Assert.NotNull(session.AddText(0, Ms(2_000)));
@@ -450,9 +277,10 @@ namespace Prisc.VideoSDK.Tests
             return session;
         }
 
-        private static void AssertEveryLegalDropLands(Func<EditorSession> factory)
+        private static void AssertEveryDropLands(Func<EditorSession> factory)
         {
             var shape = TimelineRowLayout.Build(factory().Project);
+            var moves = 0;
 
             for (var from = 0; from < shape.Count; from++)
             {
@@ -466,57 +294,157 @@ namespace Prisc.VideoSDK.Tests
 
                     var layerIndex = TimelineReorder.TargetLayerIndex(rows, from, drop);
                     if (layerIndex == null)
+                    {
+                        Assert.True(drop == from || drop == from + 1, $"row {from} refused slot {drop}");
                         continue;
+                    }
 
-                    // what the drag meant, in the rows that can actually move
-                    var slot = TimelineReorder.CoerceDropIndex(rows, from, drop);
-                    var movable = rows.Skip(start).Take(end - start + 1)
-                        .Where(r => !TimelineRowLayout.IsInputOverlay(r.Kind))
-                        .Select(r => r.TrackId).ToList();
-                    var insertAt = rows.Skip(start).Take(slot - start)
-                        .Count(r => !TimelineRowLayout.IsInputOverlay(r.Kind)) - (slot > from ? 1 : 0);
+                    // what the drag meant, spelled out: the block's rows with the dragged one moved
+                    var display = rows.Skip(start).Take(end - start + 1).Select(r => r.TrackId).ToList();
                     var moved = rows[from].TrackId;
-                    movable.Remove(moved);
-                    movable.Insert(insertAt, moved);
+                    display.Remove(moved);
+                    display.Insert((drop > from ? drop - 1 : drop) - start, moved);
 
                     Assert.True(session.MoveTrackToIndex(moved, layerIndex.Value));
+                    moves++;
                     var after = TimelineRowLayout.Build(session.Project);
-
-                    Assert.Equal(movable, after.Skip(start).Take(end - start + 1)
-                        .Where(r => !TimelineRowLayout.IsInputOverlay(r.Kind))
-                        .Select(r => r.TrackId).ToList());
-                    AssertOverlaysArePinned(after);
+                    Assert.Equal(display, after.Skip(start).Take(end - start + 1).Select(r => r.TrackId).ToList());
+                    Assert.Empty(session.Project.Validate());
                 }
             }
+
+            Assert.True(moves > 0);
         }
 
-        /// <summary>Cursor, keys and screen stay in that order with nothing between them.</summary>
-        private static void AssertOverlaysArePinned(IReadOnlyList<TimelineRow> rows)
-        {
-            var cursor = rows.Select((r, i) => (r, i)).Single(x => x.r.Kind == TimelineRowKind.Cursor).i;
-            var keys = rows.Select((r, i) => (r, i)).Single(x => x.r.Kind == TimelineRowKind.Keyboard).i;
+        // --------------------------------------------------------------------------------- hosting
 
-            Assert.Equal(cursor + 1, keys);
-            Assert.Equal(TimelineRowKind.Video, rows[keys + 1].Kind);
+        private static readonly (string Name, Func<ItemContent> Make)[] VideoRowContents =
+        {
+            ("media", () => new MediaContent()),
+            ("text", () => new TextContent { Text = "t" }),
+            ("image", () => new ImageContent { Path = "i.png" }),
+            ("wallpaper", () => new BackgroundContent()),
+            ("obscure", () => new ObscureContent()),
+            ("shape", () => new ShapeContent()),
+            ("cursor", () => new CursorContent()),
+            ("keys", () => new KeyboardContent()),
+        };
+
+        public static IEnumerable<object[]> VideoRowPairs() =>
+            from held in VideoRowContents
+            from arriving in VideoRowContents
+            select new object[] { held.Name, arriving.Name };
+
+        private static bool IsOverlay(TimelineRowKind kind) => kind is TimelineRowKind.Cursor or TimelineRowKind.Keyboard;
+
+        /// <summary>
+        /// The rule against the classification it protects, since <c>KindOf</c> is out of the model's
+        /// reach: a row refuses a clip exactly when that clip, landing first on the row, would turn it
+        /// into or out of a cursor or keys row, or into a background row, which is where the next
+        /// wallpaper goes in front of. Other kinds may mix, as they always could, because nothing about
+        /// those rows depends on what they are.
+        /// </summary>
+        [Theory]
+        [MemberData(nameof(VideoRowPairs))]
+        public void CanHost_agrees_with_KindOf_on_every_video_row(string heldName, string arrivingName)
+        {
+            var track = NewTrack(TrackKind.Video, 0, "Row");
+            var held = NewItem(track, VideoRowContents.Single(c => c.Name == heldName).Make(), Ms(1_000));
+            var project = new Project { Tracks = { track }, Items = { held } };
+            var arriving = VideoRowContents.Single(c => c.Name == arrivingName).Make();
+
+            var before = TimelineRowLayout.KindOf(track, new[] { held });
+            var after = TimelineRowLayout.KindOf(track, new[] { held, NewItem(track, arriving, 0) });
+            var breaks = before != after && (IsOverlay(before) || IsOverlay(after) || after == TimelineRowKind.Background);
+
+            Assert.Equal(!breaks, TimelineOps.CanHost(track, arriving, project));
         }
 
         [Fact]
-        public void The_session_refuses_to_move_an_overlay_row_at_all()
+        public void CanHost_lets_an_empty_row_become_anything_of_its_kind()
         {
-            var session = OverlaySession();
-            var rows = TimelineRowLayout.Build(session.Project);
-            var json = session.Project.ToJson();
+            var video = NewTrack(TrackKind.Video, 0, "Video");
+            var audio = NewTrack(TrackKind.Audio, 1, "Audio");
+            var effect = NewTrack(TrackKind.Effect, 2, "Effect");
+            var project = new Project { Tracks = { video, audio, effect } };
 
-            foreach (var row in rows.Where(r => TimelineRowLayout.IsInputOverlay(r.Kind)))
+            foreach (var (_, make) in VideoRowContents)
+                Assert.True(TimelineOps.CanHost(video, make(), project));
+
+            Assert.True(TimelineOps.CanHost(audio, new MediaContent(), project));
+            Assert.False(TimelineOps.CanHost(audio, new CursorContent(), project));
+            Assert.False(TimelineOps.CanHost(audio, new KeyboardContent(), project));
+            Assert.False(TimelineOps.CanHost(audio, new TextContent(), project));
+            Assert.True(TimelineOps.CanHost(effect, new ZoomContent(), project));
+            Assert.True(TimelineOps.CanHost(effect, new SpeedContent(), project));
+            Assert.False(TimelineOps.CanHost(effect, new CursorContent(), project));
+            Assert.False(TimelineOps.CanHost(video, new ZoomContent(), project));
+            Assert.False(TimelineOps.CanHost(video, new SpeedContent(), project));
+        }
+
+        /// <summary>A sound never lands on a video row nor a picture on an audio row, by the stream
+        /// the clip plays. A stream this project cannot name yet says nothing either way.</summary>
+        [Fact]
+        public void CanHost_goes_by_the_stream_a_media_clip_plays()
+        {
+            var video = NewTrack(TrackKind.Video, 0, "Video");
+            var audio = NewTrack(TrackKind.Audio, 1, "Audio");
+            var source = new Source
             {
-                for (var index = 0; index < session.Project.Tracks.Count; index++)
-                    Assert.False(session.MoveTrackToIndex(row.TrackId, index));
+                Id = Guid.NewGuid(),
+                Streams =
+                {
+                    new SourceStream { Index = 0, Kind = StreamKind.Video },
+                    new SourceStream { Index = 1, Kind = StreamKind.Audio },
+                },
+            };
+            var project = new Project { Sources = { source }, Tracks = { video, audio } };
+            var picture = new MediaContent { SourceId = source.Id, StreamIndex = 0 };
+            var sound = new MediaContent { SourceId = source.Id, StreamIndex = 1 };
 
-                Assert.False(session.CanMoveTrackLayer(row.TrackId, towardsFront: true));
-                Assert.False(session.CanMoveTrackLayer(row.TrackId, towardsFront: false));
-            }
+            Assert.True(TimelineOps.CanHost(video, picture, project));
+            Assert.False(TimelineOps.CanHost(video, sound, project));
+            Assert.False(TimelineOps.CanHost(audio, picture, project));
+            Assert.True(TimelineOps.CanHost(audio, sound, project));
 
-            Assert.Equal(json, session.Project.ToJson());
+            var unknown = new MediaContent { SourceId = Guid.NewGuid() };
+            Assert.True(TimelineOps.CanHost(video, unknown, project));
+            Assert.True(TimelineOps.CanHost(audio, unknown, project));
+        }
+
+        /// <summary>An effect row is one kind, and a project has one speed row: the two things
+        /// <see cref="Project.Validate"/> would refuse.</summary>
+        [Fact]
+        public void CanHost_keeps_effect_rows_to_one_kind_and_one_speed_row()
+        {
+            var zooms = NewTrack(TrackKind.Effect, 0, "Zoom");
+            var speeds = NewTrack(TrackKind.Effect, 1, "Speed");
+            var spare = NewTrack(TrackKind.Effect, 2, "Spare");
+            var project = new Project
+            {
+                Tracks = { zooms, speeds, spare },
+                Items =
+                {
+                    NewItem(zooms, new ZoomContent()),
+                    NewItem(speeds, new SpeedContent()),
+                },
+            };
+
+            Assert.True(TimelineOps.CanHost(zooms, new ZoomContent(), project));
+            Assert.False(TimelineOps.CanHost(zooms, new SpeedContent(), project));
+            Assert.True(TimelineOps.CanHost(speeds, new SpeedContent(), project));
+            Assert.False(TimelineOps.CanHost(speeds, new ZoomContent(), project));
+            Assert.True(TimelineOps.CanHost(spare, new ZoomContent(), project));
+            Assert.False(TimelineOps.CanHost(spare, new SpeedContent(), project));
+        }
+
+        [Fact]
+        public void CanHost_takes_overlays_of_another_recording_on_a_row_of_their_kind()
+        {
+            var row = NewTrack(TrackKind.Video, 0, "Cursor");
+            var project = new Project { Tracks = { row }, Items = { NewItem(row, new CursorContent { SourceId = Guid.NewGuid() }) } };
+
+            Assert.True(TimelineOps.CanHost(row, new CursorContent { SourceId = Guid.NewGuid() }, project));
         }
     }
 }

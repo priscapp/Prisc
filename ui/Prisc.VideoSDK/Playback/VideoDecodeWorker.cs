@@ -285,7 +285,12 @@ namespace Prisc.VideoSDK.Playback
         {
             Interlocked.Exchange(ref _immediateMinSerial, newSerial);
             _eofPresented = false;
-            _frames.Flush(); // also unblocks a decode thread parked in Reserve()
+
+            // before the flush, which unblocks a decode thread parked in Reserve(): the pre-seek
+            // frame it was holding gets queued before that thread sees the new serial, and has to
+            // read as stale, or a frame step asked for right after this seek would present it
+            Interlocked.Exchange(ref _activeSerial, newSerial);
+            _frames.Flush();
             WakePresent();
         }
 
@@ -523,7 +528,9 @@ namespace Prisc.VideoSDK.Playback
                 int immediateReq = Volatile.Read(ref _presentImmediateOnce);
                 bool immediate = immediateReq != 0
                                  && serial >= Volatile.Read(ref _immediateMinSerial);
-                bool step = Volatile.Read(ref _stepOnce) == 1;
+
+                // a seek's frame is where a step asked for meanwhile starts from, not the step
+                bool step = !immediate && Volatile.Read(ref _stepOnce) == 1;
 
                 if (!immediate && !step)
                 {

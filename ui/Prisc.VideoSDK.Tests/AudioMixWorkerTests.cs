@@ -236,6 +236,34 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
+        public void Overlapping_items_of_one_stream_mix_from_a_decoder_each_with_no_seeks()
+        {
+            RequireFFmpeg();
+
+            // one recording twice at once, 1 s apart: without lanes every chunk would drag one
+            // decoder back and forth, which the reposition count shows and the ear hears
+            var project = NewProject();
+            var a = AddSource(project, SineFixture(440, 0.30f, 3));
+            AddAudioItem(project, a, 0, 2 * Second);
+            AddAudioItem(project, a, 0, 2 * Second, sourceInTicks: Second);
+
+            var (ring, sink) = NewSink();
+            using (sink)
+            using (var worker = new AudioMixWorker(project, ring, sink, Rate))
+            {
+                worker.Start();
+                var mix = DrainFrames(ring, worker, Rate);
+
+                // two equal-frequency sines at a whole-cycle offset (440 cycles in 1 s) reinforce
+                Assert.InRange(Rms(mix, Rate / 4, Rate / 2), 0.60 / Math.Sqrt(2) * 0.9, 0.60 / Math.Sqrt(2) * 1.1);
+                Assert.Equal(2, worker.DecoderOpenCount);
+                // the opening seek repositions each lane once, and nothing does after that
+                Assert.InRange(worker.SourceRepositionCount, 0, 2);
+                Assert.Null(worker.Error);
+            }
+        }
+
+        [Fact]
         public void Timeline_gap_mixes_exact_silence()
         {
             RequireFFmpeg();

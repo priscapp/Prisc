@@ -1,0 +1,337 @@
+{
+  "Version": 2,
+  "Output": {
+    "WidthPx": 1280,
+    "HeightPx": 720,
+    "FpsNum": 30,
+    "FpsDen": 1,
+    "SampleRate": 48000
+  },
+  "Sources": [
+    {
+      "Id": "00000000-0000-0000-0000-000000000001",
+      "Path": "C:\\fixtures\\legacy-v2\\recording.mp4",
+      "InputCapturePath": "C:\\fixtures\\legacy-v2\\input-capture.jsonl",
+      "Streams": [
+        {
+          "Index": 0,
+          "Kind": "Video",
+          "Width": 1280,
+          "Height": 720,
+          "PixelAspectNum": 1,
+          "PixelAspectDen": 1,
+          "AvgFrameRateNum": 30,
+          "AvgFrameRateDen": 1,
+          "IsVariableFrameRate": false,
+          "StartTimeTicks": 0,
+          "DurationTicks": 600000000
+        },
+        {
+          "Index": 1,
+          "Kind": "Video",
+          "Width": 640,
+          "Height": 360,
+          "PixelAspectNum": 1,
+          "PixelAspectDen": 1,
+          "AvgFrameRateNum": 30,
+          "AvgFrameRateDen": 1,
+          "IsVariableFrameRate": false,
+          "StartTimeTicks": 0,
+          "DurationTicks": 600000000
+        },
+        {
+          "Index": 2,
+          "Kind": "Audio",
+          "Width": 0,
+          "Height": 0,
+          "PixelAspectNum": 0,
+          "PixelAspectDen": 0,
+          "AvgFrameRateNum": 0,
+          "AvgFrameRateDen": 0,
+          "IsVariableFrameRate": false,
+          "StartTimeTicks": 0,
+          "DurationTicks": 600000000
+        },
+        {
+          "Index": 3,
+          "Kind": "Audio",
+          "Width": 0,
+          "Height": 0,
+          "PixelAspectNum": 0,
+          "PixelAspectDen": 0,
+          "AvgFrameRateNum": 0,
+          "AvgFrameRateDen": 0,
+          "IsVariableFrameRate": false,
+          "StartTimeTicks": 0,
+          "DurationTicks": 600000000
+        }
+      ]
+    }
+  ],
+  "Tracks": [
+    {
+      "Id": "00000000-0000-0000-0000-000000000002",
+      "Kind": "Video",
+      "Name": "Screen",
+      "Order": 0,
+      "Hidden": false,
+      "Muted": false,
+      "Denoise": false,
+      "DenoiseStrength": 1,
+      "Locked": false
+    },
+    {
+      "Id": "00000000-0000-0000-0000-000000000003",
+      "Kind": "Video",
+      "Name": "Keys",
+      "Order": 1,
+      "Hidden": false,
+      "Muted": false,
+      "Denoise": false,
+      "DenoiseStrength": 1,
+      "Locked": false
+    },
+    {
+      "Id": "00000000-0000-0000-0000-000000000004",
+      "Kind": "Video",
+      "Name": "Cursor",
+      "Order": 2,
+      "Hidden": false,
+      "Muted": false,
+      "Denoise": false,
+      "DenoiseStrength": 1,
+      "Locked": false
+    },
+    {
+      "Id": "00000000-0000-0000-0000-000000000005",
+      "Kind": "Video",
+      "Name": "Webcam",
+      "Order": 3,
+      "Hidden": false,
+      "Muted": false,
+      "Denoise": false,
+      "DenoiseStrength": 1,
+      "Locked": false
+    },
+    {
+      "Id": "00000000-0000-0000-0000-000000000006",
+      "Kind": "Audio",
+      "Name": "Speaker",
+      "Order": 4,
+      "Hidden": false,
+      "Muted": false,
+      "Denoise": false,
+      "DenoiseStrength": 1,
+      "Locked": false
+    },
+    {
+      "Id": "00000000-0000-0000-0000-000000000007",
+      "Kind": "Audio",
+      "Name": "Microphone",
+      "Order": 5,
+      "Hidden": false,
+      "Muted": false,
+      "Denoise": false,
+      "DenoiseStrength": 1,
+      "Locked": false
+    }
+  ],
+  "Items": [
+    {
+      "Id": "00000000-0000-0000-0000-000000000008",
+      "TrackId": "00000000-0000-0000-0000-000000000002",
+      "TimelineStartTicks": 0,
+      "DurationTicks": 100000000,
+      "Content": {
+        "$type": "media",
+        "SourceId": "00000000-0000-0000-0000-000000000001",
+        "StreamIndex": 0,
+        "SourceInTicks": 0,
+        "Speed": 1,
+        "SpeedWarpExempt": false,
+        "Freeze": false
+      },
+      "Transform": {
+        "X": 0.5,
+        "Y": 0.5,
+        "Scale": 1,
+        "Rotation": 0,
+        "Opacity": 1,
+        "AspectStretch": false
+      },
+      "Volume": 1,
+      "LinkGroupId": "00000000-0000-0000-0000-000000000009"
+    },
+    {
+      "Id": "00000000-0000-0000-0000-00000000000a",
+      "TrackId": "00000000-0000-0000-0000-000000000002",
+      "TimelineStartTicks": 200000000,
+      "DurationTicks": 400000000,
+      "Content": {
+        "$type": "media",
+        "SourceId": "00000000-0000-0000-0000-000000000001",
+        "StreamIndex": 0,
+        "SourceInTicks": 200000000,
+        "Speed": 1,
+        "SpeedWarpExempt": false,
+        "Freeze": false
+      },
+      "Transform": {
+        "X": 0.5,
+        "Y": 0.5,
+        "Scale": 1,
+        "Rotation": 0,
+        "Opacity": 1,
+        "AspectStretch": false
+      },
+      "Volume": 1,
+      "LinkGroupId": "00000000-0000-0000-0000-000000000009"
+    },
+    {
+      "Id": "00000000-0000-0000-0000-00000000000b",
+      "TrackId": "00000000-0000-0000-0000-000000000003",
+      "TimelineStartTicks": 0,
+      "DurationTicks": 600000000,
+      "Content": {
+        "$type": "keyboard",
+        "SourceId": "00000000-0000-0000-0000-000000000001",
+        "FontSize": 40,
+        "LingerMs": 1000,
+        "PauseBreakMs": 1000,
+        "Filter": "None",
+        "Style": "default",
+        "Theme": "dark"
+      },
+      "Transform": {
+        "X": 0.5,
+        "Y": 0.85,
+        "Scale": 0.5,
+        "Rotation": 0,
+        "Opacity": 1,
+        "AspectStretch": false
+      },
+      "Entry": {
+        "Kind": "SlideUp",
+        "DurationTicks": 3000000,
+        "Easing": "CubicInOut"
+      },
+      "Exit": {
+        "Kind": "Fade",
+        "DurationTicks": 3000000,
+        "Easing": "CubicInOut"
+      },
+      "Volume": 1,
+      "LinkGroupId": "00000000-0000-0000-0000-000000000009"
+    },
+    {
+      "Id": "00000000-0000-0000-0000-00000000000c",
+      "TrackId": "00000000-0000-0000-0000-000000000004",
+      "TimelineStartTicks": 0,
+      "DurationTicks": 600000000,
+      "Content": {
+        "$type": "cursor",
+        "SourceId": "00000000-0000-0000-0000-000000000001",
+        "Style": "native",
+        "Size": 1,
+        "Debounce": true,
+        "ClickAnimation": "none",
+        "ClickColor": 4294901760,
+        "FillOpacity": 0.15,
+        "HoldSize": 1,
+        "ClickSize": 1,
+        "AnimationSpeed": 1
+      },
+      "Transform": {
+        "X": 0.5,
+        "Y": 0.5,
+        "Scale": 1,
+        "Rotation": 0,
+        "Opacity": 1,
+        "AspectStretch": false
+      },
+      "Surround": {
+        "Kind": "Shadow",
+        "Color": 2147483648,
+        "Size": 0.06,
+        "Distance": 0.1
+      },
+      "Volume": 1,
+      "LinkGroupId": "00000000-0000-0000-0000-000000000009"
+    },
+    {
+      "Id": "00000000-0000-0000-0000-00000000000d",
+      "TrackId": "00000000-0000-0000-0000-000000000005",
+      "TimelineStartTicks": 0,
+      "DurationTicks": 600000000,
+      "Content": {
+        "$type": "media",
+        "SourceId": "00000000-0000-0000-0000-000000000001",
+        "StreamIndex": 1,
+        "SourceInTicks": 0,
+        "Speed": 1,
+        "SpeedWarpExempt": false,
+        "Freeze": false
+      },
+      "Transform": {
+        "X": 0.8,
+        "Y": 0.8,
+        "Scale": 0.25,
+        "Rotation": 0,
+        "Opacity": 1,
+        "AspectStretch": false
+      },
+      "Volume": 1,
+      "LinkGroupId": "00000000-0000-0000-0000-000000000009"
+    },
+    {
+      "Id": "00000000-0000-0000-0000-00000000000e",
+      "TrackId": "00000000-0000-0000-0000-000000000006",
+      "TimelineStartTicks": 0,
+      "DurationTicks": 600000000,
+      "Content": {
+        "$type": "media",
+        "SourceId": "00000000-0000-0000-0000-000000000001",
+        "StreamIndex": 2,
+        "SourceInTicks": 0,
+        "Speed": 1,
+        "SpeedWarpExempt": false,
+        "Freeze": false
+      },
+      "Transform": {
+        "X": 0.5,
+        "Y": 0.5,
+        "Scale": 1,
+        "Rotation": 0,
+        "Opacity": 1,
+        "AspectStretch": false
+      },
+      "Volume": 1,
+      "LinkGroupId": "00000000-0000-0000-0000-000000000009"
+    },
+    {
+      "Id": "00000000-0000-0000-0000-00000000000f",
+      "TrackId": "00000000-0000-0000-0000-000000000007",
+      "TimelineStartTicks": 0,
+      "DurationTicks": 600000000,
+      "Content": {
+        "$type": "media",
+        "SourceId": "00000000-0000-0000-0000-000000000001",
+        "StreamIndex": 3,
+        "SourceInTicks": 0,
+        "Speed": 1,
+        "SpeedWarpExempt": false,
+        "Freeze": false
+      },
+      "Transform": {
+        "X": 0.5,
+        "Y": 0.5,
+        "Scale": 1,
+        "Rotation": 0,
+        "Opacity": 1,
+        "AspectStretch": false
+      },
+      "Volume": 1,
+      "LinkGroupId": "00000000-0000-0000-0000-000000000009"
+    }
+  ]
+}

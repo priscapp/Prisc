@@ -226,6 +226,95 @@ namespace Prisc.VideoSDK.Tests
                 () => source.ReadSamples(Guid.NewGuid(), 1, 0, dst, 1000, out _));
         }
 
+        /// <summary>An unmuted audio row playing the fixture's audio stream.</summary>
+        private static void AddAudioClip(Project project, Guid sourceId, long start, long duration, long sourceIn)
+        {
+            var track = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Order = project.Tracks.Count };
+            project.Tracks.Add(track);
+            project.Items.Add(new Item
+            {
+                Id = Guid.NewGuid(),
+                TrackId = track.Id,
+                TimelineStartTicks = start,
+                DurationTicks = duration,
+                Content = new MediaContent { SourceId = sourceId, StreamIndex = 1, SourceInTicks = sourceIn },
+            });
+        }
+
+        private static float[] MixAll(Project project, IAudioSource source, int frames)
+        {
+            var mixer = new AudioMixer(project, source);
+            var all = new float[frames * 2];
+            var chunk = new float[1024 * 2];
+            for (int pos = 0; pos < frames; pos += 1024)
+            {
+                int n = Math.Min(1024, frames - pos);
+                mixer.MixChunk(pos, n, chunk);
+                Array.Copy(chunk, 0, all, pos * 2, n * 2);
+            }
+
+            return all;
+        }
+
+        [Fact]
+        public void Overlapping_clips_never_reposition_and_mix_what_each_decodes_alone()
+        {
+            RequireFFmpeg();
+            string path = EncodeSineFixture();
+            const long Sec = TimeSpan.TicksPerSecond;
+            int frames = Rate * 3 / 4;
+
+            // each clip alone, on a source of its own: a non-overlapping decode to hold the sum to
+            var first = ProjectFor(path, out var firstId);
+            AddAudioClip(first, firstId, 0, Sec * 3 / 4, 0);
+            var second = ProjectFor(path, out var secondId);
+            AddAudioClip(second, secondId, Sec / 4, Sec / 2, Sec / 2 + Sec / 7);
+            using var firstSource = new SequentialAudioSource(first);
+            using var secondSource = new SequentialAudioSource(second);
+            var expectedFirst = MixAll(first, firstSource, frames);
+            var expectedSecond = MixAll(second, secondSource, frames);
+
+            var both = ProjectFor(path, out var bothId);
+            AddAudioClip(both, bothId, 0, Sec * 3 / 4, 0);
+            AddAudioClip(both, bothId, Sec / 4, Sec / 2, Sec / 2 + Sec / 7);
+            using var source = new SequentialAudioSource(both);
+            var mix = MixAll(both, source, frames);
+
+            Assert.Equal(0, source.RepositionCount);
+            for (int i = 0; i < mix.Length; i++)
+            {
+                if (Math.Abs(expectedFirst[i] + expectedSecond[i] - mix[i]) > 1e-6f)
+                    Assert.Fail($"sample {i / 2} ch{i % 2}: expected {expectedFirst[i] + expectedSecond[i]}, got {mix[i]}");
+            }
+        }
+
+        [Fact]
+        public void Lane_0_of_a_repeat_on_one_row_still_seeks_back_once()
+        {
+            RequireFFmpeg();
+            string path = EncodeSineFixture();
+            const long Sec = TimeSpan.TicksPerSecond;
+            var project = ProjectFor(path, out var sourceId);
+            var track = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Order = 0 };
+            project.Tracks.Add(track);
+            foreach (var (start, sourceIn) in new[] { (0L, 0L), (Sec / 2, 0L) })
+            {
+                project.Items.Add(new Item
+                {
+                    Id = Guid.NewGuid(),
+                    TrackId = track.Id,
+                    TimelineStartTicks = start,
+                    DurationTicks = Sec / 2,
+                    Content = new MediaContent { SourceId = sourceId, StreamIndex = 1, SourceInTicks = sourceIn },
+                });
+            }
+
+            using var source = new SequentialAudioSource(project);
+            MixAll(project, source, Rate);
+
+            Assert.Equal(1, source.RepositionCount);
+        }
+
         [Fact]
         public void Video_stream_index_throws()
         {

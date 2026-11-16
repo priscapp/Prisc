@@ -9,15 +9,15 @@ namespace Prisc.VideoSDK.Tests
     {
         private static long Ms(long ms) => ms * TimeSpan.TicksPerMillisecond;
 
-        /// <summary>The Phase-1 import shape: one recording, three streams, three tracks, three
-        /// linked items covering [0, 10s) with a 2s source in-point on each.</summary>
+        /// <summary>The Phase-1 import shape: one recording, three streams, three grouped tracks,
+        /// three items covering [0, 10s) with a 2s source in-point on each.</summary>
         private static Project RecordingProject(out Item screen, out Item webcam, out Item audio)
         {
             var sourceId = Guid.NewGuid();
             var linkGroup = Guid.NewGuid();
-            var screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0 };
-            var webcamTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Webcam", Order = 1 };
-            var audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 2 };
+            var screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0, GroupId = linkGroup };
+            var webcamTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Webcam", Order = 1, GroupId = linkGroup };
+            var audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 2, GroupId = linkGroup };
 
             Item NewItem(Track track, int streamIndex) => new Item
             {
@@ -26,7 +26,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = 0,
                 DurationTicks = Ms(10_000),
                 Content = new MediaContent { SourceId = sourceId, StreamIndex = streamIndex, SourceInTicks = Ms(2_000) },
-                GroupId = linkGroup,
             };
 
             screen = NewItem(screenTrack, 0);
@@ -62,11 +61,11 @@ namespace Prisc.VideoSDK.Tests
         // ---- move ----
 
         [Fact]
-        public void Move_applies_to_every_link_member()
+        public void Move_applies_to_every_time_linked_clip()
         {
             var project = RecordingProject(out var screen, out var webcam, out var audio);
 
-            var applied = TimelineOps.Move(project, screen.Id, Ms(3_000));
+            var applied = TimeLinkedMoves.MoveLinked(project, screen.Id, Ms(3_000));
 
             Assert.Equal(Ms(3_000), applied);
             Assert.All(new[] { screen, webcam, audio }, i => Assert.Equal(Ms(3_000), i.TimelineStartTicks));
@@ -79,9 +78,9 @@ namespace Prisc.VideoSDK.Tests
         public void Move_clamps_at_the_timeline_origin()
         {
             var project = RecordingProject(out var screen, out var webcam, out _);
-            TimelineOps.Move(project, screen.Id, Ms(1_000));
+            TimeLinkedMoves.MoveLinked(project, screen.Id, Ms(1_000));
 
-            var applied = TimelineOps.Move(project, webcam.Id, -Ms(5_000));
+            var applied = TimeLinkedMoves.MoveLinked(project, webcam.Id, -Ms(5_000));
 
             Assert.Equal(-Ms(1_000), applied);
             Assert.Equal(0, screen.TimelineStartTicks);
@@ -89,12 +88,12 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void Move_on_an_unlinked_item_moves_only_that_item()
+        public void Move_on_an_ungrouped_row_moves_only_that_item()
         {
             var project = RecordingProject(out var screen, out var webcam, out var audio);
-            TimelineOps.Ungroup(project, new[] { webcam.Id });
+            TimelineOps.UngroupTracks(project, new[] { webcam.TrackId });
 
-            TimelineOps.Move(project, webcam.Id, Ms(1_500));
+            TimeLinkedMoves.MoveLinked(project, webcam.Id, Ms(1_500));
 
             Assert.Equal(Ms(1_500), webcam.TimelineStartTicks);
             Assert.Equal(0, screen.TimelineStartTicks);
@@ -105,7 +104,7 @@ namespace Prisc.VideoSDK.Tests
         public void Ops_throw_on_an_unknown_item()
         {
             var project = RecordingProject(out _, out _, out _);
-            Assert.Throws<ArgumentException>(() => TimelineOps.Move(project, Guid.NewGuid(), Ms(1)));
+            Assert.Throws<ArgumentException>(() => TimelineOps.Move(project, new[] { Guid.NewGuid() }, Ms(1)));
             Assert.Throws<ArgumentException>(() => TimelineOps.TrimStart(project, Guid.NewGuid(), Ms(1)));
             Assert.Throws<ArgumentException>(() => TimelineOps.TrimEnd(project, Guid.NewGuid(), Ms(1)));
         }
@@ -122,8 +121,8 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(Ms(1_000), applied);
             Assert.Equal(Ms(1_000), webcam.TimelineStartTicks);
             Assert.Equal(Ms(9_000), webcam.DurationTicks);
-            // the same source frame stays under the new in-point — which is exactly why the rest
-            // of the link group needs no adjustment to stay in sync.
+            // the same source frame stays under the new in-point — which is exactly why the other
+            // rows need no adjustment to stay in sync.
             Assert.Equal(Ms(3_000), SourceIn(webcam));
 
             foreach (var item in new[] { screen, audio })
@@ -138,7 +137,7 @@ namespace Prisc.VideoSDK.Tests
         public void TrimStart_clamps_to_the_minimum_segment_of_the_target_alone()
         {
             var project = RecordingProject(out var screen, out var webcam, out _);
-            // a shorter linked member no longer governs the clamp — trim is per item.
+            // a shorter clip on another row no longer governs the clamp — trim is per item.
             webcam.DurationTicks = Ms(2_000);
 
             var applied = TimelineOps.TrimStart(project, screen.Id, Ms(15_000));
@@ -152,7 +151,7 @@ namespace Prisc.VideoSDK.Tests
         public void TrimStart_extension_is_clamped_by_the_source_in_point()
         {
             var project = RecordingProject(out var screen, out _, out _);
-            TimelineOps.Move(project, screen.Id, Ms(5_000));
+            TimeLinkedMoves.MoveLinked(project, screen.Id, Ms(5_000));
 
             // 5s of timeline room, but only 2s of source before the in-point.
             var applied = TimelineOps.TrimStart(project, screen.Id, -Ms(4_000));
@@ -167,7 +166,7 @@ namespace Prisc.VideoSDK.Tests
         public void TrimStart_extension_is_clamped_by_the_timeline_origin()
         {
             var project = RecordingProject(out var screen, out _, out _);
-            TimelineOps.Move(project, screen.Id, Ms(1_000));
+            TimeLinkedMoves.MoveLinked(project, screen.Id, Ms(1_000));
 
             // 2s of source available, but only 1s of timeline before the item.
             var applied = TimelineOps.TrimStart(project, screen.Id, -Ms(4_000));
@@ -247,7 +246,6 @@ namespace Prisc.VideoSDK.Tests
         {
             var project = RecordingProject(out var screen, out _, out _);
             screen.Content = new TextContent { Text = "title" };
-            screen.GroupId = null;
 
             var applied = TimelineOps.TrimEnd(project, screen.Id, Ms(100_000));
 
@@ -261,9 +259,8 @@ namespace Prisc.VideoSDK.Tests
         public void Split_produces_back_to_back_items_with_correct_source_in()
         {
             var project = RecordingProject(out var screen, out _, out _);
-            TimelineOps.Ungroup(project, project.Items.Select(i => i.Id).ToArray());
 
-            Assert.True(TimelineOps.Split(project, screen.Id, Ms(4_000)));
+            Assert.True(TimelineOps.SplitItem(project, screen.Id, Ms(4_000)));
 
             var halves = project.Items.Where(i => i.TrackId == screen.TrackId)
                                       .OrderBy(i => i.TimelineStartTicks).ToList();
@@ -282,12 +279,12 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void Split_applies_to_every_covered_member_and_relinks_the_right_halves()
+        public void SplitAcross_cuts_every_covering_clip_and_the_two_sides_drag_apart()
         {
             var project = RecordingProject(out var screen, out var webcam, out var audio);
-            var originalGroup = screen.GroupId;
+            var tracks = project.Tracks.Select(t => t.GroupId).ToList();
 
-            Assert.True(TimelineOps.Split(project, screen.Id, Ms(4_000)));
+            Assert.Equal((true, false), TimelineOps.SplitAcross(project, Ms(4_000)));
 
             Assert.Equal(6, project.Items.Count);
 
@@ -295,30 +292,27 @@ namespace Prisc.VideoSDK.Tests
             var rights = project.Items.Except(lefts).ToList();
             Assert.Equal(3, rights.Count);
 
-            // left halves keep their group; right halves form a new one of their own.
-            Assert.All(lefts, i => Assert.Equal(originalGroup, i.GroupId));
-            var rightGroup = rights[0].GroupId;
-            Assert.NotNull(rightGroup);
-            Assert.NotEqual(originalGroup, rightGroup);
-            Assert.All(rights, i => Assert.Equal(rightGroup, i.GroupId));
+            // no group state changes: half-open spans are what keep the sides apart
+            Assert.Equal(tracks, project.Tracks.Select(t => t.GroupId));
 
             Assert.All(rights, i => Assert.Equal(Ms(4_000), i.TimelineStartTicks));
             Assert.All(rights, i => Assert.Equal(Ms(6_000), i.DurationTicks));
             Assert.All(rights, i => Assert.Equal(Ms(6_000), SourceIn(i)));
 
-            // ...and the two new pairs edit independently of each other.
-            TimelineOps.Move(project, rights[0].Id, Ms(1_000));
+            // ...and the two sides edit independently of each other.
+            TimeLinkedMoves.MoveLinked(project, rights[0].Id, Ms(1_000));
             Assert.All(rights, i => Assert.Equal(Ms(5_000), i.TimelineStartTicks));
             Assert.All(lefts, i => Assert.Equal(0, i.TimelineStartTicks));
         }
 
         /// <summary>The right-click split: cutting the screen row must leave the webcam and audio
-        /// rows of the same recording untouched — the exact complaint that motivated it.</summary>
+        /// rows of the same recording untouched — the exact complaint that motivated it. Its row
+        /// stays in the group, because a group is a row's.</summary>
         [Fact]
         public void SplitItem_cuts_only_the_item_it_is_given()
         {
             var project = RecordingProject(out var screen, out var webcam, out var audio);
-            var originalGroup = screen.GroupId;
+            var originalGroup = project.TrackOf(screen).GroupId;
 
             Assert.True(TimelineOps.SplitItem(project, screen.Id, Ms(4_000)));
 
@@ -332,26 +326,24 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(Ms(6_000), right.DurationTicks);
             Assert.Equal(Ms(6_000), SourceIn(right));
 
-            // both halves stay in the recording: the clip was cut, not unlinked.
-            Assert.Equal(originalGroup, right.GroupId);
-            Assert.Equal(originalGroup, screen.GroupId);
+            Assert.Equal(originalGroup, project.TrackOf(right).GroupId);
         }
 
-        /// <summary>A later group split still behaves, because it only ever acts on the members
-        /// that cover the instant — the half that does not is simply left alone.</summary>
+        /// <summary>A later cut across still behaves, because it only ever acts on the clips that
+        /// cover the instant — the half that does not is simply left alone.</summary>
         [Fact]
         public void SplitItem_leaves_the_group_splittable_afterwards()
         {
             var project = RecordingProject(out var screen, out var webcam, out var audio);
             Assert.True(TimelineOps.SplitItem(project, screen.Id, Ms(4_000)));
 
-            Assert.True(TimelineOps.Split(project, webcam.Id, Ms(6_000)));
+            Assert.True(TimelineOps.SplitAcross(project, Ms(6_000)).Cut);
 
             Assert.Equal(Ms(4_000), screen.DurationTicks);   // the untouched left half stays put
             Assert.Equal(Ms(6_000), webcam.DurationTicks);
             Assert.Equal(Ms(6_000), audio.DurationTicks);
 
-            // the screen's right half covered 6s too, so it was cut as a group member
+            // the screen's right half covered 6s too, so it was cut as well
             var screenSegments = project.Items.Where(i => i.TrackId == screen.TrackId)
                                               .OrderBy(i => i.TimelineStartTicks).ToList();
             Assert.Equal(3, screenSegments.Count);
@@ -380,13 +372,14 @@ namespace Prisc.VideoSDK.Tests
             screen.Entry = entry;
             screen.Exit = exit;
 
-            Assert.True(TimelineOps.Split(project, screen.Id, Ms(4_000)));
+            Assert.True(TimelineOps.SplitItem(project, screen.Id, Ms(4_000)));
 
             var right = project.Items.Single(i => i.TrackId == screen.TrackId && i.Id != screen.Id);
             Assert.Same(entry, screen.Entry);
             Assert.Null(screen.Exit);
             Assert.Null(right.Entry);
-            Assert.Same(exit, right.Exit);
+            Assert.Equal(TransitionKind.SlideRight, right.Exit.Kind);
+            Assert.Equal(Ms(300), right.Exit.DurationTicks);
         }
 
         [Fact]
@@ -399,7 +392,7 @@ namespace Prisc.VideoSDK.Tests
                 Mask = new Mask { Shape = MaskShape.Circle },
             };
 
-            Assert.True(TimelineOps.Split(project, webcam.Id, Ms(4_000)));
+            Assert.True(TimelineOps.SplitItem(project, webcam.Id, Ms(4_000)));
 
             var right = project.Items.Single(i => i.TrackId == webcam.TrackId && i.Id != webcam.Id);
             Assert.NotSame(webcam.Transform, right.Transform);
@@ -412,37 +405,34 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void Split_rejects_when_any_member_half_would_be_too_short()
+        public void SplitAcross_refuses_a_whole_group_when_any_half_would_be_too_short()
         {
             var project = RecordingProject(out var screen, out var webcam, out _);
-            // the webcam member starts later, so a split that is fine for the screen item lands
-            // within MinSegment of the webcam item's start.
-            TimelineOps.Ungroup(project, new[] { webcam.Id });
+            // the webcam clip starts later, so a cut that is fine for the screen clip lands within
+            // MinSegment of the webcam clip's start.
             webcam.TimelineStartTicks = Ms(4_000) - TimelineOps.MinSegmentTicks / 2;
             webcam.DurationTicks = Ms(6_000);
-            TimelineOps.Group(project, project.Items.Select(i => i.Id).ToArray());
 
             var before = project.ToJson();
-            Assert.False(TimelineOps.Split(project, screen.Id, Ms(4_000)));
+            Assert.Equal((false, true), TimelineOps.SplitAcross(project, Ms(4_000)));
             Assert.Equal(before, project.ToJson()); // all-or-nothing: untouched on rejection
 
-            // near the very edges of the target itself it also rejects.
-            Assert.False(TimelineOps.Split(project, screen.Id, TimelineOps.MinSegmentTicks - 1));
-            Assert.False(TimelineOps.Split(project, screen.Id, Ms(10_000) - 1));
-            // and outside the target entirely.
-            Assert.False(TimelineOps.Split(project, screen.Id, Ms(10_000)));
+            // near the very edges of a clip it also refuses.
+            Assert.Equal((false, true), TimelineOps.SplitAcross(project, TimelineOps.MinSegmentTicks - 1));
+            Assert.Equal((false, true), TimelineOps.SplitAcross(project, Ms(10_000) - 1));
+            // and past every clip there is nothing to cut and nothing to refuse.
+            Assert.Equal((false, false), TimelineOps.SplitAcross(project, Ms(20_000)));
+            Assert.Equal(before, project.ToJson());
         }
 
         [Fact]
-        public void Split_leaves_link_members_that_do_not_cover_the_instant_alone()
+        public void SplitAcross_leaves_clips_that_do_not_cover_the_instant_alone()
         {
-            var project = RecordingProject(out var screen, out var webcam, out _);
-            // shorten the webcam member so the split point falls past its end.
-            TimelineOps.Ungroup(project, new[] { webcam.Id });
+            var project = RecordingProject(out _, out var webcam, out _);
+            // shorten the webcam clip so the cut falls past its end.
             webcam.DurationTicks = Ms(3_000);
-            TimelineOps.Group(project, project.Items.Select(i => i.Id).ToArray());
 
-            Assert.True(TimelineOps.Split(project, screen.Id, Ms(5_000)));
+            Assert.True(TimelineOps.SplitAcross(project, Ms(5_000)).Cut);
 
             Assert.Equal(5, project.Items.Count); // screen + audio split, webcam untouched
             Assert.Equal(Ms(3_000), webcam.DurationTicks);
@@ -457,7 +447,7 @@ namespace Prisc.VideoSDK.Tests
             var project = RecordingProject(out var screen, out _, out _);
 
             // split at 4s, then ripple-delete the left pairs: the right pairs slide back to 0.
-            Assert.True(TimelineOps.Split(project, screen.Id, Ms(4_000)));
+            Assert.True(TimelineOps.SplitAcross(project, Ms(4_000)).Cut);
             TimelineOps.RippleDelete(project, screen.Id);
 
             Assert.Equal(3, project.Items.Count);
@@ -473,7 +463,7 @@ namespace Prisc.VideoSDK.Tests
         public void RippleDelete_leaves_items_before_the_gap_alone()
         {
             var project = RecordingProject(out var screen, out _, out _);
-            Assert.True(TimelineOps.Split(project, screen.Id, Ms(4_000)));
+            Assert.True(TimelineOps.SplitAcross(project, Ms(4_000)).Cut);
             var right = project.Items.First(i => i.TrackId == screen.TrackId && i.Id != screen.Id);
 
             TimelineOps.RippleDelete(project, right.Id);
@@ -490,14 +480,14 @@ namespace Prisc.VideoSDK.Tests
         public void Delete_removes_only_that_item_and_leaves_a_gap()
         {
             var project = RecordingProject(out var screen, out var webcam, out var audio);
-            Assert.True(TimelineOps.Split(project, screen.Id, Ms(4_000)));
+            Assert.True(TimelineOps.SplitAcross(project, Ms(4_000)).Cut);
             var webcamRight = project.Items.Single(i => i.TrackId == webcam.TrackId && i.Id != webcam.Id);
 
             Assert.True(TimelineOps.Delete(project, webcam.Id));
 
             Assert.Equal(5, project.Items.Count);
             Assert.DoesNotContain(webcam, project.Items);
-            // no ripple: the rest of the group and the row's other segment stay where they were,
+            // no ripple: the other rows and the row's other segment stay where they were,
             // leaving [0, 4s) empty on the webcam row.
             Assert.Equal(Ms(4_000), webcamRight.TimelineStartTicks);
             Assert.All(new[] { screen, audio }, i => Assert.Equal(0, i.TimelineStartTicks));
@@ -513,127 +503,22 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(3, project.Items.Count);
         }
 
-        // ---- link / unlink ----
+        // ---- ungroup ----
 
         [Fact]
-        public void Ungroup_detaches_only_the_given_items()
+        public void UngroupTrack_takes_only_that_row_out_of_the_drag()
         {
             var project = RecordingProject(out var screen, out var webcam, out var audio);
+            var group = project.TrackOf(screen).GroupId;
 
-            TimelineOps.Ungroup(project, new[] { audio.Id });
-            TimelineOps.Move(project, screen.Id, Ms(2_000));
+            TimelineOps.UngroupTracks(project, new[] { audio.TrackId });
+            TimeLinkedMoves.MoveLinked(project, screen.Id, Ms(2_000));
 
             Assert.Equal(Ms(2_000), screen.TimelineStartTicks);
             Assert.Equal(Ms(2_000), webcam.TimelineStartTicks);
             Assert.Equal(0, audio.TimelineStartTicks);
-            Assert.Null(audio.GroupId);
-        }
-
-        [Fact]
-        public void Link_creates_a_fresh_shared_group()
-        {
-            var project = RecordingProject(out var screen, out var webcam, out var audio);
-            var originalGroup = screen.GroupId;
-            TimelineOps.Ungroup(project, project.Items.Select(i => i.Id).ToArray());
-
-            var group = TimelineOps.Group(project, new[] { screen.Id, audio.Id });
-
-            Assert.NotEqual(originalGroup, group);
-            Assert.Equal(group, screen.GroupId);
-            Assert.Equal(group, audio.GroupId);
-            Assert.Null(webcam.GroupId);
-
-            TimelineOps.Move(project, screen.Id, Ms(1_000));
-            Assert.Equal(Ms(1_000), audio.TimelineStartTicks);
-            Assert.Equal(0, webcam.TimelineStartTicks);
-        }
-
-        // ---- row sync toggle ----
-
-        [Fact]
-        public void UnlinkTrack_then_TryRelinkTrack_round_trips()
-        {
-            var project = RecordingProject(out var screen, out var webcam, out var audio);
-            var group = screen.GroupId;
-
-            TimelineOps.UngroupTrack(project, webcam.TrackId);
-
-            Assert.Null(webcam.GroupId);
-            Assert.Equal(group, screen.GroupId);
-            Assert.Equal(group, audio.GroupId);
-
-            Assert.True(TimelineOps.TryRegroupTrack(project, webcam.TrackId));
-
-            Assert.Equal(group, webcam.GroupId);
-            TimelineOps.Move(project, screen.Id, Ms(1_000));
-            Assert.Equal(Ms(1_000), webcam.TimelineStartTicks);
-        }
-
-        [Fact]
-        public void TryRelinkTrack_rejoins_each_segment_to_its_own_group()
-        {
-            var project = RecordingProject(out var screen, out var webcam, out _);
-            Assert.True(TimelineOps.Split(project, screen.Id, Ms(4_000)));
-
-            var leftGroup = screen.GroupId;
-            var rightGroup = project.Items.Single(i => i.TrackId == screen.TrackId && i.Id != screen.Id).GroupId;
-            var webcamRight = project.Items.Single(i => i.TrackId == webcam.TrackId && i.Id != webcam.Id);
-
-            TimelineOps.UngroupTrack(project, webcam.TrackId);
-
-            Assert.True(TimelineOps.TryRegroupTrack(project, webcam.TrackId));
-
-            Assert.NotEqual(leftGroup, rightGroup);
-            Assert.Equal(leftGroup, webcam.GroupId);
-            Assert.Equal(rightGroup, webcamRight.GroupId);
-        }
-
-        [Fact]
-        public void TryRelinkTrack_accepts_a_row_that_was_only_trimmed()
-        {
-            var project = RecordingProject(out var screen, out var webcam, out _);
-            var group = screen.GroupId;
-            TimelineOps.UngroupTrack(project, webcam.TrackId);
-
-            // trim moves the in-point with the start, so the source<->timeline mapping — and with
-            // it the row's claim of sync — survives.
-            TimelineOps.TrimStart(project, webcam.Id, Ms(1_000));
-            TimelineOps.TrimEnd(project, webcam.Id, -Ms(1_000));
-
-            Assert.True(TimelineOps.TryRegroupTrack(project, webcam.TrackId));
-            Assert.Equal(group, webcam.GroupId);
-        }
-
-        [Fact]
-        public void TryRelinkTrack_refuses_after_the_rest_of_the_group_moved()
-        {
-            var project = RecordingProject(out var screen, out var webcam, out _);
-            TimelineOps.UngroupTrack(project, webcam.TrackId);
-            TimelineOps.Move(project, screen.Id, Ms(2_000));
-
-            var before = project.ToJson();
-            Assert.False(TimelineOps.TryRegroupTrack(project, webcam.TrackId));
-            Assert.Equal(before, project.ToJson()); // refusal leaves the project untouched
-            Assert.Null(webcam.GroupId);
-
-            // and once the group has moved clear of the row there is nothing to join at all.
-            TimelineOps.Move(project, screen.Id, Ms(20_000));
-            Assert.False(TimelineOps.TryRegroupTrack(project, webcam.TrackId));
-            Assert.Null(webcam.GroupId);
-        }
-
-        [Fact]
-        public void TryRelinkTrack_refuses_when_an_item_overlaps_two_groups()
-        {
-            var project = RecordingProject(out var screen, out var webcam, out _);
-            TimelineOps.UngroupTrack(project, webcam.TrackId);
-            // the other rows are cut in two while the webcam row is one long item, so it has no
-            // single group to belong to.
-            Assert.True(TimelineOps.Split(project, screen.Id, Ms(4_000)));
-
-            var before = project.ToJson();
-            Assert.False(TimelineOps.TryRegroupTrack(project, webcam.TrackId));
-            Assert.Equal(before, project.ToJson());
+            Assert.Null(project.TrackOf(audio).GroupId);
+            Assert.Equal(group, project.TrackOf(webcam).GroupId);
         }
 
         // ---- playback speed ----
@@ -642,7 +527,7 @@ namespace Prisc.VideoSDK.Tests
         public void SetSpeed_scales_duration_and_keeps_the_source_span()
         {
             var project = RecordingProject(out _, out var webcam, out _);
-            TimelineOps.UngroupTrack(project, webcam.TrackId);
+            TimelineOps.UngroupTracks(project, new[] { webcam.TrackId });
 
             // 10s of timeline at 2x plays the same 10s of source in 5s.
             Assert.Equal(2.0, TimelineOps.SetSpeed(project, webcam.Id, 2.0));
@@ -658,7 +543,7 @@ namespace Prisc.VideoSDK.Tests
         public void SetSpeed_clamps_against_the_next_item_on_the_track()
         {
             var project = RecordingProject(out _, out var webcam, out _);
-            TimelineOps.UngroupTrack(project, webcam.TrackId);
+            TimelineOps.UngroupTracks(project, new[] { webcam.TrackId });
             Assert.True(TimelineOps.SplitItem(project, webcam.Id, Ms(4_000)));
 
             // halving the left segment's speed wants 8s of timeline, but the right half starts
@@ -673,7 +558,7 @@ namespace Prisc.VideoSDK.Tests
         public void Trim_and_split_scale_source_movement_by_the_speed()
         {
             var project = RecordingProject(out _, out var webcam, out _);
-            TimelineOps.UngroupTrack(project, webcam.TrackId);
+            TimelineOps.UngroupTracks(project, new[] { webcam.TrackId });
             TimelineOps.SetSpeed(project, webcam.Id, 2.0); // 5s timeline over source [2s, 12s)
 
             // trimming 1s off the start advances the source in-point by 2s.
@@ -693,35 +578,18 @@ namespace Prisc.VideoSDK.Tests
         public void TrimEnd_extension_is_bounded_by_the_source_at_the_item_speed()
         {
             var project = RecordingProject(out _, out var webcam, out _);
-            TimelineOps.UngroupTrack(project, webcam.TrackId);
+            TimelineOps.UngroupTracks(project, new[] { webcam.TrackId });
             TimelineOps.SetSpeed(project, webcam.Id, 2.0); // 5s timeline over source [2s, 12s), stream 60s
 
             // remaining source is 48s, which at 2x is 24s of timeline extension.
             Assert.Equal(Ms(24_000), TimelineOps.TrimEnd(project, webcam.Id, Ms(60_000)));
         }
 
-        [Fact]
-        public void TryRelinkTrack_refuses_a_retimed_row()
-        {
-            var project = RecordingProject(out _, out var webcam, out _);
-            TimelineOps.UngroupTrack(project, webcam.TrackId);
-            TimelineOps.SetSpeed(project, webcam.Id, 2.0);
-            TimelineOps.SetSpeed(project, webcam.Id, 1.0);
-
-            // the round-trip restored the row's geometry exactly, so only the speed history
-            // separates it — and with speed 1 restored it may relink again.
-            Assert.True(TimelineOps.TryRegroupTrack(project, webcam.TrackId));
-
-            TimelineOps.UngroupTrack(project, webcam.TrackId);
-            TimelineOps.SetSpeed(project, webcam.Id, 2.0);
-            Assert.False(TimelineOps.TryRegroupTrack(project, webcam.TrackId));
-        }
-
         // ------------------------------------------------------------- lone-group collapse
 
-        /// <summary>A group is only worth having across rows: once every member sits on one
-        /// track — the other rows unlinked or gone — it dissolves, and a group still spanning two
-        /// rows is left alone.</summary>
+        /// <summary>A group is only worth having across rows: once one row of it holds clips —
+        /// the other rows ungrouped or emptied — it dissolves, and a group still spanning two rows
+        /// is left alone.</summary>
         [Fact]
         public void CollapseLoneGroups_dissolves_a_group_left_on_one_track()
         {
@@ -729,68 +597,92 @@ namespace Prisc.VideoSDK.Tests
 
             // three rows: nothing to do
             Assert.False(TimelineOps.CollapseLoneGroups(project));
-            Assert.NotNull(screen.GroupId);
+            Assert.NotNull(project.TrackOf(screen).GroupId);
 
             // two rows: still a sync worth keeping
-            TimelineOps.UngroupTrack(project, webcam.TrackId);
+            TimelineOps.UngroupTracks(project, new[] { webcam.TrackId });
             Assert.False(TimelineOps.CollapseLoneGroups(project));
-            Assert.NotNull(screen.GroupId);
-            Assert.Equal(screen.GroupId, audio.GroupId);
+            Assert.NotNull(project.TrackOf(screen).GroupId);
+            Assert.Equal(project.TrackOf(screen).GroupId, project.TrackOf(audio).GroupId);
 
-            // one row: the group pins the screen's clips for nothing
-            TimelineOps.UngroupTrack(project, audio.TrackId);
+            // one row: nothing left to keep in step
+            TimelineOps.UngroupTracks(project, new[] { audio.TrackId });
             Assert.True(TimelineOps.CollapseLoneGroups(project));
-            Assert.All(project.Items, i => Assert.Null(i.GroupId));
+            Assert.All(project.Tracks, t => Assert.Null(t.GroupId));
 
             Assert.False(TimelineOps.CollapseLoneGroups(project)); // idempotent
         }
 
-        /// <summary>Several segments of one row sharing a group (a recording built from keep
-        /// slices) is still a group of one row, and dissolving it is what lets the segments be
-        /// dragged apart.</summary>
+        /// <summary>Several segments of one row are still one row, and dissolving the group is
+        /// what lets those segments be dragged apart.</summary>
         [Fact]
-        public void CollapseLoneGroups_treats_one_rows_segments_as_one_row()
+        public void CollapseLoneGroups_counts_rows_not_clips()
         {
             var project = RecordingProject(out var screen, out var webcam, out var audio);
             project.Items.Remove(webcam);
             project.Items.Remove(audio);
             Assert.True(TimelineOps.SplitItem(project, screen.Id, Ms(5_000)));
             Assert.Equal(2, project.Items.Count);
-            Assert.All(project.Items, i => Assert.Equal(screen.GroupId, i.GroupId));
 
             Assert.True(TimelineOps.CollapseLoneGroups(project));
-            Assert.All(project.Items, i => Assert.Null(i.GroupId));
+
+            // on every row of the group, the emptied ones too
+            Assert.All(project.Tracks, t => Assert.Null(t.GroupId));
         }
 
-        /// <summary>Cursor/keyboard items are hard-synced to the screen by their group and must
-        /// carry one to validate at all, so a group holding one is never dissolved, whatever its
-        /// shape.</summary>
+        /// <summary>An emptied row is not a member, but it keeps its id while the group lives, so
+        /// a later paste back onto it rejoins.</summary>
         [Fact]
-        public void CollapseLoneGroups_leaves_input_overlay_groups_alone()
+        public void CollapseLoneGroups_keeps_an_emptied_rows_id_while_two_other_rows_hold_clips()
+        {
+            var project = RecordingProject(out var screen, out _, out var audio);
+            var group = project.TrackOf(screen).GroupId;
+            project.Items.Remove(audio);
+
+            Assert.False(TimelineOps.CollapseLoneGroups(project));
+
+            Assert.All(project.Tracks, t => Assert.Equal(group, t.GroupId));
+        }
+
+        /// <summary>Cut then Paste of a whole group has to find it again.</summary>
+        [Fact]
+        public void CollapseLoneGroups_leaves_a_group_with_every_row_empty()
+        {
+            var project = RecordingProject(out var screen, out _, out _);
+            var group = project.TrackOf(screen).GroupId;
+            project.Items.Clear();
+
+            Assert.False(TimelineOps.CollapseLoneGroups(project));
+
+            Assert.All(project.Tracks, t => Assert.Equal(group, t.GroupId));
+        }
+
+        /// <summary>An overlay row gets no exception: a cursor left alone in a group is as lone as
+        /// anything else, and validation no longer asks for a group.</summary>
+        [Fact]
+        public void CollapseLoneGroups_dissolves_a_group_left_on_an_overlay_row()
         {
             var project = RecordingProject(out var screen, out var webcam, out var audio);
             project.Items.Remove(webcam);
             project.Items.Remove(audio);
-            var cursorTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Cursor", Order = 3 };
+            var cursorTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Cursor", Order = 3, GroupId = project.TrackOf(screen).GroupId };
             project.Tracks.Add(cursorTrack);
-            var cursor = new Item
+            project.Items.Add(new Item
             {
                 Id = Guid.NewGuid(),
                 TrackId = cursorTrack.Id,
                 TimelineStartTicks = 0,
                 DurationTicks = Ms(10_000),
-                Content = new CursorContent(),
-                GroupId = screen.GroupId,
-            };
-            project.Items.Add(cursor);
+                Content = new CursorContent { SourceId = project.Sources[0].Id },
+            });
 
-            // screen + cursor: two rows, untouched either way
+            // screen + cursor: two rows, untouched
             Assert.False(TimelineOps.CollapseLoneGroups(project));
 
-            // cursor row alone in the group (screen row deleted): kept, validation needs it
             project.Items.Remove(screen);
-            Assert.False(TimelineOps.CollapseLoneGroups(project));
-            Assert.NotNull(cursor.GroupId);
+            Assert.True(TimelineOps.CollapseLoneGroups(project));
+            Assert.Null(cursorTrack.GroupId);
+            Assert.Empty(project.Validate());
         }
     }
 }

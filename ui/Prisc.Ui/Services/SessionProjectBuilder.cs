@@ -41,7 +41,7 @@ namespace Prisc.UI.Services
         /// catch here.
         /// </summary>
         /// <param name="sessionDir">The session directory, i.e.
-        /// <c>Path.GetDirectoryName(session.FilePath)</c>. May be null or empty (the dev harness
+        /// <c>Path.GetDirectoryName(session.FilePath)</c>. May be null or empty (<c>--video-edit</c>
         /// opens files with no session behind them); the edit document is then simply not looked
         /// for and a fresh project is built.</param>
         /// <param name="videoPath">The recording to build the identity edit from. Unused when

@@ -38,8 +38,8 @@ namespace Prisc.UI.Services
         /// requeueing on every project change would grind the same failure forever.</summary>
         Failed,
 
-        /// <summary>No <c>prisc_ai</c> binary resolves (or there is nowhere to cache — the
-        /// dev harness has no session directory). Re-probed on every structural change, so a
+        /// <summary>No <c>prisc_ai</c> binary resolves (or there is nowhere to cache —
+        /// <c>--video-edit</c> has no session directory). Re-probed on every structural change, so a
         /// binary appearing mid-session upgrades this to a queued job.</summary>
         Unavailable,
     }
@@ -102,7 +102,7 @@ namespace Prisc.UI.Services
     public sealed class AiAnalysisManager : IDisposable
     {
         private readonly EditorSession _session;
-        private readonly string _cacheDir; // null in the dev harness (nowhere to cache)
+        private readonly string _cacheDir; // null under --video-edit (nowhere to cache)
 
         private readonly object _sync = new object();
         private readonly Dictionary<AiSidecarKey, Entry> _entries = new Dictionary<AiSidecarKey, Entry>();

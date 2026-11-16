@@ -8,7 +8,7 @@ namespace Prisc.UI.Services
     /// encoder quality, the encode-time size cap, where the file goes, and what should happen once
     /// it is there. One of these is built by the Render flyout (from a preset) or by the "Render
     /// video" dialog and handed to <see cref="VideoRenderManager.StartRenderAsync(Prisc.SessionInfo, Prisc.VideoSDK.Model.Project, RenderRequest)"/>;
-    /// the dev harness (<c>--video-edit</c>) runs the same request in-process.
+    /// the dev harnesses (<c>--video-edit</c>, <c>--video-edit-session</c>) run the same request in-process.
     /// </summary>
     public sealed record RenderRequest
     {

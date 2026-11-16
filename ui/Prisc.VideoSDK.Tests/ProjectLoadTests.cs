@@ -134,21 +134,21 @@ namespace Prisc.VideoSDK.Tests
                                 String.Join(", ", source.Streams.Select(s => $"{s.Index}:{s.Kind} {s.Width}x{s.Height}")) + "]");
             }
 
-            // link groups are identities too; what matters is which items share one.
+            // groups are identities too; what matters is which rows share one.
             var groups = new Dictionary<Guid, int>();
             foreach (var track in project.Tracks.OrderBy(t => t.Order))
             {
+                int group = 0;
+                if (track.GroupId is { } id && !groups.TryGetValue(id, out group))
+                    groups[id] = group = groups.Count + 1;
+
                 text.AppendLine($"track {track.Order} {track.Kind} \"{track.Name}\" " +
-                                $"hidden={track.Hidden} muted={track.Muted} locked={track.Locked}");
+                                $"hidden={track.Hidden} muted={track.Muted} group={group}");
 
                 foreach (var item in project.Items.Where(i => i.TrackId == track.Id).OrderBy(i => i.TimelineStartTicks))
                 {
-                    int group = 0;
-                    if (item.GroupId is { } id && !groups.TryGetValue(id, out group))
-                        groups[id] = group = groups.Count + 1;
-
                     text.AppendLine($"  {item.TimelineStartTicks}+{item.DurationTicks} " +
-                                    Describe(item.Content) + " " + Describe(item.Transform) + $" group={group}");
+                                    Describe(item.Content) + " " + Describe(item.Transform));
                 }
             }
 
@@ -185,7 +185,7 @@ namespace Prisc.VideoSDK.Tests
 
             Assert.Equal(new[] { "Screen", "Webcam", "Audio" }, project.Tracks.Select(t => t.Name));
             Assert.Equal(3, project.Items.Count);
-            Assert.Single(project.Items.Select(i => i.GroupId).Distinct());
+            Assert.NotNull(Assert.Single(project.Tracks.Select(t => t.GroupId).Distinct()));
 
             foreach (var item in project.Items)
             {
@@ -374,12 +374,12 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(1080, project.Output.HeightPx);
             Assert.Equal(48_000, project.Output.SampleRate);
 
-            // one source, three rows, one link group
+            // one source, three rows, one group
             var source = Assert.Single(project.Sources);
             Assert.Equal(VideoPath, source.Path);
             Assert.Equal(new[] { 0, 1, 2 }, source.Streams.Select(s => s.Index).ToArray());
             Assert.Equal(new[] { "Screen", "Webcam", "Audio" }, project.Tracks.Select(t => t.Name));
-            Assert.Single(project.Items.Select(i => i.GroupId).Distinct());
+            Assert.NotNull(Assert.Single(project.Tracks.Select(t => t.GroupId).Distinct()));
 
             // the trim really is one item per row, 2151ms into the source and running to the end
             var screen = Assert.Single(project.Items, i => ((MediaContent)i.Content).StreamIndex == 0);
@@ -440,7 +440,7 @@ namespace Prisc.VideoSDK.Tests
                 Assert.Equal(2, items.Count); // one per keep segment, like every other row
             }
 
-            Assert.Single(project.Items.Select(i => i.GroupId).Distinct());
+            Assert.NotNull(Assert.Single(project.Tracks.Select(t => t.GroupId).Distinct()));
         }
 
         [Fact]
@@ -796,17 +796,52 @@ namespace Prisc.VideoSDK.Tests
                 Assert.Equal(session.Project.ToJson(), reloaded.ToJson());
 
                 // the import keeps its own path (only the recording's source is reconciled), its
-                // two rows and its link group.
+                // two rows and their group.
                 var import = reloaded.Sources.Single(s => s.Path == TestPath.Native(@"D:\media\overlay.mp4"));
                 var items = reloaded.Items.Where(i => ((MediaContent)i.Content).SourceId == import.Id).ToList();
                 Assert.Equal(2, items.Count);
                 Assert.Equal(2_000 * Ms, items[0].TimelineStartTicks);
-                Assert.NotNull(items[0].GroupId);
-                Assert.Equal(items[0].GroupId, items[1].GroupId);
 
                 var rows = items.Select(i => reloaded.Tracks.Single(t => t.Id == i.TrackId)).ToList();
+                Assert.NotNull(rows[0].GroupId);
+                Assert.Equal(rows[0].GroupId, rows[1].GroupId);
                 Assert.Contains(rows, t => t.Kind == TrackKind.Video && t.Name == "overlay");
                 Assert.Contains(rows, t => t.Kind == TrackKind.Audio && t.Name == "overlay");
+            }
+            finally
+            {
+                File.Delete(path);
+            }
+        }
+
+        /// <summary>A pasted clip of another recording can end up on the lowest video row, by a paste
+        /// or a reorder. The source stored with the video's path is the recording, whatever row its
+        /// clips are on, so the pasted source keeps its own path.</summary>
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void A_source_stored_with_the_videos_path_is_the_primary_wherever_the_rows_are(bool otherCase)
+        {
+            var project = VideoEditPersistence.LoadOrCreate(null, VideoPath, Probe(withWebcam: false), null);
+            var recording = project.Sources.Single();
+            var pastedPath = TestPath.Native(@"D:\media\pasted.mp4");
+            AddImport(project, pastedPath);
+            var pasted = project.Sources.Single(s => s.Id != recording.Id);
+
+            // the pasted source's row goes under the recording's
+            var pastedRow = project.Items.Single(i => i.Content is MediaContent m && m.SourceId == pasted.Id).TrackId;
+            project.Tracks.Single(t => t.Id == pastedRow).Order = -1;
+            project.Normalize();
+            if (otherCase)
+                recording.Path = VideoPath.ToUpperInvariant();
+
+            var path = WriteTemp(project.ToJson());
+            try
+            {
+                var reloaded = VideoEditPersistence.LoadOrCreate(path, VideoPath, Probe(withWebcam: false));
+
+                Assert.Equal(pastedPath, reloaded.Sources.Single(s => s.Id == pasted.Id).Path);
+                Assert.Equal(VideoPath, reloaded.Sources.Single(s => s.Id == recording.Id).Path);
             }
             finally
             {
@@ -937,11 +972,11 @@ namespace Prisc.VideoSDK.Tests
 
                 // an unlinked item can be dragged; the gesture is the undo unit, as in the timeline
                 var moved = session.Project.Items.First(i => i.TrackId == screenTrack.Id);
-                session.UngroupTrack(screenTrack.Id);
+                session.UngroupTracks(new[] { screenTrack.Id });
                 using (var gesture = session.BeginGesture("Move"))
                 {
-                    session.MoveItem(moved.Id, 250 * Ms);
-                    session.MoveItem(moved.Id, 250 * Ms);
+                    session.MoveLinked(moved.Id, 250 * Ms);
+                    session.MoveLinked(moved.Id, 250 * Ms);
                     gesture.Commit();
                 }
 

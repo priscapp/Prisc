@@ -6,9 +6,10 @@ namespace Prisc.VideoSDK.Audio
 {
     /// <summary>
     /// The render path's <see cref="IAudioSource"/>: monotonic, forward-only, no seeking — the
-    /// audio twin of <c>SequentialFrameSource</c>. Each requested (sourceId, streamIndex) lazily
-    /// opens its own <see cref="SyncAudioStreamDecoder"/> and decodes forward on demand, keeping
-    /// only the small window of samples between the last consumed position and the decode head.
+    /// audio twin of <c>SequentialFrameSource</c>. Each requested (sourceId, streamIndex, lane)
+    /// lazily opens its own <see cref="SyncAudioStreamDecoder"/> and decodes forward on demand,
+    /// keeping only the small window of samples between the last consumed position and the decode
+    /// head.
     ///
     /// <para>
     /// Positioning: the stream's first decoded chunk anchors its absolute sample position (from
@@ -19,11 +20,12 @@ namespace Prisc.VideoSDK.Audio
     /// </para>
     ///
     /// <para>
-    /// Requests per stream are expected to run forward and not overlap (each read consumes through
-    /// its end) — the mixer's per-item forward runs satisfy that by construction, and the whole
-    /// stream then decodes exactly once. A request that goes backwards means the timeline reads the
-    /// stream out of source order (a clip moved behind an earlier one, split halves swapped, the
-    /// same span used twice): the decoder container-seeks to <see cref="SeekPrerollTicks"/> before
+    /// Requests per lane are expected to run forward and not overlap (each read consumes through
+    /// its end) — clips that overlap sit in lanes of their own (<c>StreamLanes</c>), so the mixer's
+    /// per-item forward runs satisfy that by construction, and the lane then decodes exactly once.
+    /// A request that goes backwards means the lane reads out of source order (a clip moved behind
+    /// an earlier one, split halves swapped, the same span used twice one after the other, clips
+    /// past the lane cap): the decoder container-seeks to <see cref="SeekPrerollTicks"/> before
     /// the wanted position and decode-discards to the exact sample, the same reposition
     /// <see cref="SeekableAudioSource"/> performs, so the samples land where a forward decode put
     /// them. Forward requests never seek — they keep the decode-discard path this class has always
@@ -49,8 +51,8 @@ namespace Prisc.VideoSDK.Audio
 
         private readonly Project _project;
         private readonly int _rate;
-        private readonly Dictionary<(Guid SourceId, int StreamIndex), StreamState> _streams
-            = new Dictionary<(Guid, int), StreamState>();
+        private readonly Dictionary<(Guid SourceId, int StreamIndex, int Lane), StreamState> _streams
+            = new Dictionary<(Guid, int, int), StreamState>();
         private int _repositions;
         private bool _disposed;
 
@@ -89,6 +91,10 @@ namespace Prisc.VideoSDK.Audio
 
         public bool ReadSamples(Guid sourceId, int streamIndex, long sourcePosFrames, float[] dst,
             int frames, out int framesRead)
+            => ReadSamples(sourceId, streamIndex, 0, sourcePosFrames, dst, frames, out framesRead);
+
+        public bool ReadSamples(Guid sourceId, int streamIndex, int lane, long sourcePosFrames, float[] dst,
+            int frames, out int framesRead)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             ArgumentNullException.ThrowIfNull(dst);
@@ -98,7 +104,7 @@ namespace Prisc.VideoSDK.Audio
                 throw new ArgumentOutOfRangeException(nameof(frames),
                     $"{frames} stereo frames do not fit in a buffer of {dst.Length} floats.");
 
-            var key = (sourceId, streamIndex);
+            var key = (sourceId, streamIndex, lane);
             if (!_streams.TryGetValue(key, out var state))
             {
                 state = OpenStream(sourceId, streamIndex);

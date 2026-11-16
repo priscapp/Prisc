@@ -6,6 +6,7 @@ using Prisc.VideoSDK.Ai;
 using Prisc.VideoSDK.Composition;
 using Prisc.VideoSDK.Media;
 using Prisc.VideoSDK.Model;
+using Prisc.VideoSDK.Playback;
 using SkiaSharp;
 using Xunit;
 
@@ -303,6 +304,43 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
+        public void Each_lane_pairs_its_frames_with_a_matte_of_its_own()
+        {
+            RequireFFmpeg();
+            string cacheDir = Path.Combine(Path.GetTempPath(), $"prisc-seqsrc-matte-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(cacheDir);
+            try
+            {
+                string path = EncodeFixture();
+                var project = ProjectFor(path, out var sourceId);
+                AddSegmentedItem(project, sourceId);
+                EncodeMatteSidecar(cacheDir, sourceId, path, size: 32);
+
+                using var factory = new CpuSurfaceFactory();
+                using var cache = new FrameTextureCache(factory);
+                using var source = new SequentialFrameSource(project, cache, null, cacheDir);
+
+                // lane 1 several frames ahead of lane 0, each asked twice: the second answer comes
+                // from the cache, and must be its own lane's matte
+                for (int pass = 0; pass < 2; pass++)
+                {
+                    Assert.True(source.TryGetFrame(sourceId, 0, FrameTicks(3), 0, out var low));
+                    Assert.InRange(GrayOf(low.Mask), 3 * GrayStep - 12, 3 * GrayStep + 12);
+                    Assert.True(source.TryGetFrame(sourceId, 0, FrameTicks(15), 1, out var high));
+                    Assert.InRange(GrayOf(high.Image), 15 * GrayStep - 12, 15 * GrayStep + 12);
+                    Assert.InRange(GrayOf(high.Mask), 15 * GrayStep - 12, 15 * GrayStep + 12);
+                }
+
+                Assert.Equal(0, source.RepositionCount);
+            }
+            finally
+            {
+                try { Directory.Delete(cacheDir, recursive: true); }
+                catch { /* best effort */ }
+            }
+        }
+
+        [Fact]
         public void A_sidecar_without_a_valid_companion_delivers_maskless_frames()
         {
             RequireFFmpeg();
@@ -329,6 +367,166 @@ namespace Prisc.VideoSDK.Tests
                 try { Directory.Delete(cacheDir, recursive: true); }
                 catch { /* best effort */ }
             }
+        }
+
+        // ------------------------------------------------------------- one source played twice
+
+        private static Item AddClip(Project project, double centerX, long start, long duration, long sourceIn,
+            Guid sourceId)
+        {
+            var track = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Order = project.Tracks.Count };
+            project.Tracks.Add(track);
+            var item = new Item
+            {
+                Id = Guid.NewGuid(),
+                TrackId = track.Id,
+                TimelineStartTicks = start,
+                DurationTicks = duration,
+                // side by side: each clip's picture can be read off the canvas on its own
+                Transform = new Transform { X = centerX, Y = 0.5, Scale = 0.5 },
+                Content = new MediaContent { SourceId = sourceId, StreamIndex = 0, SourceInTicks = sourceIn },
+            };
+            project.Items.Add(item);
+            return item;
+        }
+
+        /// <summary>The canvas's gray at each clip's center, at a timeline instant.</summary>
+        private static (byte Left, byte Right) ComposeGrays(Project project, IFrameSource source,
+            CpuSurfaceFactory factory, long t)
+        {
+            using var surface = factory.CreateSurface(W, H);
+            FrameComposer.Compose(project, t, source, surface.Canvas, W, H);
+            int rowBytes = W * 4;
+            var native = Marshal.AllocHGlobal(rowBytes * H);
+            try
+            {
+                Assert.True(factory.TryReadPixels(surface, W, H, native, rowBytes));
+                var pixels = new byte[rowBytes * H];
+                Marshal.Copy(native, pixels, 0, pixels.Length);
+                int row = (H / 2) * rowBytes;
+                return (pixels[row + (W / 4) * 4 + 1], pixels[row + (W * 3 / 4) * 4 + 1]);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(native);
+            }
+        }
+
+        [Fact]
+        public void Overlapping_clips_never_reposition_and_show_what_each_decodes_alone()
+        {
+            RequireFFmpeg();
+            string path = EncodeFixture();
+
+            // the left clip plays source frames 0.., the right plays source frames 10.. from
+            // timeline frame 6, overlapping it throughout
+            var both = ProjectFor(path, out var bothId);
+            AddClip(both, 0.25, 0, FrameTicks(Frames), 0, bothId);
+            AddClip(both, 0.75, FrameTicks(6), FrameTicks(12), FrameTicks(10), bothId);
+
+            var left = ProjectFor(path, out var leftId);
+            AddClip(left, 0.25, 0, FrameTicks(Frames), 0, leftId);
+            var right = ProjectFor(path, out var rightId);
+            AddClip(right, 0.75, FrameTicks(6), FrameTicks(12), FrameTicks(10), rightId);
+
+            using var factory = new CpuSurfaceFactory();
+            using var cache = new FrameTextureCache(factory);
+            using var aloneCache = new FrameTextureCache(factory);
+            using var source = new SequentialFrameSource(both, cache);
+            using var leftAlone = new SequentialFrameSource(left, aloneCache);
+            using var rightAlone = new SequentialFrameSource(right, aloneCache);
+
+            for (int n = 0; n < Frames; n++)
+            {
+                var (l, r) = ComposeGrays(both, source, factory, FrameTicks(n));
+                Assert.InRange(l, n * GrayStep - 12, n * GrayStep + 12);
+                Assert.Equal(ComposeGrays(left, leftAlone, factory, FrameTicks(n)).Left, l);
+                Assert.Equal(ComposeGrays(right, rightAlone, factory, FrameTicks(n)).Right, r);
+                if (n >= 6 && n < 18)
+                    Assert.InRange(r, (n + 4) * GrayStep - 12, (n + 4) * GrayStep + 12);
+            }
+
+            Assert.Equal(0, source.RepositionCount);
+            Assert.Equal(2, cache.Count); // a frame per lane
+        }
+
+        [Fact]
+        public void A_duplicate_row_reads_one_lane_and_never_repositions()
+        {
+            RequireFFmpeg();
+            var project = ProjectFor(EncodeFixture(), out var sourceId);
+            AddClip(project, 0.25, 0, FrameTicks(Frames), 0, sourceId);
+            AddClip(project, 0.75, 0, FrameTicks(Frames), 0, sourceId);
+
+            using var factory = new CpuSurfaceFactory();
+            using var cache = new FrameTextureCache(factory);
+            using var source = new SequentialFrameSource(project, cache);
+
+            for (int n = 0; n < Frames; n += 3)
+            {
+                var (l, r) = ComposeGrays(project, source, factory, FrameTicks(n));
+                Assert.InRange(l, n * GrayStep - 12, n * GrayStep + 12);
+                Assert.Equal(l, r);
+            }
+
+            Assert.Equal(0, source.RepositionCount);
+            Assert.Equal(1, cache.Count);
+        }
+
+        [Fact]
+        public void Lane_0_of_a_repeat_on_one_row_seeks_back_once_exactly_as_it_did()
+        {
+            RequireFFmpeg();
+            var project = ProjectFor(EncodeFixture(), out var sourceId);
+            var track = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Order = 0 };
+            project.Tracks.Add(track);
+            foreach (var (start, sourceIn) in new[] { (0, 0), (12, 3) })
+            {
+                project.Items.Add(new Item
+                {
+                    Id = Guid.NewGuid(),
+                    TrackId = track.Id,
+                    TimelineStartTicks = FrameTicks(start),
+                    DurationTicks = FrameTicks(12),
+                    Content = new MediaContent { SourceId = sourceId, StreamIndex = 0, SourceInTicks = FrameTicks(sourceIn) },
+                });
+            }
+
+            using var factory = new CpuSurfaceFactory();
+            using var cache = new FrameTextureCache(factory);
+            using var source = new SequentialFrameSource(project, cache);
+            using var surface = factory.CreateSurface(W, H);
+            for (int n = 0; n < 24; n++)
+                FrameComposer.Compose(project, FrameTicks(n), source, surface.Canvas, W, H);
+
+            Assert.Equal(1, source.RepositionCount);
+        }
+
+        [Fact]
+        public void Past_the_lane_cap_a_render_still_gets_the_right_frames_through_its_seek_path()
+        {
+            // the known limit, pinned: a clip past the cap shares the last lane, and only the
+            // preview pays with a wrong frame. Here two clips take turns seeking lane 3.
+            RequireFFmpeg();
+            var project = ProjectFor(EncodeFixture(), out var sourceId);
+            for (int i = 0; i < StreamLanes.MaxLanes; i++)
+                AddClip(project, 0.25, 0, FrameTicks(8), FrameTicks(i), sourceId);
+            AddClip(project, 0.75, 0, FrameTicks(8), FrameTicks(10), sourceId);
+
+            using var factory = new CpuSurfaceFactory();
+            using var cache = new FrameTextureCache(factory);
+            using var source = new SequentialFrameSource(project, cache);
+
+            for (int n = 0; n < 8; n++)
+            {
+                var (l, r) = ComposeGrays(project, source, factory, FrameTicks(n));
+                // on top at the left is the last clip of the first four, source frame 3 + n
+                Assert.InRange(l, (3 + n) * GrayStep - 12, (3 + n) * GrayStep + 12);
+                Assert.InRange(r, (10 + n) * GrayStep - 12, (10 + n) * GrayStep + 12);
+            }
+
+            Assert.True(source.RepositionCount > 0, "the two clips in lane 3 read it out of order");
+            Assert.Equal(StreamLanes.MaxLanes, cache.Count);
         }
 
         [Fact]

@@ -6,6 +6,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Windows.Input;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -47,9 +48,10 @@ namespace Prisc.UI.VideoEditor
     /// the Video button, <see cref="VideoEditPersistence.LoadOrCreateBlank"/>), persisted through
     /// <see cref="EditorAutosave"/> as <c>videoedit.json</c> beside the session, and a Render
     /// button handing a snapshot of the edit to <see cref="VideoRenderManager"/>. Opened through
-    /// <see cref="ShowSession"/> from the Recents page, or via the hidden dev arg
-    /// <c>--video-edit file.mp4</c> (no session: persistence disabled, render output lands next
-    /// to the file).
+    /// <see cref="ShowSession"/> from the Recents page, or via the hidden dev args (see
+    /// <see cref="TryHandleArgs"/>): <c>--video-edit file.mp4</c> (no session: persistence disabled,
+    /// render output lands next to the file) and <c>--video-edit-session session.json</c> (one
+    /// session, persisted as usual, kept out of Recents).
     ///
     /// There is one time domain now: the project's output timeline, which the timeline control,
     /// the readout and the player's transport all speak directly (the v1 source/timeline split —
@@ -61,6 +63,10 @@ namespace Prisc.UI.VideoEditor
     public partial class VideoEditorWindow : SystemThemedWindow, IMediaKeyTarget
     {
         public const string ArgName = "--video-edit";
+
+        /// <summary>The hidden harness that opens a session's <c>session.json</c> directly (see
+        /// <see cref="TryHandleArgs"/>).</summary>
+        public const string SessionArgName = "--video-edit-session";
 
         // Also the width a panel that has never been dragged opens at, so raising it widens
         // the panel for everyone rather than only for new configurations.
@@ -77,9 +83,14 @@ namespace Prisc.UI.VideoEditor
 
         private readonly SessionInfo _session; // null in --video-edit dev mode
         private readonly string _videoPath; // null for a blank project (there is no recording)
-        private readonly string _editDocPath; // null when persistence is disabled (dev mode)
+        private readonly string _editDocPath; // null when persistence is disabled (--video-edit)
         private readonly string _fallbackSessionName; // the top bar's title when the session has no name
-        private readonly bool _exitOnClose; // dev mode bypasses the tray lifetime entirely
+        private readonly bool _exitOnClose; // the dev harnesses bypass the tray lifetime entirely
+
+#if DEBUG
+        private string _stateDumpPath; // --e2e-state
+        private EditorStateDump _stateDump;
+#endif
 
         private CompositionPlayer _player;
         private EditorSession _editor;
@@ -105,9 +116,9 @@ namespace Prisc.UI.VideoEditor
         private DispatcherTimer _saveDebounce;
         private Action _pendingSave;
 
-        // the render currently reflected on btnRender's progress ring. Session mode tracks the
-        // edited entry's ActiveRender (the manager owns the run — the window may close during
-        // it); dev mode runs a JobRunner of its own.
+        // the render currently reflected on btnRender's progress ring. A Recents session tracks
+        // the edited entry's ActiveRender (the manager owns the run — the window may close during
+        // it); the dev harnesses run a JobRunner of their own.
         private SessionInfo _renderSession;
         private VideoRender _trackedRender;
         private JobRunner _devRunner;
@@ -156,10 +167,30 @@ namespace Prisc.UI.VideoEditor
         public RelayCommand CommandJumpEnd { get; }
         public RelayCommand CommandSplit { get; }
 
-        /// <summary>Copies the selected clip for the timeline gap menu's Paste.</summary>
-        public RelayCommand CommandCopyClip { get; }
+        /// <summary>Ctrl+X: the selected clips, copied and deleted.</summary>
+        public RelayCommand CommandCut { get; }
+
+        /// <summary>Ctrl+C: the selected clips, and only those.</summary>
+        public RelayCommand CommandCopy { get; }
+
+        /// <summary>Ctrl+V: what was copied, at the playhead.</summary>
+        public RelayCommand CommandPaste { get; }
+
+        /// <summary>Ctrl+A: every clip.</summary>
+        public RelayCommand CommandSelectAll { get; }
+
+        /// <summary>Ctrl+G: the rows holding selected clips, as one group.</summary>
+        public RelayCommand CommandGroupTracks { get; }
+
+        /// <summary>Ctrl+Shift+G: the rows holding selected clips, out of their groups.</summary>
+        public RelayCommand CommandUngroupTracks { get; }
         public RelayCommand CommandUndo { get; }
         public RelayCommand CommandRedo { get; }
+
+        public string UndoTip => $"Undo ({CommandUndo.Gesture.ForApp()})";
+
+        public string RedoTip => $"Redo ({CommandRedo.Gesture.ForApp()})";
+
         public RelayCommand CommandAddText { get; }
         public RelayCommand CommandAddImage { get; }
         public RelayCommand CommandAddBackground { get; }
@@ -199,12 +230,47 @@ namespace Prisc.UI.VideoEditor
             CommandStepForward = new RelayCommand { Executed = _ => StepFrame(1), Text = "Next frame" };
             CommandJumpStart = new RelayCommand { Executed = _ => JumpToStart(), Text = "Jump to start" };
             CommandJumpEnd = new RelayCommand { Executed = _ => JumpToEnd(), Text = "Jump to end" };
-            CommandSplit = new RelayCommand { Executed = _ => SplitAtPlayhead(), Text = "_Split Every Track at Playhead", Gesture = new SimpleKeyGesture(Key.K, KeyModifiers.Control) };
-            CommandCopyClip = new RelayCommand
+            CommandSplit = new RelayCommand { Executed = _ => SplitAtPlayhead(), Text = "_Split Every Track at Playhead", Gesture = TimelineSurface.SplitGesture };
+            CommandCut = new RelayCommand
             {
-                Executed = _ => CopySelectedClip(),
-                Text = "_Copy Clip",
-                Gesture = new SimpleKeyGesture(Key.C, KeyModifiers.Control),
+                Executed = _ => _editor?.CutItems(_editor.SelectedItemIds),
+                CanExecute = _ => _editor is { CanCut: true, SelectedItemIds.Count: > 0 },
+                Text = "Cu_t",
+                Gesture = TimelineSurface.CutGesture,
+            };
+            CommandCopy = new RelayCommand
+            {
+                Executed = _ => _editor?.CopyItems(_editor.SelectedItemIds),
+                CanExecute = _ => _editor is { SelectedItemIds.Count: > 0 },
+                Text = "_Copy",
+                Gesture = TimelineSurface.CopyGesture,
+            };
+            CommandPaste = new RelayCommand
+            {
+                Executed = _ => _editor?.PasteAt(Math.Max(0, timeline.Position.Ticks)),
+                CanExecute = _ => _editor is { CanPaste: true },
+                Text = "_Paste",
+                Gesture = TimelineSurface.PasteGesture,
+            };
+            CommandSelectAll = new RelayCommand
+            {
+                Executed = _ => _editor?.SelectMany(_editor.Project.Items.Select(i => i.Id)),
+                Text = "Select _All Clips",
+                Gesture = new SimpleKeyGesture(Key.A, KeyModifiers.Control),
+            };
+            CommandGroupTracks = new RelayCommand
+            {
+                Executed = _ => _editor?.GroupTracks(_editor.SelectedTrackIds),
+                CanExecute = _ => _editor != null && _editor.CanGroupTracks(_editor.SelectedTrackIds),
+                Text = "_Group Tracks",
+                Gesture = TimelineSurface.GroupGesture,
+            };
+            CommandUngroupTracks = new RelayCommand
+            {
+                Executed = _ => _editor?.UngroupTracks(_editor.SelectedTrackIds),
+                CanExecute = _ => _editor != null && _editor.CanUngroupTracks(_editor.SelectedTrackIds),
+                Text = "Un_group Tracks",
+                Gesture = TimelineSurface.UngroupGesture,
             };
             CommandUndo = new RelayCommand
             {
@@ -235,13 +301,13 @@ namespace Prisc.UI.VideoEditor
             CommandAddCursorTrack = new RelayCommand
             {
                 Executed = _ => AddCursorTrack(),
-                CanExecute = _ => _editor is { HasInputCapture: true, HasCursorTrack: false },
+                CanExecute = _ => _editor is { CanAddCursorTrack: true },
                 Text = "Add _Cursor Track",
             };
             CommandAddKeyboardTrack = new RelayCommand
             {
                 Executed = _ => AddKeyboardTrack(),
-                CanExecute = _ => _editor is { HasInputCapture: true, HasKeyboardTrack: false },
+                CanExecute = _ => _editor is { CanAddKeyboardTrack: true },
                 Text = "Add _Keyboard Track",
             };
             CommandImportMedia = new RelayCommand
@@ -290,13 +356,16 @@ namespace Prisc.UI.VideoEditor
             // (Space/Left/Right/Delete/Home/End) are routed by the tunnel KeyDown handler below.
             // Escape is handled there only to leave crop mode when no drag is in flight — the
             // timeline surface and gizmo keep it for canceling a drag in progress.
-            AddCommandKeyBinding(CommandSplit);
-            AddCommandKeyBinding(CommandCopyClip);
-            AddCommandKeyBinding(CommandUndo);
-            AddCommandKeyBinding(CommandRedo);
-            KeyBindings.Add(new KeyBinding { Command = CommandRedo, Gesture = new KeyGesture(Key.Z, KeyModifiers.Control | KeyModifiers.Shift) });
-            if (OperatingSystem.IsMacOS())
-                KeyBindings.Add(new KeyBinding { Command = CommandRedo, Gesture = new KeyGesture(Key.Z, KeyModifiers.Meta | KeyModifiers.Shift) });
+            AddCommandKeyBinding(CommandSplit, mutatesProject: true);
+            AddCommandKeyBinding(CommandCut, mutatesProject: true);
+            AddCommandKeyBinding(CommandCopy, mutatesProject: false);
+            AddCommandKeyBinding(CommandPaste, mutatesProject: true);
+            AddCommandKeyBinding(CommandSelectAll, mutatesProject: false);
+            AddCommandKeyBinding(CommandGroupTracks, mutatesProject: true);
+            AddCommandKeyBinding(CommandUngroupTracks, mutatesProject: true);
+            AddCommandKeyBinding(CommandUndo, mutatesProject: true);
+            AddCommandKeyBinding(CommandRedo, mutatesProject: true,
+                extraGesture: new SimpleKeyGesture(Key.Z, KeyModifiers.Control | KeyModifiers.Shift));
             AddHandler(KeyDownEvent, OnTunnelKeyDown, RoutingStrategies.Tunnel);
 
             // dropping files in from Explorer/Finder (DragDrop.AllowDrop is set on the window in
@@ -314,7 +383,7 @@ namespace Prisc.UI.VideoEditor
             timeline.ScrubStarted += Timeline_ScrubStarted;
             timeline.Scrubbed += Timeline_Scrubbed;
             timeline.ScrubCompleted += Timeline_ScrubCompleted;
-            timeline.GroupDragChanged += Timeline_GroupDragChanged;
+            timeline.StatusChanged += Timeline_StatusChanged;
 
             // the inspector owns crop mode and the Unlocked (free-resize) aspect tile; the
             // preview's gizmo follows both
@@ -439,10 +508,7 @@ namespace Prisc.UI.VideoEditor
                 return;
             }
 
-            // a project owns its composition and nothing else; a recording's edit is only as good
-            // as the file it was opened on.
-            var videoPath = session.IsVideoProject ? null : session.VideoPath;
-            if (!session.IsVideoProject && (String.IsNullOrEmpty(videoPath) || !File.Exists(videoPath)))
+            if (session.IsRecordingMissing)
             {
                 _ = NiceDialog.ShowNoticeAsync(null, NiceDialogIcon.Warning,
                     "The recording could not be found. It may have been moved or deleted.",
@@ -450,6 +516,7 @@ namespace Prisc.UI.VideoEditor
                 return;
             }
 
+            var videoPath = session.IsVideoProject ? null : session.VideoPath;
             if (!FFmpegLoader.TryInitialize(FFmpegLoader.FindBesideRecorder))
             {
                 // no in-app playback available — hand the file to the OS player so the user still
@@ -535,26 +602,70 @@ namespace Prisc.UI.VideoEditor
                    + (playerFallback ? " The recording has been opened in your default video player instead." : "");
         }
 
-        /// <summary>Returns true (and takes over startup) when args request the hidden dev editor
-        /// (<c>--video-edit file.mp4</c>): the editor opens on an arbitrary file with NO session —
-        /// persistence disabled, render output next to the file. Must run before the
-        /// single-instance mutex, exactly like the --video-spike harness.</summary>
+        /// <summary>Returns true (and takes over startup) when args request a hidden dev editor. Must
+        /// run before the single-instance mutex, exactly like the --video-spike harness.
+        /// <list type="bullet">
+        /// <item><c>--video-edit file.mp4</c> opens an arbitrary file with NO session: persistence
+        /// disabled, render output next to the file.</item>
+        /// <item><c>--video-edit-session session.json</c> opens one session's file with persistence
+        /// on, for testing the save and load paths. It writes to that directory (its
+        /// <c>videoedit.json</c>, and the OpenEditor marker in <c>session.json</c>), so point it at a
+        /// throwaway copy. The session stays out of <see cref="SessionManager"/> (see
+        /// <see cref="IsRecentsSession"/>).</item>
+        /// </list>
+        /// Either flag with nothing to open exits 1 with an error on stderr (see
+        /// <see cref="EditorHarnessArgs.OpenSession"/>), and so does a window that goes on to fail
+        /// loading (see <see cref="ShowOpenFailure"/>), so a driver never mistakes it for a result.
+        /// Debug builds also take <c>--e2e-state path</c> (see <see cref="EditorStateDump"/>).</summary>
         public static bool TryHandleArgs(string[] args)
         {
-            if (args == null)
-                return false;
-
-            for (int i = 0; i < args.Length; i++)
+            VideoEditorWindow window;
+            if (EditorHarnessArgs.Has(args, SessionArgName))
             {
-                if (String.Equals(args[i], ArgName, StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
-                {
-                    var window = new VideoEditorWindow(null, Path.GetFullPath(args[i + 1]), exitOnClose: true);
-                    window.Show();
-                    return true;
-                }
+                var session = EditorHarnessArgs.OpenSession(EditorHarnessArgs.ValueOf(args, SessionArgName), out var problem);
+                if (session == null)
+                    ExitHarness($"{SessionArgName}: {problem}");
+
+                window = new VideoEditorWindow(session, session.IsVideoProject ? null : session.VideoPath, exitOnClose: true);
+            }
+            else if (EditorHarnessArgs.Has(args, ArgName))
+            {
+                var filePath = EditorHarnessArgs.ValueOf(args, ArgName);
+                if (filePath == null)
+                    ExitHarness($"{ArgName}: no file was named");
+
+                window = new VideoEditorWindow(null, Path.GetFullPath(filePath), exitOnClose: true);
+            }
+            else
+            {
+                return false;
             }
 
-            return false;
+#if DEBUG
+            window._stateDumpPath = EditorHarnessArgs.ValueOf(args, EditorStateDump.ArgName);
+#endif
+            window.Show();
+            return true;
+        }
+
+        /// <summary>Ends a harness process that has nothing to show. A harness with no window, or one
+        /// showing only an error, would hang: only closing the window exits it.</summary>
+        private static void ExitHarness(string problem)
+        {
+            Console.Error.WriteLine(problem);
+            Console.Error.Flush();
+            Environment.Exit(1);
+        }
+
+        /// <summary>The recording, the edit or the player on them could not be opened, on load or on
+        /// a later rebuild: says so in the window, or, in a harness, on stderr with exit 1. A state
+        /// file written before this does not make the run a result.</summary>
+        private void ShowOpenFailure(string message)
+        {
+            if (_exitOnClose)
+                ExitHarness(message);
+
+            ShowStatus(message);
         }
 
         /// <summary>Whether a video editor window is open on <paramref name="session"/>. The
@@ -593,7 +704,7 @@ namespace Prisc.UI.VideoEditor
 
             // a window opened onto a recording whose previous render is still running shows that
             // render on the button immediately.
-            if (_session != null)
+            if (IsRecentsSession)
             {
                 var existing = VideoRenderManager.FindExisting(_session);
                 if (existing?.ActiveRender != null)
@@ -607,7 +718,7 @@ namespace Prisc.UI.VideoEditor
         {
             if (!FFmpegLoader.TryInitialize(FFmpegLoader.FindBesideRecorder))
             {
-                ShowStatus("Video playback unavailable: " + FFmpegLoader.FailureReason);
+                ShowOpenFailure("Video playback unavailable: " + FFmpegLoader.FailureReason);
                 return;
             }
 
@@ -624,7 +735,7 @@ namespace Prisc.UI.VideoEditor
                 {
                     Debug.WriteLine("Video project load failed: " + ex);
                     SentryConfig.CaptureHandled(ex, "videoeditor.open");
-                    ShowStatus("Could not open this project: " + ex.Message);
+                    ShowOpenFailure("Could not open this project: " + ex.Message);
                     return;
                 }
             }
@@ -643,7 +754,7 @@ namespace Prisc.UI.VideoEditor
                 {
                     Debug.WriteLine("Video editor probe failed: " + ex);
                     SentryConfig.CaptureHandled(ex, "videoeditor.open");
-                    ShowStatus("Could not open the video: " + ex.Message);
+                    ShowOpenFailure("Could not open the video: " + ex.Message);
                     return;
                 }
 
@@ -652,7 +763,7 @@ namespace Prisc.UI.VideoEditor
 
                 if (probe.VideoStreams == null || probe.VideoStreams.Count == 0)
                 {
-                    ShowStatus("This file has no video track to edit.");
+                    ShowOpenFailure("This file has no video track to edit.");
                     return;
                 }
 
@@ -675,7 +786,7 @@ namespace Prisc.UI.VideoEditor
                 {
                     Debug.WriteLine("Video editor load failed: " + ex);
                     SentryConfig.CaptureHandled(ex, "videoeditor.open");
-                    ShowStatus("Could not open the video: " + ex.Message);
+                    ShowOpenFailure("Could not open the video: " + ex.Message);
                     return;
                 }
             }
@@ -715,16 +826,16 @@ namespace Prisc.UI.VideoEditor
 
             // AI sidecar generation (denoise wavs, person mattes) follows the edit from here on;
             // the inspector's status rows read it, and a finished sidecar refreshes the preview
-            // (Analysis_SidecarCompleted). The dev harness has no session directory, so the
-            // manager reports Unavailable there rather than generating into nowhere.
+            // (Analysis_SidecarCompleted). --video-edit has no session directory, so the manager
+            // reports Unavailable there rather than generating into nowhere.
             _analysis = new AiAnalysisManager(_editor, SidecarCacheDir);
             _analysis.SidecarCompleted += Analysis_SidecarCompleted;
             _analysis.JobFailed += Analysis_JobFailed;
             Inspector.Analysis = _analysis;
 
             // Filmstrips and waveforms decode on their own contexts, behind playback. Waveforms are
-            // cached beside videoedit.json; the dev harness has no session directory and analyzes
-            // in memory (_editDocPath is null there).
+            // cached beside videoedit.json; --video-edit has no session directory and analyzes in
+            // memory (_editDocPath is null there).
             _preview = new TimelinePreviewProvider(_editor,
                 _editDocPath != null ? Path.GetDirectoryName(_editDocPath) : null);
             // waveforms are queued before the first paint can queue any filmstrip work: the shared
@@ -743,6 +854,11 @@ namespace Prisc.UI.VideoEditor
             // and the frame rate is a render choice (the render dialog's Frame rate row).
             RefreshAspectRatioPicker();
             RefreshTimelineCollapse();
+
+#if DEBUG
+            if (_stateDumpPath != null)
+                _stateDump = new EditorStateDump(_stateDumpPath, this, timeline, _editor);
+#endif
 
             if (_editor.DurationTicks <= 0)
             {
@@ -792,8 +908,8 @@ namespace Prisc.UI.VideoEditor
             {
                 // preview decodes at display resolution, not at output resolution (proxy
                 // behavior); the composer scales the rest of the way. The sidecar directory is
-                // where the denoise/matte files land (beside videoedit.json) — null in dev mode,
-                // which plays every stream raw.
+                // where the denoise/matte files land (beside videoedit.json) — null under
+                // --video-edit, which plays every stream raw.
                 await _player.OpenAsync(snapshot, new VideoOpenOptions
                 {
                     MaxPresentHeight = 1080,
@@ -804,7 +920,7 @@ namespace Prisc.UI.VideoEditor
             {
                 Debug.WriteLine("Video editor open failed: " + ex);
                 SentryConfig.CaptureHandled(ex, "videoeditor.open");
-                ShowStatus("Could not open the video: " + ex.Message);
+                ShowOpenFailure("Could not open the video: " + ex.Message);
                 return;
             }
 
@@ -818,7 +934,7 @@ namespace Prisc.UI.VideoEditor
         }
 
         /// <summary>Where the AI sidecars live: beside <c>videoedit.json</c>, like the waveform
-        /// cache. Null in dev mode (no session directory), which disables them.</summary>
+        /// cache. Null under --video-edit (no session directory), which disables them.</summary>
         private string SidecarCacheDir =>
             _editDocPath != null ? Path.GetDirectoryName(_editDocPath) : null;
 
@@ -827,6 +943,15 @@ namespace Prisc.UI.VideoEditor
         /// what is loaded at open, where a render is written, and the wording of everything that
         /// would otherwise talk about "the recording".</summary>
         private bool IsProjectEdit => _videoPath == null;
+
+        /// <summary>True when <see cref="_session"/> is one of the app's own Recents rows, so its
+        /// renders and its deletion go through <see cref="VideoRenderManager"/> and
+        /// <see cref="SessionManager"/>. False for <c>--video-edit-session</c>: first touching
+        /// <c>SessionManager.Current</c> loads the whole sessions folder and runs the retention sweep,
+        /// which has no place in a throwaway process that runs ahead of the single-instance mutex,
+        /// and a render would add a row to the real Recents and walk to a main window that was never
+        /// opened. That harness renders as <c>--video-edit</c> does, beside what it edits.</summary>
+        private bool IsRecentsSession => _session != null && !_exitOnClose;
 
         /// <summary>The edited (output) timeline length — the one duration the timeline, the
         /// readout and the render all measure against.</summary>
@@ -1109,12 +1234,14 @@ namespace Prisc.UI.VideoEditor
             _ = FinishScrubAsync(ticks);
         }
 
-        /// <summary>The transport bar's status text for a group drag: the member count while the
-        /// timeline is carrying a whole group, nothing once it lets go.</summary>
-        private void Timeline_GroupDragChanged(object sender, int count)
+        /// <summary>The transport bar's status text: what the timeline has to say right now, nothing
+        /// when it has nothing.</summary>
+        private void Timeline_StatusChanged(object sender, string text)
         {
-            txtGroupDrag.Text = count > 1 ? $"Dragging {count} grouped clips" : null;
-            txtGroupDrag.IsVisible = count > 1;
+            txtTimelineStatus.Text = text;
+            txtTimelineStatus.IsVisible = text != null;
+            // the whole message, for a window too narrow for it to fit in two lines
+            ToolTip.SetTip(txtTimelineStatus, text);
         }
 
         private async Task FinishScrubAsync(long ticks)
@@ -1141,9 +1268,7 @@ namespace Prisc.UI.VideoEditor
 
         private void SplitAtPlayhead()
         {
-            // same text-focus gate as Undo/Redo: Ctrl+K from an inspector field must not split
-            // the timeline out from under someone typing (see IsTextEditorFocused).
-            if (_editor == null || _editor.IsGestureActive || IsTextEditorFocused())
+            if (_editor == null || _editor.IsGestureActive)
                 return;
 
             timeline.SplitAtPlayhead();
@@ -1153,7 +1278,8 @@ namespace Prisc.UI.VideoEditor
         {
             // a drag in progress owns the model (a gesture is open); history is off-limits. So
             // does a voice take: its ghost sits on a row an undo could take away underneath it.
-            if (_editor == null || _editor.IsGestureActive || _editor.IsVoiceTakeActive || IsTextEditorFocused())
+            // The key binding's gate says this too; menu items reach here without it.
+            if (_editor == null || _editor.IsGestureActive || _editor.IsVoiceTakeActive)
                 return;
 
             _editor.Undo();
@@ -1161,7 +1287,7 @@ namespace Prisc.UI.VideoEditor
 
         private void Redo()
         {
-            if (_editor == null || _editor.IsGestureActive || _editor.IsVoiceTakeActive || IsTextEditorFocused())
+            if (_editor == null || _editor.IsGestureActive || _editor.IsVoiceTakeActive)
                 return;
 
             _editor.Redo();
@@ -1318,9 +1444,9 @@ namespace Prisc.UI.VideoEditor
                 : "The playhead is inside an existing speed change. Move it to a free stretch of the Speed row to add another.";
         }
 
-        /// <summary>Adds the cursor overlay row — one per project, mirroring the recording's screen
-        /// segments. The session refuses (null) when the recording carries no input-capture data or
-        /// the row already exists, which is also what the button's CanExecute reads.</summary>
+        /// <summary>Adds a cursor overlay row — one per recording, for the first recording that can
+        /// take one, mirroring its screen segments. The session refuses (null) when none can, which
+        /// is also what the button's CanExecute reads.</summary>
         private void AddCursorTrack()
         {
             if (!CanAddToProject)
@@ -1343,8 +1469,8 @@ namespace Prisc.UI.VideoEditor
         }
 
         /// <summary>The two input-overlay buttons on the same terms as
-        /// <see cref="RefreshAddSpeedButton"/>: single-use per project, and only offered at all for
-        /// a recording that captured input, so the tip's footer says which of the two reasons the
+        /// <see cref="RefreshAddSpeedButton"/>: one row per recording, and only offered at all for a
+        /// recording that captured input, so the tip's footer says which of the two reasons the
         /// button is disabled for (and clears when it is enabled). Called from the same
         /// project/history change sites (an undo can create or remove either row).</summary>
         private void RefreshInputOverlayButtons()
@@ -1355,13 +1481,13 @@ namespace Prisc.UI.VideoEditor
             var hasCapture = _editor is { HasInputCapture: true };
             tipAddCursor.DisabledReason = !hasCapture
                 ? "This recording has no input capture data, which the cursor overlay needs."
-                : _editor is { HasCursorTrack: true }
-                    ? "A Cursor row already exists. Edit the existing Cursor row instead."
+                : _editor is { CanAddCursorTrack: false }
+                    ? "Every recording on the timeline already has a Cursor row. Edit the existing row instead."
                     : null;
             tipAddKeyboard.DisabledReason = !hasCapture
                 ? "This recording has no input capture data, which the keystroke overlay needs."
-                : _editor is { HasKeyboardTrack: true }
-                    ? "A Keys row already exists. Edit the existing Keys row instead."
+                : _editor is { CanAddKeyboardTrack: false }
+                    ? "Every recording on the timeline already has a Keys row. Edit the existing row instead."
                     : null;
         }
 
@@ -1529,37 +1655,38 @@ namespace Prisc.UI.VideoEditor
             timeline.EnsureVisible(item.TimelineStartTicks, item.DurationTicks);
         }
 
-        /// <summary>True when a text field owns the keyboard. Modifier-gesture commands that mutate
-        /// the project (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z / Ctrl+K) reach the session as window
-        /// <see cref="Window.KeyBindings"/>, which are dispatched ahead of — and mark handled
-        /// before — the tunnel handler's TextBox guard, so each of those commands gates on this —
-        /// undoing (or splitting) the whole project out from under someone typing an inspector
-        /// value (or a track name) is never what they meant, so the text box keeps its own
-        /// history.</summary>
+        /// <summary>True when a text field owns the keyboard. Modifier gestures reach their commands
+        /// as window <see cref="Window.KeyBindings"/>, which are dispatched ahead of the tunnel
+        /// handler's TextBox guard, so <see cref="AddCommandKeyBinding"/> gates on this: undoing (or
+        /// splitting) the whole project out from under someone typing an inspector value is never
+        /// what they meant, and the text box keeps its own history.</summary>
         private bool IsTextEditorFocused() => FocusManager?.GetFocusedElement() is TextBox;
 
         // ====================================================================
         // Keyboard
         // ====================================================================
 
-        private void CopySelectedClip()
+        /// <summary>Binds the command's gesture, and <paramref name="extraGesture"/> when it has a
+        /// second one, through the one gate (see <see cref="GatedKeyCommand"/>).</summary>
+        private void AddCommandKeyBinding(RelayCommand command, bool mutatesProject, SimpleKeyGesture extraGesture = null)
         {
-            if (_editor?.PrimarySelectedItem is { } item)
-                _editor.CopyItem(item.Id);
+            var gated = new GatedKeyCommand(command, () => GatedKeyCommand.Allows(IsTextEditorFocused(), mutatesProject,
+                _editor is { IsGestureActive: true }, _editor is { IsVoiceTakeActive: true }));
+
+            AddKeyBinding(gated, command.Gesture);
+            if (extraGesture != null)
+                AddKeyBinding(gated, extraGesture);
         }
 
-        private void AddCommandKeyBinding(RelayCommand command)
+        private void AddKeyBinding(ICommand command, SimpleKeyGesture gesture)
         {
-            var kb = command.CreateKeyBinding();
-            if (kb == null)
-                return;
+            KeyBindings.Add(new KeyBinding { Command = command, Gesture = gesture.ToKeyGesture() });
 
-            KeyBindings.Add(kb);
-
-            // macOS: every Ctrl gesture is also registered with Meta, so ⌘Z/⌘Y/⌘K work (§2.4).
-            var meta = command.CreateMacMetaKeyBinding();
-            if (meta != null)
-                KeyBindings.Add(meta);
+            // macOS: every Ctrl gesture is also registered with Meta, so ⌘Z/⌘Y/⌘K work (§2.4). In
+            // addition rather than instead: Ctrl+Z still works from a Windows keyboard or muscle memory.
+            var forApp = gesture.ForApp();
+            if (!forApp.Equals(gesture))
+                KeyBindings.Add(new KeyBinding { Command = command, Gesture = forApp.ToKeyGesture() });
         }
 
         /// <summary>Follows the inspector's "Draw crop" toggle onto the preview. Entering the mode
@@ -1567,7 +1694,7 @@ namespace Prisc.UI.VideoEditor
         /// the item, brings it to the item's first frame so there is something to draw on.</summary>
         private void SyncCropDraw()
         {
-            var item = Inspector.CropDrawActive ? _editor?.PrimarySelectedItem : null;
+            var item = Inspector.CropDrawActive ? _editor?.SoleSelectedItem : null;
             preview.CropDrawItemId = item?.Id ?? Guid.Empty;
             if (item == null)
                 return;
@@ -1576,7 +1703,7 @@ namespace Prisc.UI.VideoEditor
                 _player.Pause();
 
             long position = preview.PositionTicks;
-            if (position < item.TimelineStartTicks || position >= item.TimelineEndTicks)
+            if (!item.Covers(position))
                 SeekTo(item.TimelineStartTicks);
 
             // the drag surface takes the keyboard, so Escape reaches it (and this window) rather
@@ -2434,7 +2561,7 @@ namespace Prisc.UI.VideoEditor
             // a user preset opens the dialog on its own values; anything else as before
             var lastUser = LastUserPreset();
             var initial = lastUser != null ? RenderPresets.Create(lastUser) : RenderPresets.Create(LastRenderPreset, Settings);
-            var request = await RenderOptionsDialog.ShowAsync(this, info, initial, DefaultRenderOutputPath(initial.Container), _session != null);
+            var request = await RenderOptionsDialog.ShowAsync(this, info, initial, DefaultRenderOutputPath(initial.Container), IsRecentsSession);
             if (request == null)
                 return; // canceled
 
@@ -2467,18 +2594,21 @@ namespace Prisc.UI.VideoEditor
 
         /// <summary>The path the dialog's "Save to" box opens on: what a preset render would have
         /// written to — the recording settings' output folder and filename pattern, or, in the dev
-        /// harness (no session), the file beside the one being edited.</summary>
+        /// harnesses, beside the file being edited, or in the session directory when a project has
+        /// no file.</summary>
         private string DefaultRenderOutputPath(VideoContainer container) =>
-            _session != null ? VideoRenderManager.GetOutputPath(_session, container) : VideoRenderManager.GetOutputPath(_videoPath, container);
+            IsRecentsSession
+                ? VideoRenderManager.GetOutputPath(_session, container)
+                : VideoRenderManager.GetOutputPathBeside(_videoPath, _session?.FilePath, container);
 
         /// <summary>Starts <paramref name="request"/>: through the render manager when this editor
-        /// has a session behind it, in-process when it does not (the dev harness).</summary>
+        /// is on a Recents session, in-process when it is not (the dev harnesses).</summary>
         private async Task StartRenderAsync(RenderRequest request)
         {
             if (_editor == null)
                 return;
 
-            if (_session == null)
+            if (!IsRecentsSession)
             {
                 await RunDevRenderAsync(request);
                 return;
@@ -2579,15 +2709,15 @@ namespace Prisc.UI.VideoEditor
             _trackedRender = null;
         }
 
-        /// <summary>Dev-mode render (--video-edit, no session): writes the same job file the manager
+        /// <summary>Dev-mode render (the --video-edit harnesses): writes the same job file the manager
         /// would — quality, size cap and all, from the flyout or the dialog exactly as a real render
-        /// gets them — puts the output next to the source file, and runs the render tool directly
+        /// gets them — puts the output beside what is being edited, and runs the render tool directly
         /// without creating any Recents entry.</summary>
         private async Task RunDevRenderAsync(RenderRequest request)
         {
             var project = RenderFrameRate.Apply(_editor.SnapshotForPlayer(), request.MaxFps);
             var outputPath = String.IsNullOrEmpty(request.OutputPath)
-                ? VideoRenderManager.GetOutputPath(_videoPath, request.Container)
+                ? DefaultRenderOutputPath(request.Container)
                 : request.OutputPath;
             var workDir = Path.Combine(Path.GetTempPath(), "prisc-video-edit-" + Guid.NewGuid().ToString("N"));
 
@@ -2704,6 +2834,11 @@ namespace Prisc.UI.VideoEditor
         {
             _closing = true;
 
+#if DEBUG
+            _stateDump?.Dispose();
+            _stateDump = null;
+#endif
+
             // a voice take in progress is finished (its clip joins the edit flushed below) and
             // the microphone released, ahead of the save so the take is part of it.
             ShutdownVoiceRecorder();
@@ -2762,7 +2897,7 @@ namespace Prisc.UI.VideoEditor
         /// all. Returns true when the session was deleted (and is disposed).</summary>
         private bool DiscardEmptyProject()
         {
-            if (!IsProjectEdit || _session == null)
+            if (!IsProjectEdit || !IsRecentsSession)
                 return false;
 
             var project = _editor?.Project;
@@ -2792,7 +2927,7 @@ namespace Prisc.UI.VideoEditor
             // a window closed while focused gets no Deactivated
             MediaKeyTransport.ReleaseTarget(this);
 
-            // the dev harness bypasses the tray lifetime entirely; closing the window is exit.
+            // the dev harnesses bypass the tray lifetime entirely; closing the window is exit.
             // (A dev render in flight dies with the process — it is a dev tool.)
             if (_exitOnClose)
                 Environment.Exit(0);
@@ -3070,7 +3205,7 @@ namespace Prisc.UI.VideoEditor
             if (_editor == null || _closing)
                 return;
 
-            var size = AspectRatioOptions.FitToContentSize(_editor.Project, _editor.PrimarySelectedItem, PlayheadTicks);
+            var size = AspectRatioOptions.FitToContentSize(_editor.Project, _editor.SoleSelectedItem, PlayheadTicks);
             if (size == null)
                 return;
 

@@ -54,5 +54,15 @@ namespace Prisc.VideoSDK.Composition
         /// and pay a container seek for a request that goes backwards.
         /// </summary>
         bool TryGetFrame(Guid sourceId, int streamIndex, long sourceTimeTicks, out FrameRef frame);
+
+        /// <summary>
+        /// The same, for a clip in <paramref name="lane"/> (see <c>StreamLanes</c>): each lane of a
+        /// stream holds its own position and its own frame, so clips that play one stream at once
+        /// from different source times do not read each other's frames, and a decoding
+        /// implementation pays no seek for them. Lane 0 is the overload above. A source with one
+        /// position per stream ignores the lane.
+        /// </summary>
+        bool TryGetFrame(Guid sourceId, int streamIndex, long sourceTimeTicks, int lane, out FrameRef frame)
+            => TryGetFrame(sourceId, streamIndex, sourceTimeTicks, out frame);
     }
 }

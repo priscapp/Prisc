@@ -529,8 +529,34 @@ namespace Prisc.UI.VideoEditor
         }
 
         /// <summary>
+        /// The clip the preview's overlays may act on this pass, or null: the one selected clip
+        /// (never a member of a multi-selection), on a live row of this kind, with the playhead inside
+        /// its span, since dragging a picture that is not on screen would move something the user
+        /// cannot see. Null too while the video has no size or a crop is being drawn.
+        /// <paramref name="readOnly"/> says the row is placement-locked, so the overlay shows the
+        /// clip without offering to move it.
+        /// </summary>
+        private Item OverlayTarget(Rect videoRect, TrackKind rowKind, out long ticks, out bool readOnly)
+        {
+            ticks = 0;
+            readOnly = false;
+            var session = _session;
+            if (session == null || videoRect.Width <= 0 || videoRect.Height <= 0 || _cropDrawItemId != Guid.Empty)
+                return null;
+
+            var project = session.Project;
+            ticks = ComposedTicks(project);
+            var item = session.SoleSelectedItem;
+            if (project.TrackOf(item) is not { Hidden: false } track || track.Kind != rowKind || !item.Covers(ticks))
+                return null;
+
+            readOnly = track.PlacementLocked;
+            return item;
+        }
+
+        /// <summary>
         /// Where the gizmo belongs this pass, in local coordinates — exactly where the composer
-        /// draws the primary selection (<see cref="ItemPlacement.TryResolve"/> reads the very
+        /// draws the selected clip (<see cref="ItemPlacement.TryResolve"/> reads the very
         /// <c>Transform</c> the picture is drawn with, so no placement math is duplicated here and
         /// the two cannot drift). An empty rect is how "no gizmo" is expressed: a zero-sized panel
         /// draws nothing and cannot be hit.
@@ -544,49 +570,25 @@ namespace Prisc.UI.VideoEditor
         private Rect ResolveGizmoRect(Rect videoRect)
         {
             var empty = new Rect(0, 0, 0, 0);
-            var session = _session;
-            if (session == null || videoRect.Width <= 0 || videoRect.Height <= 0 || _cropDrawItemId != Guid.Empty)
+            var item = OverlayTarget(videoRect, TrackKind.Video, out var ticks, out var readOnly);
+            if (item == null)
             {
                 Gizmo.SetTarget(Guid.Empty, default);
                 return empty;
             }
 
-            var project = session.Project;
-            var item = session.PrimarySelectedItem;
-
-            // visual content only, on a row that is actually being composed and editable, and only
-            // while the playhead is inside the item's span — dragging a picture that is not on
-            // screen would move something the user cannot see. A locked row gets no gizmo for the
-            // same reason the timeline gives its items no drag affordance; clicking still selects
-            // it, exactly as the timeline does.
-            Track track = null;
-            if (item != null)
-            {
-                foreach (var candidate in project.Tracks)
-                {
-                    if (candidate.Id == item.TrackId)
-                    {
-                        track = candidate;
-                        break;
-                    }
-                }
-            }
-
-            var ticks = ComposedTicks(project);
             Gizmo.ComposedTicks = ticks;
 
             // a line kind is the shape handles' (ResolveShapeHandlesRect), so exactly one overlay
             // owns the item: a box gizmo over an arrow would resize the padding, not the arrow
-            if (item == null || track is not { Kind: TrackKind.Video, Hidden: false, Locked: false } ||
-                item.Content is ShapeContent { IsLine: true } ||
-                ticks < item.TimelineStartTicks || ticks >= item.TimelineEndTicks ||
-                !ItemPlacement.TryResolve(project, item, videoRect.Width, videoRect.Height, out var placed, ticks))
+            if (item.Content is ShapeContent { IsLine: true } ||
+                !ItemPlacement.TryResolve(_session.Project, item, videoRect.Width, videoRect.Height, out var placed, ticks))
             {
                 Gizmo.SetTarget(Guid.Empty, default);
                 return empty;
             }
 
-            Gizmo.SetTarget(item.Id, placed);
+            Gizmo.SetTarget(item.Id, placed, readOnly);
 
             // inflated by the gizmo's handle pad: a control only receives presses inside its own
             // bounds, and the corner handles straddle the item's corners — plus extra room on the
@@ -599,7 +601,7 @@ namespace Prisc.UI.VideoEditor
 
         /// <summary>
         /// Where the zoom focal-point reticle belongs this pass: the whole video rectangle while
-        /// the primary selection is a zoom item on a live (non-hidden, non-locked) effect row with
+        /// the sole selection is a zoom item on a live (non-hidden) effect row with
         /// the playhead inside its span — the gizmo's own gate, minus the placement resolve a zoom
         /// item does not have (its "picture" is the frame itself). Everything else — a speed item,
         /// no selection, playhead outside — is the empty "no reticle" arrange. The gizmo shows for
@@ -608,38 +610,11 @@ namespace Prisc.UI.VideoEditor
         /// </summary>
         private Rect ResolveZoomFocusRect(Rect videoRect)
         {
-            var empty = new Rect(0, 0, 0, 0);
-            var session = _session;
-            if (session == null || videoRect.Width <= 0 || videoRect.Height <= 0 || _cropDrawItemId != Guid.Empty)
+            var item = OverlayTarget(videoRect, TrackKind.Effect, out _, out _);
+            if (item?.Content is not ZoomContent)
             {
                 ZoomFocus.SetTarget(Guid.Empty);
-                return empty;
-            }
-
-            var project = session.Project;
-            var item = session.PrimarySelectedItem;
-
-            Track track = null;
-            if (item?.Content is ZoomContent)
-            {
-                foreach (var candidate in project.Tracks)
-                {
-                    if (candidate.Id == item.TrackId)
-                    {
-                        track = candidate;
-                        break;
-                    }
-                }
-            }
-
-            var ticks = ComposedTicks(project);
-
-            if (item?.Content is not ZoomContent ||
-                track is not { Kind: TrackKind.Effect, Hidden: false, Locked: false } ||
-                ticks < item.TimelineStartTicks || ticks >= item.TimelineEndTicks)
-            {
-                ZoomFocus.SetTarget(Guid.Empty);
-                return empty;
+                return new Rect(0, 0, 0, 0);
             }
 
             ZoomFocus.SetTarget(item.Id);
@@ -648,7 +623,7 @@ namespace Prisc.UI.VideoEditor
 
         /// <summary>
         /// Where the line handles belong this pass: the <b>whole preview control</b> while the
-        /// primary selection is a line, arrow or double arrow on a live (non-hidden, non-locked)
+        /// sole selection is a line, arrow or double arrow on a live (non-hidden)
         /// video row with the playhead inside its span (the gizmo's own gate), and the empty "no
         /// handles" arrange otherwise. The whole control rather than the video rect because a
         /// control only receives presses inside its own bounds, and a line's handles can sit on or
@@ -658,42 +633,15 @@ namespace Prisc.UI.VideoEditor
         /// </summary>
         private Rect ResolveShapeHandlesRect(Size finalSize, Rect videoRect)
         {
-            var empty = new Rect(0, 0, 0, 0);
-            var session = _session;
-            if (session == null || videoRect.Width <= 0 || videoRect.Height <= 0 || _cropDrawItemId != Guid.Empty)
+            var item = OverlayTarget(videoRect, TrackKind.Video, out var ticks, out var readOnly);
+            if (item?.Content is not ShapeContent { IsLine: true })
             {
                 ShapeHandles.SetTarget(Guid.Empty);
-                return empty;
+                return new Rect(0, 0, 0, 0);
             }
 
-            var project = session.Project;
-            var item = session.PrimarySelectedItem;
-
-            Track track = null;
-            if (item?.Content is ShapeContent { IsLine: true })
-            {
-                foreach (var candidate in project.Tracks)
-                {
-                    if (candidate.Id == item.TrackId)
-                    {
-                        track = candidate;
-                        break;
-                    }
-                }
-            }
-
-            var ticks = ComposedTicks(project);
             ShapeHandles.ComposedTicks = ticks;
-
-            if (item?.Content is not ShapeContent { IsLine: true } ||
-                track is not { Kind: TrackKind.Video, Hidden: false, Locked: false } ||
-                ticks < item.TimelineStartTicks || ticks >= item.TimelineEndTicks)
-            {
-                ShapeHandles.SetTarget(Guid.Empty);
-                return empty;
-            }
-
-            ShapeHandles.SetTarget(item.Id);
+            ShapeHandles.SetTarget(item.Id, readOnly);
             return new Rect(finalSize);
         }
 
@@ -710,7 +658,7 @@ namespace Prisc.UI.VideoEditor
             var item = project?.Items.Find(i => i.Id == _cropDrawItemId);
             var ticks = ComposedTicks(project);
             if (item == null || videoRect.Width <= 0 || videoRect.Height <= 0 ||
-                ticks < item.TimelineStartTicks || ticks >= item.TimelineEndTicks ||
+                !item.Covers(ticks) ||
                 !ItemPlacement.TryResolve(project, item, videoRect.Width, videoRect.Height, out var placed, ticks))
             {
                 CropDraw.SetTarget(default, null);

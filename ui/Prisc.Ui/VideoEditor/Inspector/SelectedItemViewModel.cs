@@ -6,6 +6,7 @@ using Prisc.Legacy;
 using Prisc.UI.Controls;
 using Prisc.UI.Helpers;
 using Prisc.UI.Services;
+using Prisc.UI.VideoEditor.Timeline;
 using Prisc.VideoSDK.Composition;
 using Prisc.VideoSDK.Editing;
 using Prisc.VideoSDK.Model;
@@ -13,13 +14,14 @@ using Prisc.VideoSDK.Model;
 namespace Prisc.UI.VideoEditor.Inspector
 {
     /// <summary>
-    /// The property inspector's view of the session's primary selection: one flat set of bindable
-    /// properties over whatever item is selected, plus the section-visibility flags the panel shows
-    /// and hides its groups with.
+    /// The property inspector's view of the session's selection: one flat set of bindable
+    /// properties over whatever one item is selected, plus the section-visibility flags the panel
+    /// shows and hides its groups with. With several selected there is no mixed-value editing: every
+    /// item section is off (no setter has an item to write to) and only the group commands are left.
     ///
     /// Items are POCOs that <see cref="EditorSession"/> <b>replaces</b> wholesale on undo/redo, so
     /// nothing here caches an <see cref="Item"/> reference: every read re-resolves
-    /// <see cref="EditorSession.PrimarySelectedItem"/> by id, and every write goes back through the
+    /// <see cref="EditorSession.SoleSelectedItem"/> by id, and every write goes back through the
     /// session rather than onto the model. Writes carry <c>origin: this</c> so the session's echo
     /// (<see cref="EditorSession.ProjectChanged"/>) can be ignored — a re-read mid-edit would fight
     /// the spinner the user is holding — while a change from anywhere else (the timeline, the
@@ -29,13 +31,14 @@ namespace Prisc.UI.VideoEditor.Inspector
     /// <b>What fans out over the row.</b> A recording row's items are the split segments of one
     /// continuous feed: where that picture sits on the canvas, and what it is masked or cropped to,
     /// are properties of the <i>feed</i>, not of a segment — so a transform/mask/crop edit on any
-    /// segment writes every grouped segment of the row in one <see cref="EditorSession.EditItems"/>
-    /// call (one pipeline run, one undo entry — see <see cref="ItemRowScope"/>, which the preview
-    /// gizmo shares so a spinner and a drag touch the same items), exactly as the webcam sidebar
-    /// this replaces behaved. Everything that is about a segment's own edges or its own sound — entry/exit
-    /// transitions and volume — stays single-item, because varying those per segment is precisely
-    /// why the user split the row. An ungrouped item (an import, a text card, an ungrouped row) is a
-    /// row of one either way, so both paths agree there.
+    /// segment writes every segment of that feed on the row in one <see cref="EditorSession.EditFeed"/>
+    /// call (one pipeline run, one undo entry — the preview gizmo shares it, so a spinner and a drag
+    /// touch the same items), exactly as the webcam sidebar this replaces behaved. Those that say
+    /// where the clip sits go through <see cref="EditorSession.EditPlacement"/>, which a
+    /// placement-locked row refuses. Everything that is about a segment's own edges or its own sound
+    /// — entry/exit transitions and volume — stays single-item, because varying those per segment is
+    /// precisely why the user split the row. A text card or an image is a feed of one, so both paths
+    /// agree there.
     ///
     /// Deliberately free of Avalonia types: the panel binds to this, and the tests drive it with no
     /// UI framework at all.
@@ -584,7 +587,13 @@ namespace Prisc.UI.VideoEditor.Inspector
         private bool _trackHidden;
         private bool _trackMuted;
         private bool _isGrouped;
-        private bool _canUngroup;
+        private bool _showPlacementLock;
+        private bool _placementLocked;
+        private bool _hasMultiSelection;
+        private string _multiSelectionTitle = "";
+        private string _multiSelectionCaption = "";
+        private string _trackGroupText = "";
+        private int _trackGroupNumber;
 
         private bool _showSpeed;
         private double _speed = 1.0;
@@ -676,11 +685,25 @@ namespace Prisc.UI.VideoEditor.Inspector
         public SelectedItemViewModel()
         {
             KeystrokeStyle = new KeystrokeStyleEditor(new KeyboardStyleHost(this));
+            // origin null throughout (not this): these change state the setters do not mirror, so the
+            // inspector wants its own ProjectChanged re-read.
+            CommandGroupTracks = new RelayCommand
+            {
+                Executed = _ => _session?.GroupTracks(_session.SelectedTrackIds, null),
+                CanExecute = _ => _session != null && _session.CanGroupTracks(_session.SelectedTrackIds),
+                Text = "Group Tracks",
+            };
             CommandUngroup = new RelayCommand
             {
-                Executed = _ => Ungroup(),
-                CanExecute = _ => CanUngroup,
-                Text = "Ungroup row",
+                Executed = _ => _session?.UngroupTracks(_session.SelectedTrackIds, null),
+                CanExecute = _ => _session != null && _session.CanUngroupTracks(_session.SelectedTrackIds),
+                Text = "Ungroup",
+            };
+            CommandUngroupAll = new RelayCommand
+            {
+                Executed = _ => _session?.UngroupAll(_session.SelectedTrackIds, null),
+                CanExecute = _ => _session != null && _session.CanUngroupTracks(_session.SelectedTrackIds),
+                Text = "Ungroup All",
             };
         }
 
@@ -737,8 +760,15 @@ namespace Prisc.UI.VideoEditor.Inspector
             }
         }
 
-        /// <summary>Turns the row's sync (group) off — the header toggle's inspector twin.</summary>
+        /// <summary>The rows holding selected clips, and every row of any group they touch, as one
+        /// group.</summary>
+        public RelayCommand CommandGroupTracks { get; }
+
+        /// <summary>The rows holding selected clips, out of their groups.</summary>
         public RelayCommand CommandUngroup { get; }
+
+        /// <summary>Every group the rows holding selected clips belong to, dissolved.</summary>
+        public RelayCommand CommandUngroupAll { get; }
 
         // ------------------------------------------------------------------- section visibility
 
@@ -752,7 +782,17 @@ namespace Prisc.UI.VideoEditor.Inspector
 
         /// <summary>Whether the "Nothing selected" placeholder is on show: nothing selected and
         /// no mode that fills the panel on its own.</summary>
-        public bool ShowNothingSelected => !_hasSelection && !_showVoiceRecorder;
+        public bool ShowNothingSelected => !_hasSelection && !_hasMultiSelection && !_showVoiceRecorder;
+
+        /// <summary>Whether the panel shows the several-clips state instead of an item's
+        /// properties.</summary>
+        public bool ShowMultiSelection => _hasMultiSelection && !_showVoiceRecorder;
+
+        /// <summary>"3 clips selected".</summary>
+        public string MultiSelectionTitle => _multiSelectionTitle;
+
+        /// <summary>"on 2 tracks".</summary>
+        public string MultiSelectionCaption => _multiSelectionCaption;
 
         /// <summary>Position/scale/rotation/opacity — anything the compositor draws.</summary>
         public bool ShowTransform => _showTransform;
@@ -889,7 +929,7 @@ namespace Prisc.UI.VideoEditor.Inspector
 
         public bool ShowEntryOptions => _entryKind != TransitionKind.None;
 
-        /// <summary>The entry/exit drop-downs' list for the primary item: <see cref="ShapeTransitionKinds"/>
+        /// <summary>The entry/exit drop-downs' list for the selected item: <see cref="ShapeTransitionKinds"/>
         /// for a shape, <see cref="PictureTransitionKinds"/> otherwise. Sync raises it before
         /// <see cref="EntryKind"/>/<see cref="ExitKind"/> and while <c>_syncing</c> is still set,
         /// so a drop-down that settles its selection during the swap writes nothing back.</summary>
@@ -917,7 +957,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _positionX, value) || _syncing)
                     return;
 
-                EditRow("sel:x", i => TransformOf(i).X = value);
+                EditPlacement("sel:x", i => TransformOf(i).X = value);
             }
         }
 
@@ -930,7 +970,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _positionY, value) || _syncing)
                     return;
 
-                EditRow("sel:y", i => TransformOf(i).Y = value);
+                EditPlacement("sel:y", i => TransformOf(i).Y = value);
             }
         }
 
@@ -944,7 +984,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _scale, value) || _syncing)
                     return;
 
-                EditRow("sel:scale", i => TransformOf(i).Scale = value);
+                EditPlacement("sel:scale", i => TransformOf(i).Scale = value);
             }
         }
 
@@ -962,7 +1002,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _scaleHeight, value) || _syncing || !_hasScaleY)
                     return;
 
-                EditRow("sel:scaleY", i => TransformOf(i).ScaleY = value);
+                EditPlacement("sel:scaleY", i => TransformOf(i).ScaleY = value);
             }
         }
 
@@ -976,7 +1016,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _rotation, value) || _syncing)
                     return;
 
-                EditRow("sel:rotation", i => TransformOf(i).Rotation = value);
+                EditPlacement("sel:rotation", i => TransformOf(i).Rotation = value);
             }
         }
 
@@ -1130,6 +1170,19 @@ namespace Prisc.UI.VideoEditor.Inspector
                 ApplyAspect();
         }
 
+        /// <summary>A locked row's custom W and H are stopped here rather than at the session like
+        /// every other placement write. The model keeps only the ratio, so what a spinner showed
+        /// cannot be read back from it: 7:9 refused against a stored 16:9 would light the 16:9 tile
+        /// and leave the 7 standing.</summary>
+        private bool CustomRatioRefused(string property)
+        {
+            if (!_placementLocked || _syncing)
+                return false;
+
+            OnPropertyChanged(property);
+            return true;
+        }
+
         /// <summary>Custom ratio numerator (width part of W:H).</summary>
         public double CustomAspectW
         {
@@ -1137,7 +1190,7 @@ namespace Prisc.UI.VideoEditor.Inspector
             set
             {
                 value = Clamp(value, 0.1, 1000);
-                if (!Set(ref _customAspectW, value) || _syncing)
+                if (CustomRatioRefused(nameof(CustomAspectW)) || !Set(ref _customAspectW, value) || _syncing)
                     return;
 
                 if (_aspectTile == AspectTile.Custom)
@@ -1152,7 +1205,7 @@ namespace Prisc.UI.VideoEditor.Inspector
             set
             {
                 value = Clamp(value, 0.1, 1000);
-                if (!Set(ref _customAspectH, value) || _syncing)
+                if (CustomRatioRefused(nameof(CustomAspectH)) || !Set(ref _customAspectH, value) || _syncing)
                     return;
 
                 if (_aspectTile == AspectTile.Custom)
@@ -1172,7 +1225,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                     return;
 
                 OnPropertyChanged(nameof(CropTotal));
-                EditRow("sel:cropl", i => SetCrop(i, c => c.Left = value));
+                EditPlacement("sel:cropl", i => SetCrop(i, c => c.Left = value));
             }
         }
 
@@ -1186,7 +1239,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                     return;
 
                 OnPropertyChanged(nameof(CropTotal));
-                EditRow("sel:cropt", i => SetCrop(i, c => c.Top = value));
+                EditPlacement("sel:cropt", i => SetCrop(i, c => c.Top = value));
             }
         }
 
@@ -1200,7 +1253,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                     return;
 
                 OnPropertyChanged(nameof(CropTotal));
-                EditRow("sel:cropr", i => SetCrop(i, c => c.Right = value));
+                EditPlacement("sel:cropr", i => SetCrop(i, c => c.Right = value));
             }
         }
 
@@ -1214,7 +1267,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                     return;
 
                 OnPropertyChanged(nameof(CropTotal));
-                EditRow("sel:cropb", i => SetCrop(i, c => c.Bottom = value));
+                EditPlacement("sel:cropb", i => SetCrop(i, c => c.Bottom = value));
             }
         }
 
@@ -1228,7 +1281,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (_syncing || value != 0 || CropTotal == 0)
                     return;
 
-                EditRow("sel:cropclear", i => TransformOf(i).Crop = null, origin: null);
+                EditPlacement("sel:cropclear", i => TransformOf(i).Crop = null, origin: null);
             }
         }
 
@@ -1301,7 +1354,7 @@ namespace Prisc.UI.VideoEditor.Inspector
             get => _cropDrawActive;
             set
             {
-                if (value && !ShowCropDraw)
+                if (value && (!ShowCropDraw || _placementLocked))
                 {
                     // a toggle the guard refused still has to bounce back
                     OnPropertyChanged(nameof(CropDrawActive));
@@ -1341,7 +1394,7 @@ namespace Prisc.UI.VideoEditor.Inspector
             OnPropertyChanged(nameof(CropDrawActive));
             OnPropertyChanged(nameof(CropInsetsEditable));
 
-            EditRow("sel:cropdraw", i =>
+            EditPlacement("sel:cropdraw", i =>
             {
                 SetCrop(i, c =>
                 {
@@ -1455,12 +1508,12 @@ namespace Prisc.UI.VideoEditor.Inspector
             _cropFollowsWindow = false;
             _cropWindowFollow = null;
             RaiseCropSourceFlags();
-            EditRow("sel:cropwin", i => TransformOf(i).CropWindow = null, origin: null);
+            EditPlacement("sel:cropwin", i => TransformOf(i).CropWindow = null, origin: null);
         }
 
         /// <summary>Writes the pick, and with it the mode. Nothing else is written: the resolved
         /// crop carries the item's own box ratio, so the box does not move and there is no height
-        /// or aspect to seed. One EditRow, so entering the mode and choosing the window are one
+        /// or aspect to seed. One EditPlacement, so entering the mode and choosing the window are one
         /// undo entry rather than two.
         ///
         /// origin: null, like the other aspect and crop writes: this changes state the setters here
@@ -1487,7 +1540,7 @@ namespace Prisc.UI.VideoEditor.Inspector
             string title = pick.Title;
             string app = pick.App;
             int pid = pick.Pid;
-            EditRow("sel:cropwin", i => TransformOf(i).CropWindow = new WindowCrop
+            EditPlacement("sel:cropwin", i => TransformOf(i).CropWindow = new WindowCrop
             {
                 WindowId = id,
                 Title = title,
@@ -1792,9 +1845,9 @@ namespace Prisc.UI.VideoEditor.Inspector
                 // an explicit height seeded from what the item is drawn at right now, so the
                 // picture does not move — the point is the free edge handles, not a jump. Read
                 // BEFORE the aspect is cleared: the seed is the drawn (aspect-shaped) height.
-                // Per item, not per row: grouped segments share the transform's numbers but each
+                // Per item, not per row: a feed's segments share the transform's numbers but each
                 // resolves its own content aspect.
-                EditRow("sel:aspect", i =>
+                EditPlacement("sel:aspect", i =>
                 {
                     var height = CurrentHeightFraction(i);
                     var t = TransformOf(i);
@@ -1807,7 +1860,7 @@ namespace Prisc.UI.VideoEditor.Inspector
 
             var ratio = SelectedAspectRatio();
             var stretch = _aspectStretch;
-            EditRow("sel:aspect", i =>
+            EditPlacement("sel:aspect", i =>
             {
                 var t = TransformOf(i);
                 t.ScaleY = null;
@@ -1952,7 +2005,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _text, value) || _syncing)
                     return;
 
-                EditText("sel:text", t => t.Text = value);
+                EditContent<TextContent>("sel:text", t => t.Text = value);
             }
         }
 
@@ -1966,7 +2019,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                     return;
 
                 var font = String.IsNullOrWhiteSpace(value) ? null : value.Trim();
-                EditText("sel:font", t => t.Font = font);
+                EditContent<TextContent>("sel:font", t => t.Font = font);
             }
         }
 
@@ -1980,7 +2033,8 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _fontSize, value) || _syncing)
                     return;
 
-                EditText("sel:fontsize", t => t.Size = value);
+                if (SelectedItem?.Content is TextContent)
+                    EditPlacement("sel:fontsize", i => ((TextContent)i.Content).Size = value);
             }
         }
 
@@ -1998,7 +2052,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                     return;
 
                 var color = value.Trim();
-                EditText("sel:textcolor", t => t.Color = color);
+                EditContent<TextContent>("sel:textcolor", t => t.Color = color);
             }
         }
 
@@ -2010,7 +2064,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _textAlign, value) || _syncing)
                     return;
 
-                EditText("sel:align", t => t.Align = value);
+                EditContent<TextContent>("sel:align", t => t.Align = value);
             }
         }
 
@@ -2128,6 +2182,35 @@ namespace Prisc.UI.VideoEditor.Inspector
         }
 
         // ------------------------------------------------------------------------------- track
+
+        /// <summary>The TRACK section's Lock Placement button: rows with a placement to lock, which
+        /// leaves out audio, effect and cursor rows.</summary>
+        public bool ShowPlacementLock => _showPlacementLock;
+
+        /// <summary>The button itself. Mirrors <see cref="Track.PlacementLocked"/>. Origin null, unlike
+        /// the toggles below: it changes which rows are enabled and ends crop mode, so the panel wants
+        /// its own re-read.</summary>
+        public bool PlacementLocked
+        {
+            get => _placementLocked;
+            set
+            {
+                if (!Set(ref _placementLocked, value, nameof(PlacementLocked), nameof(PlacementEditable), nameof(PlacementLockLabel))
+                    || _syncing)
+                    return;
+
+                var track = SelectedTrack;
+                if (track != null && track.PlacementLocked != value)
+                    _session.SetTrackPlacementLocked(track.Id, value);
+            }
+        }
+
+        public string PlacementLockLabel => _placementLocked ? "Unlock Placement" : "Lock Placement";
+
+        /// <summary>Whether the rows that write placement are enabled, row by row: Opacity shares
+        /// their section and stays editable. The session refuses the write anyway; this is what
+        /// tells the user before they try.</summary>
+        public bool PlacementEditable => !_placementLocked;
 
         /// <summary>The row's enable toggle (video). Mirrors <see cref="Track.Hidden"/>.</summary>
         public bool TrackHidden
@@ -2272,18 +2355,30 @@ namespace Prisc.UI.VideoEditor.Inspector
             !OperatingSystem.IsMacOS() || System.Runtime.InteropServices.RuntimeInformation.OSArchitecture
                 == System.Runtime.InteropServices.Architecture.Arm64;
 
-        /// <summary>True when the selected item still moves with the rest of its recording.</summary>
+        /// <summary>True when the selected item's row is in a group.</summary>
         public bool IsGrouped => _isGrouped;
 
-        /// <summary>Whether the grouped-object banner offers the Ungroup button. The cursor and
-        /// keystroke overlays only make sense against the recording their input data came from,
-        /// so they can never be cut loose — the banner explains the lock but offers no way out.</summary>
-        public bool CanUngroup => _canUngroup;
+        /// <summary>The other state of the TRACK section's group row, which always has something to
+        /// say: how to get a group.</summary>
+        public bool IsNotGrouped => !_isGrouped;
 
-        /// <summary>The Speed row: media items (video or audio) only, and only once the row is
-        /// ungrouped — a grouped segment keeps the recording's own clock, so re-timing it is not
-        /// offered until the user cuts it loose.</summary>
+        /// <summary>"Grouped with 3 other tracks", counting rows that hold clips.</summary>
+        public string TrackGroupText => _trackGroupText;
+
+        /// <summary>Which of the group colors the link icon wears (see
+        /// <see cref="TimelineViewMath.GroupNumbers"/>). A number and not a brush, as this class is free
+        /// of Avalonia types and the color follows the panel's theme.</summary>
+        public int TrackGroupNumber => _trackGroupNumber;
+
+        public string NotGroupedCaption { get; } = TimelineViewMath.NotGroupedCaption(OperatingSystem.IsMacOS());
+
+        /// <summary>The Speed row: every clip with a clock of its own (media, cursor and keys), grouped
+        /// or not, except a held frame, which plays no source.</summary>
         public bool ShowSpeed => _showSpeed;
+
+        /// <summary>The Speed row's note on a grouped row, where a user may expect a clip's speed to
+        /// reach the rest of the group: it re-times this clip alone.</summary>
+        public bool ShowSpeedGroupCaption => _showSpeed && _isGrouped;
 
         /// <summary>The playback-speed dropdown's selection, as one of <see cref="SpeedOptions"/>.
         /// Writing goes through <see cref="EditorSession.SetItemSpeed"/>, which re-times the item
@@ -2367,7 +2462,7 @@ namespace Prisc.UI.VideoEditor.Inspector
         }
 
         /// <summary>The zoom item's magnification (1 = untouched). Single-item like every other
-        /// property of an effect item: effect items are never grouped into a row.</summary>
+        /// property of an effect item: an effect belongs to no feed.</summary>
         public double ZoomFactor
         {
             get => _zoomFactor;
@@ -2377,7 +2472,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _zoomFactor, value) || _syncing)
                     return;
 
-                EditZoom("sel:zoom", z => z.Zoom = value);
+                EditContent<ZoomContent>("sel:zoom", z => z.Zoom = value);
             }
         }
 
@@ -2392,7 +2487,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _zoomFocusX, value) || _syncing)
                     return;
 
-                EditZoom("sel:zoomx", z => z.FocusX = value);
+                EditContent<ZoomContent>("sel:zoomx", z => z.FocusX = value);
             }
         }
 
@@ -2405,7 +2500,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _zoomFocusY, value) || _syncing)
                     return;
 
-                EditZoom("sel:zoomy", z => z.FocusY = value);
+                EditContent<ZoomContent>("sel:zoomy", z => z.FocusY = value);
             }
         }
 
@@ -2424,7 +2519,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (_syncing)
                     return;
 
-                EditObscure("sel:obscurekind", o => o.Kind = value);
+                EditContent<ObscureContent>("sel:obscurekind", o => o.Kind = value);
             }
         }
 
@@ -2439,7 +2534,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _obscureStrength, value) || _syncing)
                     return;
 
-                EditObscure("sel:obscurestrength", o => o.Strength = value);
+                EditContent<ObscureContent>("sel:obscurestrength", o => o.Strength = value);
             }
         }
 
@@ -2451,7 +2546,8 @@ namespace Prisc.UI.VideoEditor.Inspector
         /// the endpoints and the stroke (a rectangle turned into an arrow runs corner to corner
         /// across the same box; an arrow turned back squares up a sliver box). Those are writes no
         /// setter here mirrors, and the rows on show change with the kind, so the write re-reads
-        /// the whole panel (see <see cref="EditShapeItem"/>).
+        /// the whole panel (see <see cref="EditShapeItem"/>). The box is placement, so a locked row
+        /// refuses it.
         /// </summary>
         public ShapeKindOption ShapeKindChoice
         {
@@ -2461,8 +2557,12 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (value == null || _syncing || value.Value == _shapeKind)
                     return;
 
+                if (SelectedItem?.Content is not ShapeContent)
+                    return;
+
                 var to = value.Value;
-                EditShapeItem("sel:shapekind", item => ShapeLineLayout.ConvertKind(item, to, _session.Project.Output));
+                if (!EditPlacement("sel:shapekind", item => ShapeLineLayout.ConvertKind(item, to, _session.Project.Output), origin: null))
+                    OnPropertyChanged(nameof(ShapeKindChoice)); // the picker already moved, and nothing else will move it back
             }
         }
 
@@ -2477,7 +2577,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _shapePolygonSides, value) || _syncing)
                     return;
 
-                EditShape("sel:shapesides", s => s.PolygonSides = (int)value);
+                EditContent<ShapeContent>("sel:shapesides", s => s.PolygonSides = (int)value);
             }
         }
 
@@ -2490,7 +2590,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _shapeStarPoints, value) || _syncing)
                     return;
 
-                EditShape("sel:shapepoints", s => s.StarPoints = (int)value);
+                EditContent<ShapeContent>("sel:shapepoints", s => s.StarPoints = (int)value);
             }
         }
 
@@ -2505,7 +2605,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _shapeStarInnerRatio, value) || _syncing)
                     return;
 
-                EditShape("sel:shapeinner", s => s.StarInnerRatio = value);
+                EditContent<ShapeContent>("sel:shapeinner", s => s.StarInnerRatio = value);
             }
         }
 
@@ -2520,7 +2620,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _shapeCornerRadius, value) || _syncing)
                     return;
 
-                EditShape("sel:shapecorner", s => s.CornerRadius = value);
+                EditContent<ShapeContent>("sel:shapecorner", s => s.CornerRadius = value);
             }
         }
 
@@ -2554,7 +2654,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 }
                 else
                 {
-                    EditShape("sel:shapestroke", s => s.StrokeWidth = value);
+                    EditContent<ShapeContent>("sel:shapestroke", s => s.StrokeWidth = value);
                 }
             }
         }
@@ -2574,7 +2674,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                     return;
 
                 var color = value.Trim();
-                EditShape("sel:shapestrokecolor", s => s.StrokeColor = color);
+                EditContent<ShapeContent>("sel:shapestrokecolor", s => s.StrokeColor = color);
             }
         }
 
@@ -2587,7 +2687,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (!Set(ref _shapeDash, value) || _syncing)
                     return;
 
-                EditShape("sel:shapedash", s => s.Dash = value);
+                EditContent<ShapeContent>("sel:shapedash", s => s.Dash = value);
             }
         }
 
@@ -2606,7 +2706,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (_syncing)
                     return;
 
-                EditShape("sel:shapefill", s => s.Fill = value);
+                EditContent<ShapeContent>("sel:shapefill", s => s.Fill = value);
             }
         }
 
@@ -2625,7 +2725,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                     return;
 
                 var color = value.Trim();
-                EditShape("sel:shapefillcolor", s => s.FillColor = color);
+                EditContent<ShapeContent>("sel:shapefillcolor", s => s.FillColor = color);
             }
         }
 
@@ -2649,7 +2749,7 @@ namespace Prisc.UI.VideoEditor.Inspector
 
         /// <summary>
         /// The wallpaper's style, as one of <see cref="BackgroundStyleOptions"/>. Written per item
-        /// rather than per row (see <see cref="EditBackground"/>): the split halves of a backdrop
+        /// rather than per row (see <see cref="EditContent{TContent}"/>): the split halves of a backdrop
         /// are two independent items, and changing the wallpaper partway through the video is a
         /// real edit rather than an accident. <c>origin: this</c>, because this setter mirrors its
         /// own dependents by hand and must skip its own echo.
@@ -2671,7 +2771,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 OnPropertyChanged(nameof(BackgroundTheme));
                 // and the color row, which stands in the theme row's place for the solid style
                 OnPropertyChanged(nameof(ShowBackgroundColor));
-                EditBackground("sel:bgstyle", b => b.Style = value.Value);
+                EditContent<BackgroundContent>("sel:bgstyle", b => b.Style = value.Value);
             }
         }
 
@@ -2707,7 +2807,7 @@ namespace Prisc.UI.VideoEditor.Inspector
 
                 _backgroundTheme = value.Value;
                 OnPropertyChanged(nameof(BackgroundTheme));
-                EditBackground("sel:bgtheme", b => b.Theme = value.Value);
+                EditContent<BackgroundContent>("sel:bgtheme", b => b.Theme = value.Value);
             }
         }
 
@@ -2733,7 +2833,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                     return;
 
                 var color = value.Trim();
-                EditBackground("sel:bgcolor", b => b.Color = color);
+                EditContent<BackgroundContent>("sel:bgcolor", b => b.Color = color);
             }
         }
 
@@ -2741,10 +2841,10 @@ namespace Prisc.UI.VideoEditor.Inspector
 
         /// <summary>
         /// The cursor overlay's style, as one of <see cref="CursorStyleOptions"/>. Every property
-        /// of these two sections writes the whole row (<see cref="EditCursor"/> /
+        /// of these two sections writes the whole feed (<see cref="EditCursor"/> /
         /// <see cref="EditKeyboard"/> fan out like <see cref="EditRow"/>): the segments of an
-        /// overlay row are the split pieces of one continuous overlay, so a style the user picked
-        /// on one piece belongs to all of them — an ungrouped row is a row of one either way.
+        /// overlay feed are the split pieces of one continuous overlay, so a style the user picked
+        /// on one piece belongs to all of them.
         /// </summary>
         public NamedOption CursorStyle
         {
@@ -2801,7 +2901,7 @@ namespace Prisc.UI.VideoEditor.Inspector
             }
         }
 
-        /// <summary>The capture sidecar of the recording the selected cursor overlay is synced to
+        /// <summary>The capture sidecar of the recording the selected cursor overlay belongs to
         /// (<see cref="Source.InputCapturePath"/>), or null when the item is not a cursor overlay or
         /// its source is gone. Read-only, and here only for the <c>native</c> style tile: that style
         /// draws the sprites the recorder rasterized into this file, so its preview has to read
@@ -3489,7 +3589,7 @@ namespace Prisc.UI.VideoEditor.Inspector
         private void SetVoiceRecorderMode(bool value)
         {
             Set(ref _showVoiceRecorder, value, nameof(ShowVoiceRecorder),
-                nameof(ShowProperties), nameof(ShowNothingSelected));
+                nameof(ShowProperties), nameof(ShowNothingSelected), nameof(ShowMultiSelection));
         }
 
         /// <summary>
@@ -3619,7 +3719,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                 var isEffect = item?.Content is SpeedContent or ZoomContent;
                 var isText = item?.Content is TextContent;
                 // the cursor overlay is placed by the capture data, not by the item: its position,
-                // size, aspect, crop and mask all come from the screen row it is synced to, so its
+                // size, aspect, crop and mask all come from the screen clip it draws through, so its
                 // visual half is off for the same reason an effect's is. The keystroke overlay is
                 // the other way round — Transform IS where the block sits and how wide it wraps —
                 // so it keeps placement, and only the picture-shaped rows (aspect/crop/shape,
@@ -3655,8 +3755,17 @@ namespace Prisc.UI.VideoEditor.Inspector
                 // opacity stay.
                 var isLineShape = shape is { IsLine: true };
 
+                var selectedCount = _session?.SelectedItemIds.Count ?? 0;
                 Set(ref _hasSelection, item != null, nameof(HasSelection),
                     nameof(ShowProperties), nameof(ShowNothingSelected));
+                Set(ref _hasMultiSelection, selectedCount > 1, nameof(ShowMultiSelection), nameof(ShowNothingSelected));
+                if (selectedCount > 1)
+                {
+                    var rows = _session.SelectedTrackIds.Count;
+                    Set(ref _multiSelectionTitle, $"{selectedCount} clips selected", nameof(MultiSelectionTitle));
+                    Set(ref _multiSelectionCaption, rows == 1 ? "on 1 track" : $"on {rows} tracks", nameof(MultiSelectionCaption));
+                }
+
                 Set(ref _showTransform, visual, nameof(ShowTransform));
                 Set(ref _showScale, visual && !isText && !isLineShape, nameof(ShowScale));
                 // the keystroke overlay keeps placement but not rotation: the composer draws the
@@ -3697,16 +3806,27 @@ namespace Prisc.UI.VideoEditor.Inspector
                 if (track is { Kind: TrackKind.Audio })
                     Set(ref _denoiseStrength, track.DenoiseStrength, nameof(DenoiseStrength));
                 OnPropertyChanged(nameof(ShowDenoiseStrength));
-                Set(ref _isGrouped, item?.GroupId != null, nameof(IsGrouped));
-                Set(ref _canUngroup,
-                    _isGrouped && item.Content is not CursorContent and not KeyboardContent,
-                    nameof(CanUngroup));
+                Set(ref _isGrouped, track?.GroupId != null, nameof(IsGrouped), nameof(IsNotGrouped));
+                if (track?.GroupId is Guid group)
+                {
+                    var project = _session.Project;
+                    Set(ref _trackGroupText, TimelineViewMath.GroupedWith(TimelineOps.OccupiedGroupRows(project, track.Id) - 1),
+                        nameof(TrackGroupText));
+                    Set(ref _trackGroupNumber, TimelineViewMath.GroupNumbers(project)[group], nameof(TrackGroupNumber));
+                }
+                CommandGroupTracks.RaiseCanExecuteChanged();
                 CommandUngroup.RaiseCanExecuteChanged();
+                CommandUngroupAll.RaiseCanExecuteChanged();
+                Set(ref _showPlacementLock, visual, nameof(ShowPlacementLock));
+                Set(ref _placementLocked, track?.PlacementLocked ?? false,
+                    nameof(PlacementLocked), nameof(PlacementEditable), nameof(PlacementLockLabel));
 
                 var media = item?.Content as MediaContent;
+                var clock = item?.Content as SourceClockContent;
                 // a freeze frame plays no source, so it has no speed to set
-                Set(ref _showSpeed, media is { Freeze: false } && item.GroupId == null, nameof(ShowSpeed));
-                Set(ref _speed, TimelineOps.SpeedOf(media), nameof(SpeedChoice));
+                Set(ref _showSpeed, clock is { Freeze: false }, nameof(ShowSpeed));
+                OnPropertyChanged(nameof(ShowSpeedGroupCaption));
+                Set(ref _speed, TimelineOps.SpeedOf(clock), nameof(SpeedChoice));
 
                 // the speed-warp opt-out is written on the content, so it needs one: an audio row
                 // whose item is not a media clip (nothing writes one today, but the section's
@@ -3889,10 +4009,11 @@ namespace Prisc.UI.VideoEditor.Inspector
                 SyncAspect(item);
 
                 // crop mode only means anything while a croppable picture is selected, and
-                // drawing one only while its crop is set by hand
-                if (!isCroppable)
+                // drawing one only while its crop is set by hand; locking the row ends both, and
+                // so does an undo that lands on a locked one
+                if (!isCroppable || _placementLocked)
                     CropModeActive = false;
-                if (!ShowCropDraw)
+                if (!ShowCropDraw || _placementLocked)
                     CropDrawActive = false;
 
                 if (item?.Content is TextContent text)
@@ -3957,28 +4078,36 @@ namespace Prisc.UI.VideoEditor.Inspector
 
         // ------------------------------------------------------------------------- write paths
 
-        /// <summary>The row-wide write (see the class remarks): every grouped segment of the
-        /// selected item's row in one mutation, or just the item when it is ungrouped.</summary>
-        private void EditRow(string coalesceKey, Action<Item> edit) => EditRow(coalesceKey, edit, this);
+        /// <summary>The row-wide write (see the class remarks): every segment of the selected item's
+        /// feed on its row in one mutation, or just the item when it is a feed of one. For what stays
+        /// editable on a locked row: opacity, mask, surround.</summary>
+        private void EditRow(string coalesceKey, Action<Item> edit)
+        {
+            var item = SelectedItem;
+            if (item != null)
+                _session.EditFeed(item.Id, edit, coalesceKey, this);
+        }
+
+        /// <summary>The row-wide write for placement (<see cref="EditorSession.EditPlacement"/>), which
+        /// a locked row refuses. The setters have already shown the new value by then, so a refusal
+        /// reads the model back, and returns false for the one control a re-read cannot reach.</summary>
+        private bool EditPlacement(string coalesceKey, Action<Item> edit) => EditPlacement(coalesceKey, edit, this);
 
         /// <summary>
         /// Same, with an explicit origin. Spinner-backed setters pass <c>this</c> so the echo does
-        /// not fight the control being held; the aspect/crop writes pass null instead — they change
-        /// state whose mirrors (tile selection, crop total, the height row) the setters do not
-        /// maintain by hand, so the inspector wants its own <see cref="Session_ProjectChanged"/>
-        /// re-read, exactly like <see cref="Ungroup"/>.
+        /// not fight the control being held; the aspect, crop and kind writes pass null instead —
+        /// they change state whose mirrors (tile selection, crop total, the height row) the setters
+        /// do not maintain by hand, so the inspector wants its own
+        /// <see cref="Session_ProjectChanged"/> re-read, exactly like the group commands.
         /// </summary>
-        private void EditRow(string coalesceKey, Action<Item> edit, object origin)
+        private bool EditPlacement(string coalesceKey, Action<Item> edit, object origin)
         {
             var item = SelectedItem;
-            if (item == null)
-                return;
+            if (item == null || _session.EditPlacement(item.Id, edit, coalesceKey, origin))
+                return true;
 
-            // scoped to what the write reaches (the row for a feed's segments, the item alone
-            // otherwise) — see ItemRowScope.CoalesceScope.
-            var scope = ItemRowScope.CoalesceScope(_session, item);
-            _session.EditItems(ItemRowScope.RowItemIds(_session, item), edit, $"{coalesceKey}:{scope}",
-                structural: false, origin: origin);
+            Sync();
+            return false;
         }
 
         /// <summary>The single-item write: properties of this segment alone. The coalesce key is
@@ -3992,59 +4121,31 @@ namespace Prisc.UI.VideoEditor.Inspector
             _session.EditItem(item.Id, edit, $"{coalesceKey}:{item.Id}", structural: false, origin: this);
         }
 
-        /// <summary>The text-card write. Content-guarded on both sides: the text section's bindings
-        /// stay live while it is hidden, so a stale write must find nothing to do rather than
-        /// throw at a pointer handler.</summary>
-        private void EditText(string coalesceKey, Action<TextContent> edit)
+        /// <summary>The write of one kind of content's own fields. Content-guarded on both sides: a
+        /// section's bindings stay live while it is hidden, so a stale write must find nothing to do
+        /// rather than throw at a pointer handler. Single-item, unlike the overlay writes, and that
+        /// includes a split wallpaper: its segments are not the pieces of one continuous capture,
+        /// they are separate backdrops the user may well want to differ.</summary>
+        private void EditContent<TContent>(string coalesceKey, Action<TContent> edit)
+            where TContent : ItemContent
         {
             var item = SelectedItem;
-            if (item?.Content is not TextContent)
+            if (item?.Content is not TContent)
                 return;
 
             _session.EditItem(item.Id, i =>
             {
-                if (i.Content is TextContent text)
-                    edit(text);
-            }, $"{coalesceKey}:{item.Id}", structural: false, origin: this);
-        }
-
-        /// <summary>The obscure write, content-guarded on both sides like <see cref="EditText"/>.</summary>
-        private void EditObscure(string coalesceKey, Action<ObscureContent> edit)
-        {
-            var item = SelectedItem;
-            if (item?.Content is not ObscureContent)
-                return;
-
-            _session.EditItem(item.Id, i =>
-            {
-                if (i.Content is ObscureContent obscure)
-                    edit(obscure);
-            }, $"{coalesceKey}:{item.Id}", structural: false, origin: this);
-        }
-
-        /// <summary>The shape write, content-guarded on both sides like <see cref="EditText"/>.
-        /// For the writes whose every consequence the setter has already mirrored.</summary>
-        private void EditShape(string coalesceKey, Action<ShapeContent> edit)
-        {
-            var item = SelectedItem;
-            if (item?.Content is not ShapeContent)
-                return;
-
-            _session.EditItem(item.Id, i =>
-            {
-                if (i.Content is ShapeContent shape)
-                    edit(shape);
+                if (i.Content is TContent content)
+                    edit(content);
             }, $"{coalesceKey}:{item.Id}", structural: false, origin: this);
         }
 
         /// <summary>
-        /// The shape write that reaches past the content: a kind change
-        /// (<see cref="ShapeLineLayout.ConvertKind"/>) or a line kind's re-fit
-        /// (<see cref="ShapeLineLayout.Refit"/>) rewrites the box, and the kind decides which rows
-        /// are on show, the stroke floor and header, the Center X/Y range and whether Rotation and
-        /// the size rows are offered at all. No setter mirrors any of that by hand, so this passes
-        /// a null origin, exactly like the aspect and crop writes (see
-        /// <see cref="EditRow(string, Action{Item}, object)"/>), and
+        /// The shape write that reaches past the content: a line kind's re-fit
+        /// (<see cref="ShapeLineLayout.Refit"/>) rewrites the box. A locked row allows it, since the
+        /// line stays where it is and only its padding follows the stroke. No setter mirrors that by
+        /// hand, so this passes a null origin, exactly like the aspect and crop writes (see
+        /// <see cref="EditPlacement(string, Action{Item}, object)"/>), and
         /// <see cref="Session_ProjectChanged"/> re-reads every row. Never <c>this</c> here: that
         /// handler skips its own origin's echo.
         /// </summary>
@@ -4061,44 +4162,11 @@ namespace Prisc.UI.VideoEditor.Inspector
             }, $"{coalesceKey}:{item.Id}", structural: false, origin: null);
         }
 
-        /// <summary>The zoom write, content-guarded on both sides like <see cref="EditText"/>: the
-        /// zoom section's bindings stay live while it is hidden, so a stale write must find nothing
-        /// to do.</summary>
-        private void EditZoom(string coalesceKey, Action<ZoomContent> edit)
-        {
-            var item = SelectedItem;
-            if (item?.Content is not ZoomContent)
-                return;
-
-            _session.EditItem(item.Id, i =>
-            {
-                if (i.Content is ZoomContent zoom)
-                    edit(zoom);
-            }, $"{coalesceKey}:{item.Id}", structural: false, origin: this);
-        }
-
-        /// <summary>The wallpaper write, content-guarded on both sides like
-        /// <see cref="EditZoom"/>: the section's bindings stay live while it is hidden, so a stale
-        /// write must find nothing to do rather than throw at a pointer handler. Single-item,
-        /// unlike the overlay writes: the segments of a split background are not the pieces of one
-        /// continuous capture, they are separate backdrops the user may well want to differ.</summary>
-        private void EditBackground(string coalesceKey, Action<BackgroundContent> edit)
-        {
-            var item = SelectedItem;
-            if (item?.Content is not BackgroundContent)
-                return;
-
-            _session.EditItem(item.Id, i =>
-            {
-                if (i.Content is BackgroundContent background)
-                    edit(background);
-            }, $"{coalesceKey}:{item.Id}", structural: false, origin: this);
-        }
-
-        /// <summary>The cursor-overlay write: content-guarded on both sides like
-        /// <see cref="EditZoom"/> (the section's bindings stay live while it is hidden), and
-        /// row-wide like <see cref="EditRow"/> — the split segments of an overlay row are one
-        /// overlay, so they must not end up with different styles.</summary>
+        /// <summary>The cursor-overlay write: content-guarded like <see cref="EditContent{TContent}"/>
+        /// (the section's bindings stay live while it is hidden), though only on the outside, since
+        /// <see cref="EditorSession.EditFeed"/> reaches only clips of the same type. Row-wide like
+        /// <see cref="EditRow"/>: the split segments of an overlay feed are one overlay, so they must
+        /// not end up with different styles.</summary>
         private void EditCursor(string coalesceKey, Action<CursorContent> edit)
         {
             EditOverlayRow<CursorContent>(coalesceKey, edit);
@@ -4114,15 +4182,8 @@ namespace Prisc.UI.VideoEditor.Inspector
             where TContent : ItemContent
         {
             var item = SelectedItem;
-            if (item?.Content is not TContent)
-                return;
-
-            var scope = ItemRowScope.CoalesceScope(_session, item);
-            _session.EditItems(ItemRowScope.RowItemIds(_session, item), i =>
-            {
-                if (i.Content is TContent content)
-                    edit(content);
-            }, $"{coalesceKey}:{scope}", structural: false, origin: this);
+            if (item?.Content is TContent)
+                _session.EditFeed(item.Id, i => edit((TContent)i.Content), coalesceKey, this);
         }
 
         /// <summary>Tile setter body, on <see cref="SetSurroundKind"/>'s terms: only a true write
@@ -4273,7 +4334,7 @@ namespace Prisc.UI.VideoEditor.Inspector
         /// <summary>A surround dial's write: row-wide like every other property of how the row's
         /// picture is drawn, and a no-op on an item with no surround — the section's bindings stay
         /// live while it is hidden, so a stale write must find nothing to do
-        /// (<see cref="EditText"/>'s rule).</summary>
+        /// (<see cref="EditContent{TContent}"/>'s rule).</summary>
         private void EditSurround(string coalesceKey, Action<Surround> edit)
         {
             EditRow(coalesceKey, i =>
@@ -4376,31 +4437,12 @@ namespace Prisc.UI.VideoEditor.Inspector
                 EditSelected("sel:rampexit", i => i.Exit = Build());
         }
 
-        private void Ungroup()
-        {
-            var item = SelectedItem;
-            var track = SelectedTrack;
-            if (item == null || track == null || item.GroupId == null)
-                return;
-
-            // origin null (not this): ungrouping changes state the setters do not mirror, so the
-            // inspector wants its own ProjectChanged re-read.
-            _session.UngroupTrack(track.Id, null);
-        }
-
         // ----------------------------------------------------------------------- model helpers
 
         /// <summary>Always re-resolved: undo/redo replace both the project and its items.</summary>
-        private Item SelectedItem => _session?.PrimarySelectedItem;
+        private Item SelectedItem => _session?.SoleSelectedItem;
 
-        private Track SelectedTrack
-        {
-            get
-            {
-                var item = SelectedItem;
-                return item == null ? null : _session.Project.Tracks.FirstOrDefault(t => t.Id == item.TrackId);
-            }
-        }
+        private Track SelectedTrack => _session?.Project.TrackOf(SelectedItem);
 
         private static Transform TransformOf(Item item) => item.Transform ??= new Transform();
 

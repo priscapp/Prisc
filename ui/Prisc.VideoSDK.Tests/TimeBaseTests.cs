@@ -237,6 +237,46 @@ namespace Prisc.VideoSDK.Tests
             }
         }
 
+        [Theory]
+        [InlineData(1, 15_360, 153_600)]  // an mp4 at 30 fps: 10 s
+        [InlineData(1, 90_000, 900_000)]  // mpeg-ts
+        [InlineData(1, 1000, 10_000)]     // matroska ms
+        [InlineData(1001, 30_000, 300)]   // 29.97 frame ticks
+        public void A_seek_timestamp_for_the_tick_before_a_keyframe_is_not_the_keyframe(int tbNum, int tbDen, long keyframe)
+        {
+            long ticks = TimeBase.StreamTimeToTicks(keyframe, tbNum, tbDen);
+
+            Assert.Equal(keyframe, TimeBase.TicksToStreamTime(ticks - 1, tbNum, tbDen)); // why it needs saying
+            Assert.Equal(keyframe - 1, TimeBase.TicksToStreamTimeFloor(ticks - 1, tbNum, tbDen));
+        }
+
+        [Theory]
+        [InlineData(1, 15_360)]
+        [InlineData(1, 90_000)]
+        [InlineData(1, 1000)]
+        [InlineData(1001, 30_000)]
+        [InlineData(1, 30)]
+        public void A_seek_timestamp_for_a_reported_instant_is_that_frame_exactly(int tbNum, int tbDen)
+        {
+            // a rounded-down read-back must not fall to the timestamp before: a keyframe's own
+            // instant seeks to that keyframe, not a whole group of pictures earlier
+            foreach (long pts in new long[] { 0, 1, 2, 511, 512, 1024, 153_600, 1_000_001, -1, -512 })
+                Assert.Equal(pts, TimeBase.TicksToStreamTimeFloor(TimeBase.StreamTimeToTicks(pts, tbNum, tbDen), tbNum, tbDen));
+        }
+
+        [Fact]
+        public void A_seek_timestamp_is_never_after_the_instant_and_never_a_whole_step_short()
+        {
+            // a time base that mp4s at 30 fps really use, across a keyframe's edge at 10 s
+            const int den = 15_360;
+            for (long ticks = 99_000_000; ticks < 100_001_000; ticks += 7)
+            {
+                long ts = TimeBase.TicksToStreamTimeFloor(ticks, 1, den);
+                Assert.True(TimeBase.StreamTimeToTicks(ts, 1, den) <= ticks, $"{ts} is after {ticks}");
+                Assert.True(TimeBase.StreamTimeToTicks(ts + 1, 1, den) > ticks, $"{ts} is short of {ticks}");
+            }
+        }
+
         [Fact]
         public void Rescale_matches_exact_math_on_large_values()
         {

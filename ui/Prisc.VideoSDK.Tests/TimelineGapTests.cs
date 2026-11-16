@@ -17,16 +17,15 @@ namespace Prisc.VideoSDK.Tests
 
         /// <summary>One recording — screen, webcam and audio rows grouped over [0, 10s) with a 2s
         /// source in-point — split at 4s and the right halves moved 3s later: every row has a gap
-        /// over [4s, 7s), the left halves in the original group and the right halves in a new
-        /// one.</summary>
+        /// over [4s, 7s).</summary>
         private static Project GappedProject(out Track screenTrack, out Track audioTrack,
             out Item screenLeft, out Item screenRight)
         {
             var sourceId = Guid.NewGuid();
             var group = Guid.NewGuid();
-            screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0 };
-            var webcamTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Webcam", Order = 1 };
-            audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 2 };
+            screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0, GroupId = group };
+            var webcamTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Webcam", Order = 1, GroupId = group };
+            audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 2, GroupId = group };
 
             Item NewItem(Track track, int streamIndex) => new Item
             {
@@ -35,7 +34,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = 0,
                 DurationTicks = Ms(10_000),
                 Content = new MediaContent { SourceId = sourceId, StreamIndex = streamIndex, SourceInTicks = Ms(2_000) },
-                GroupId = group,
             };
 
             var screen = NewItem(screenTrack, 0);
@@ -60,11 +58,11 @@ namespace Prisc.VideoSDK.Tests
                 Items = { screen, NewItem(webcamTrack, 1), NewItem(audioTrack, 2) },
             };
 
-            Assert.True(TimelineOps.Split(project, screen.Id, Ms(4_000)));
+            Assert.True(TimelineOps.SplitAcross(project, Ms(4_000)).Cut);
             var screenTrackId = screenTrack.Id;
             screenLeft = screen;
             screenRight = project.Items.Single(i => i.TrackId == screenTrackId && i.TimelineStartTicks == Ms(4_000));
-            TimelineOps.Move(project, screenRight.Id, Ms(3_000));
+            TimeLinkedMoves.MoveLinked(project, screenRight.Id, Ms(3_000));
             Assert.Empty(project.Validate());
             return project;
         }
@@ -128,7 +126,7 @@ namespace Prisc.VideoSDK.Tests
         // ---- close ----
 
         [Fact]
-        public void CloseGap_slides_the_right_clip_and_its_group_onto_the_gap_start()
+        public void CloseGap_slides_the_right_clips_of_the_group_onto_the_gap_start()
         {
             var project = GappedProject(out var screenTrack, out _, out var left, out var right);
             var gap = TimelineOps.FindGap(project, screenTrack.Id, Ms(5_000)).Value;
@@ -137,9 +135,10 @@ namespace Prisc.VideoSDK.Tests
 
             Assert.Equal(Ms(4_000), right.TimelineStartTicks);
             Assert.Equal(0, left.TimelineStartTicks);
-            // the right halves on the other rows are its group, so they closed too
-            Assert.All(project.Items.Where(i => i.GroupId == right.GroupId),
-                i => Assert.Equal(Ms(4_000), i.TimelineStartTicks));
+            // the right halves on the other rows are in its group, so they closed too
+            var rightHalves = project.Items.Where(i => i.TimelineStartTicks != 0).ToList();
+            Assert.Equal(3, rightHalves.Count);
+            Assert.All(rightHalves, i => Assert.Equal(Ms(4_000), i.TimelineStartTicks));
             Assert.Empty(project.Validate());
         }
 
@@ -148,7 +147,7 @@ namespace Prisc.VideoSDK.Tests
         {
             var project = GappedProject(out var screenTrack, out _, out _, out var right);
             var gap = TimelineOps.FindGap(project, screenTrack.Id, Ms(5_000)).Value;
-            TimelineOps.Move(project, right.Id, Ms(1_000));
+            TimeLinkedMoves.MoveLinked(project, right.Id, Ms(1_000));
 
             Assert.False(TimelineOps.CloseGap(project, gap));
             Assert.Equal(Ms(8_000), right.TimelineStartTicks);
@@ -181,6 +180,8 @@ namespace Prisc.VideoSDK.Tests
         {
             var project = GappedProject(out var screenTrack, out _, out var left, out _);
             left.Transform.Scale = 0.5;
+            left.Entry = new Transition { Kind = TransitionKind.Wipe, DurationTicks = Ms(500) };
+            left.Exit = new Transition { Kind = TransitionKind.Wipe, DurationTicks = Ms(500) };
             var gap = TimelineOps.FindGap(project, screenTrack.Id, Ms(5_000)).Value;
 
             var id = TimelineOps.FillGapWithFreeze(project, gap, fromLeft: true);
@@ -191,7 +192,11 @@ namespace Prisc.VideoSDK.Tests
             // the left half plays source [2s, 6s): its last frame is just short of 6s
             Assert.Equal(Ms(6_000) - 1, Media(freeze).SourceInTicks);
             Assert.Equal(0.5, freeze.Transform.Scale);
-            Assert.Null(freeze.GroupId);
+            // the neighbor keeps its transitions; a held frame wears the picture, not the fades
+            Assert.Null(freeze.Entry);
+            Assert.Null(freeze.Exit);
+            Assert.NotNull(left.Entry);
+            Assert.NotNull(left.Exit);
             Assert.Empty(project.Validate());
         }
 
@@ -229,7 +234,7 @@ namespace Prisc.VideoSDK.Tests
             var freezeId = TimelineOps.FillGapWithFreeze(project, gap, fromLeft: false);
             var freeze = project.Items.Single(i => i.Id == freezeId);
             var frame = Media(freeze).SourceInTicks;
-            TimelineOps.Move(project, right.Id, Ms(100_000)); // room to grow past the source's end
+            TimeLinkedMoves.MoveLinked(project, right.Id, Ms(100_000)); // room to grow past the source's end
 
             Assert.Equal(Ms(90_000), TimelineOps.TrimEnd(project, freeze.Id, Ms(90_000)));
             Assert.True(TimelineOps.SplitItem(project, freeze.Id, Ms(50_000)));
@@ -269,12 +274,14 @@ namespace Prisc.VideoSDK.Tests
             TimelineOps.FillGapWithFreeze(project, gap, fromLeft: true);
 
             var map = ProjectTimelineMap.Build(project);
-            Assert.True(map.TryGetVideo((Media(left).SourceId, 0), out var stream));
+            Assert.True(map.TryGetVideo((Media(left).SourceId, 0, 0), out var stream));
 
             Assert.Equal(Ms(6_000) - 1, stream.TimelineToSource(Ms(4_000)));
             Assert.Equal(Ms(6_000) - 1, stream.TimelineToSource(Ms(6_500)));
-            Assert.True(stream.IsFrozenAt(Ms(5_000)));
-            Assert.False(stream.IsFrozenAt(Ms(3_000)));
+            // a hold's frame says nothing about the instant inside it; a played frame does
+            Assert.False(stream.TryMapInSegmentAt(Ms(5_000), Media(left).SourceInTicks, out _));
+            Assert.True(stream.TryMapInSegmentAt(Ms(3_000), Ms(5_000), out long played));
+            Assert.Equal(Ms(3_000), played);
 
             // entering and leaving the hold are both seams the player hops at
             Assert.NotEqual(stream.OffsetAtTimeline(Ms(3_000)), stream.OffsetAtTimeline(Ms(5_000)));
@@ -284,7 +291,7 @@ namespace Prisc.VideoSDK.Tests
             // the halves still play contiguous source [2s, 6s) + [6s, ...), so the hold cuts nothing
             Assert.Empty(stream.SourceCuts.Ranges);
             // a source frame after the hold paces to the right clip, never into the hold
-            Assert.Equal(Ms(7_000), stream.SourceToTimeline(Media(right).SourceInTicks));
+            Assert.Equal(Ms(7_000), stream.SourceToTimeline(Media(right).SourceInTicks, nearTlTicks: 0));
         }
 
         // ---- rejoin ----
@@ -294,7 +301,7 @@ namespace Prisc.VideoSDK.Tests
         {
             // cut at 4s, then 1s trimmed off each side of the cut: a [3s, 5s) gap on the row
             var project = GappedProject(out var screenTrack, out _, out var left, out var right);
-            TimelineOps.Move(project, right.Id, -Ms(3_000));
+            TimeLinkedMoves.MoveLinked(project, right.Id, -Ms(3_000));
             TimelineOps.TrimEnd(project, left.Id, -Ms(1_000));
             TimelineOps.TrimStart(project, right.Id, Ms(1_000));
             var gap = TimelineOps.FindGap(project, screenTrack.Id, Ms(4_000)).Value;
@@ -332,9 +339,8 @@ namespace Prisc.VideoSDK.Tests
             var later = AddItem(project, screenTrack, Ms(15_000), Ms(1_000), new TextContent { Text = "end" });
             // 2s of source cut out of the middle, but the clips only 1s apart (moved on their own:
             // the other rows' halves are not trimmed and would collide)
-            TimelineOps.Ungroup(project, new[] { right.Id });
             TimelineOps.TrimStart(project, right.Id, Ms(2_000));
-            TimelineOps.Move(project, right.Id, -Ms(4_000)); // right: [5s, 9s) playing source [8s, 12s)
+            TimelineOps.Move(project, new[] { right.Id }, -Ms(4_000)); // right: [5s, 9s) playing source [8s, 12s)
             var gap = TimelineOps.FindGap(project, screenTrack.Id, Ms(4_500)).Value;
 
             Assert.True(TimelineOps.RejoinGap(project, gap));
@@ -399,14 +405,13 @@ namespace Prisc.VideoSDK.Tests
             var gap = session.FindGap(screenTrack.Id, Ms(5_000)).Value;
             var audioGap = session.FindGap(audioTrack.Id, Ms(5_000)).Value;
 
-            Assert.True(session.CopyItem(left.Id));
+            Assert.True(session.CopyItems(new[] { left.Id }));
             Assert.False(session.CanPasteIntoGap(audioGap)); // a picture never lands on an audio row
-            var id = session.PasteIntoGap(gap);
+            var id = Assert.Single(session.PasteIntoGap(gap));
 
             var pasted = session.Project.Items.Single(i => i.Id == id);
             Assert.Equal((Ms(4_000), Ms(3_000)), (pasted.TimelineStartTicks, pasted.DurationTicks));
             Assert.Equal(Ms(2_000), Media(pasted).SourceInTicks);
-            Assert.Null(pasted.GroupId);
 
             session.Undo();
             Assert.DoesNotContain(session.Project.Items, i => i.Id == id);
@@ -417,7 +422,7 @@ namespace Prisc.VideoSDK.Tests
         {
             var project = GappedProject(out _, out _, out var left, out _);
             var session = new EditorSession(project, null, null);
-            Assert.True(session.CopyItem(left.Id));
+            Assert.True(session.CopyItems(new[] { left.Id }));
 
             var other = new Project
             {
@@ -428,7 +433,7 @@ namespace Prisc.VideoSDK.Tests
             var otherSession = new EditorSession(other, null, null);
             var gap = otherSession.FindGap(video.Id, 0).Value;
 
-            Assert.NotNull(otherSession.PasteIntoGap(gap));
+            Assert.NotEmpty(otherSession.PasteIntoGap(gap));
             Assert.Contains(otherSession.Project.Sources, s => s.Id == Media(left).SourceId);
             Assert.Empty(otherSession.Project.Validate());
         }
@@ -451,6 +456,29 @@ namespace Prisc.VideoSDK.Tests
             Assert.False(session.CloseGap(gap));
             Assert.True(session.RippleCloseGap(gap));
             Assert.Empty(session.Project.Validate());
+        }
+
+        [Fact]
+        public void CanCloseGap_is_false_when_an_exempt_group_member_would_collide()
+        {
+            // the same collision with the sliding audio on the output clock and no speed item in
+            // sight: nothing needs re-fitting, so the slide must not end-trim 4s of grouped audio
+            // to squeeze it in front of the clip in its way
+            var project = GappedProject(out var screenTrack, out var audioTrack, out _, out _);
+            var audioRight = project.Items.Single(i => i.TrackId == audioTrack.Id && i.TimelineStartTicks == Ms(7_000));
+            Media(audioRight).SpeedWarpExempt = true;
+            AddItem(project, audioTrack, Ms(5_000), Ms(1_000), new MediaContent
+            {
+                SourceId = project.Sources[0].Id,
+                StreamIndex = 2,
+            });
+            var session = new EditorSession(project, null, null);
+            var gap = session.FindGap(screenTrack.Id, Ms(5_000)).Value;
+            var before = session.Project.ToJson();
+
+            Assert.False(session.CanCloseGap(gap));
+            Assert.False(session.CloseGap(gap));
+            Assert.Equal(before, session.Project.ToJson());
         }
     }
 }

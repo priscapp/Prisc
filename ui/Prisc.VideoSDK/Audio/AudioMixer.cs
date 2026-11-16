@@ -29,7 +29,9 @@ namespace Prisc.VideoSDK.Audio
     /// Timeline→source mapping mirrors the video path (<c>SourceInTicks + (t − start)</c>) but is
     /// computed once per item as a constant sample offset (<see cref="AudioTime.SourceSampleOffset"/>)
     /// so chunk boundaries never re-round through ticks — back-to-back cut items read their
-    /// shared stream gaplessly.
+    /// shared stream gaplessly. Items that overlap on one stream read it in lanes of their own
+    /// (<see cref="StreamLanes"/>, assigned once per mixer, and a preview mixer lives no longer than
+    /// one edit or seek), so a source's forward reads stay forward.
     ///
     /// <para>
     /// Items flagged <see cref="MediaContent.SpeedWarpExempt"/> live on the OUTPUT clock when
@@ -58,11 +60,12 @@ namespace Prisc.VideoSDK.Audio
 
         private sealed class ActiveItem
         {
-            public ActiveItem(Item item, MediaContent media, long firstSample, long endSample,
+            public ActiveItem(Item item, MediaContent media, int lane, long firstSample, long endSample,
                 long sourceOffset, bool ramped, double speed, long srcBase)
             {
                 Item = item;
                 Media = media;
+                Lane = lane;
                 FirstSample = firstSample;
                 EndSample = endSample;
                 SourceOffset = sourceOffset;
@@ -73,6 +76,7 @@ namespace Prisc.VideoSDK.Audio
 
             public Item Item { get; }
             public MediaContent Media { get; }
+            public int Lane { get; }             // the stream's lane this item reads
             public long FirstSample { get; }     // first output sample the item covers
             public long EndSample { get; }       // exclusive
             public long SourceOffset { get; }    // source sample = output sample + offset (speed 1)
@@ -111,6 +115,7 @@ namespace Prisc.VideoSDK.Audio
                     audioTracks.TryAdd(track.Id, track);
             }
 
+            var lanes = StreamLanes.Assign(project);
             foreach (var item in project.Items ?? new List<Item>())
             {
                 if (item.Content is not MediaContent media || item.DurationTicks <= 0)
@@ -118,6 +123,7 @@ namespace Prisc.VideoSDK.Audio
                 if (!audioTracks.TryGetValue(item.TrackId, out var track) || track.Muted)
                     continue;
 
+                int lane = StreamLanes.LaneOf(lanes, item.Id);
                 if (_warp != null && media.SpeedWarpExempt)
                 {
                     // the output clock: the span is the warp image of the item's project span,
@@ -127,7 +133,7 @@ namespace Prisc.VideoSDK.Audio
                     if (outputEnd <= outputStart)
                         continue;
 
-                    _outputItems.Add(new ActiveItem(item, media,
+                    _outputItems.Add(new ActiveItem(item, media, lane,
                         AudioTime.SamplesCeil(outputStart, _rate),
                         AudioTime.SamplesCeil(outputEnd, _rate),
                         AudioTime.SourceSampleOffset(media.SourceInTicks, outputStart, _rate),
@@ -137,7 +143,7 @@ namespace Prisc.VideoSDK.Audio
                     continue;
                 }
 
-                _items.Add(new ActiveItem(item, media,
+                _items.Add(new ActiveItem(item, media, lane,
                     AudioTime.SamplesCeil(item.TimelineStartTicks, _rate),
                     AudioTime.SamplesCeil(item.TimelineEndTicks, _rate),
                     AudioTime.SourceSampleOffset(media.SourceInTicks, item.TimelineStartTicks, _rate),
@@ -298,7 +304,7 @@ namespace Prisc.VideoSDK.Audio
                 if (_scratch.Length < runFloats)
                     _scratch = new float[runFloats];
 
-                _source.ReadSamples(active.Media.SourceId, active.Media.StreamIndex,
+                _source.ReadSamples(active.Media.SourceId, active.Media.StreamIndex, active.Lane,
                     runStart + active.SourceOffset, _scratch, runFrames, out _);
 
                 double volume = Math.Max(0, active.Item.Volume);
@@ -404,7 +410,7 @@ namespace Prisc.VideoSDK.Audio
 
                 if (_scratch.Length < readCount * Channels)
                     _scratch = new float[readCount * Channels];
-                _source.ReadSamples(active.Media.SourceId, active.Media.StreamIndex,
+                _source.ReadSamples(active.Media.SourceId, active.Media.StreamIndex, active.Lane,
                     readStart, _scratch, readCount, out _);
                 Array.Copy(_scratch, 0, active.Buf, haveFloats, readCount * Channels);
                 active.BufFrames += readCount;

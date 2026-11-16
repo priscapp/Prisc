@@ -53,14 +53,15 @@ namespace Prisc.VideoSDK.Tests
 
         /// <summary>A recording cut into two keep-segments over a source carrying a window sidecar
         /// (or none, for <paramref name="windowCapturePath"/> null), plus a webcam row off the same
-        /// source. Shaped like <see cref="InputOverlayInspectorTests"/>'s fixture: each screen
-        /// segment is its own link group, so a row-wide write has two items to reach.</summary>
+        /// source. Shaped like <see cref="InputOverlayInspectorTests"/>'s fixture: two screen
+        /// segments, so a row-wide write has two items to reach.</summary>
         private static Fixture NewInspector(string windowCapturePath)
         {
             var sourceId = Guid.NewGuid();
-            var screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0 };
+            var group = Guid.NewGuid();
+            var screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0, GroupId = group };
             var webcamTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Webcam", Order = 1 };
-            var audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 2 };
+            var audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 2, GroupId = group };
 
             var project = new Project
             {
@@ -103,7 +104,6 @@ namespace Prisc.VideoSDK.Tests
         private static Item AddSegment(Project project, Track screen, Track audio, Guid sourceId,
             long startTicks, long durationTicks)
         {
-            var group = Guid.NewGuid();
             var item = new Item
             {
                 Id = Guid.NewGuid(),
@@ -111,7 +111,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = startTicks,
                 DurationTicks = durationTicks,
                 Content = new MediaContent { SourceId = sourceId, StreamIndex = 0, SourceInTicks = startTicks },
-                GroupId = group,
             };
             project.Items.Add(item);
             project.Items.Add(new Item
@@ -121,7 +120,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = startTicks,
                 DurationTicks = durationTicks,
                 Content = new MediaContent { SourceId = sourceId, StreamIndex = 2, SourceInTicks = startTicks },
-                GroupId = group,
             });
             return item;
         }
@@ -423,6 +421,42 @@ namespace Prisc.VideoSDK.Tests
                 fx.Vm.CropFollowsWindow = true;
 
                 Assert.False(fx.Vm.CropModeActive);
+            });
+        }
+
+        // ------------------------------------------------------------------------- placement lock
+
+        [Fact]
+        public void A_locked_row_refuses_every_crop_source_write_and_shows_the_model_again()
+        {
+            WithWindowCapture(TwoWindows(), fx =>
+            {
+                fx.Session.Select(fx.Screen.Id);
+                fx.Vm.CropFollowsWindow = true;
+                var followed = fx.Vm.CropWindow;
+                fx.Session.SetTrackPlacementLocked(fx.Screen.TrackId, true);
+                var before = fx.Session.Project.ToJson();
+                var other = fx.Vm.CropWindowOptions.First(o => o.Id != followed.Id);
+
+                fx.Vm.CropWindow = other;
+                Assert.Equal(before, fx.Session.Project.ToJson());
+                Assert.Same(followed, fx.Vm.CropWindow);
+
+                fx.Vm.CropManual = true;
+                Assert.Equal(before, fx.Session.Project.ToJson());
+                Assert.True(fx.Vm.CropFollowsWindow);
+                Assert.False(fx.Vm.CropManual);
+
+                // and the other way, from a row locked while its crop was set by hand
+                fx.Session.Undo();
+                fx.Vm.CropManual = true;
+                fx.Session.SetTrackPlacementLocked(fx.Screen.TrackId, true);
+                before = fx.Session.Project.ToJson();
+
+                fx.Vm.CropFollowsWindow = true;
+                Assert.Equal(before, fx.Session.Project.ToJson());
+                Assert.True(fx.Vm.CropManual);
+                Assert.False(fx.Vm.CropFollowsWindow);
             });
         }
 

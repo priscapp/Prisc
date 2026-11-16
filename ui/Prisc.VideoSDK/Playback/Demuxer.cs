@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using FFmpeg.AutoGen.Abstractions;
+using Prisc.VideoSDK.Media;
 
 namespace Prisc.VideoSDK.Playback
 {
@@ -108,12 +109,15 @@ namespace Prisc.VideoSDK.Playback
             {
                 _seekDone.Reset();
                 Interlocked.Exchange(ref _seekTargetTicks, target.Ticks);
-                _seekRequested = true;
 
-                // unblock the read loop if it is parked inside a full queue's Put.
+                // Before the request, never after: the demux thread clears the interrupt as it
+                // serves the seek, and one raised behind its back would stay up, every Put then
+                // failing so the file is read to its end into nothing and the stream never
+                // delivers another frame.
                 var queues = _queueList;
                 for (int i = 0; i < queues.Length; i++)
                     queues[i].SetProducerInterrupt(true);
+                _seekRequested = true;
                 _wake.Set();
 
                 _seekDone.Wait();
@@ -212,12 +216,29 @@ namespace Prisc.VideoSDK.Playback
             }
 
             long targetTicks = Interlocked.Read(ref _seekTargetTicks);
-            long ts = (long)(targetTicks / (double)TimeSpan.TicksPerSecond * ffmpeg.AV_TIME_BASE);
-            int err = ffmpeg.av_seek_frame(_fmt, -1, ts, ffmpeg.AVSEEK_FLAG_BACKWARD);
+
+            // Named explicitly, and in its own time base, rather than stream -1 and AV_TIME_BASE:
+            // avformat rescales that to the nearest timestamp of this same stream, which rounds an
+            // instant just before a keyframe onto the keyframe, past the target (see
+            // TimeBase.TicksToStreamTimeFloor).
+            int seekStream = ffmpeg.av_find_default_stream_index(_fmt);
+            AVRational timeBase = seekStream >= 0 ? _fmt->streams[seekStream]->time_base : default;
+            long ts;
+            if (timeBase.num > 0 && timeBase.den > 0)
+            {
+                ts = TimeBase.TicksToStreamTimeFloor(targetTicks, timeBase.num, timeBase.den);
+            }
+            else
+            {
+                seekStream = -1;
+                ts = TimeBase.Rescale(targetTicks, 1, TimeBase.TicksPerSecond, 1, ffmpeg.AV_TIME_BASE);
+            }
+
+            int err = ffmpeg.av_seek_frame(_fmt, seekStream, ts, ffmpeg.AVSEEK_FLAG_BACKWARD);
             if (err < 0)
             {
                 // retry without backward flag (some containers reject it near 0/EOF).
-                ffmpeg.av_seek_frame(_fmt, -1, ts, 0);
+                ffmpeg.av_seek_frame(_fmt, seekStream, ts, 0);
             }
 
             _eofReached = false;

@@ -1,25 +1,26 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Prisc.VideoSDK.Composition;
 
 namespace Prisc.VideoSDK.Model;
 
 /// <summary>
-/// The editing operations, and the <b>only</b> place <see cref="Item.GroupId"/> semantics
+/// The editing operations, and the <b>only</b> place <see cref="Track.GroupId"/> semantics
 /// live — timeline control, keyboard shortcuts and tests all come through here, so link behavior
-/// cannot drift between entry points. The operations that change <i>when</i> content plays
-/// (<see cref="Move"/>, <see cref="Split"/>, <see cref="RippleDelete"/>) resolve the target item's
-/// group first and apply to the members concerned — all of them for a move, those covering
-/// the instant for a split, those overlapping the item's span for a delete (an ungrouped item is a
-/// group of one); the operations
-/// that change how much of an item is shown (<see cref="TrimStart"/>, <see cref="TrimEnd"/>) or
-/// remove a lone item (<see cref="Delete"/>) are single-item.
+/// cannot drift between entry points. A group belongs to rows, and an ungrouped row is a group of
+/// one throughout. <see cref="Move"/> moves the ids it is given, which a drag freezes from
+/// <see cref="TimeLinked"/> at press; <see cref="SplitAcross"/> cuts every clip running through the
+/// instant, all-or-nothing per group; <see cref="RippleDelete"/> and <see cref="CloseGap"/> act on
+/// the group's rows. The operations that change how much of an item is shown
+/// (<see cref="TrimStart"/>, <see cref="TrimEnd"/>), cut one clip (<see cref="SplitItem"/>) or
+/// remove one (<see cref="Delete"/>) are single-item, on every kind of row.
 ///
-/// Operations clamp rather than corrupt: a move that would push a group member before the
+/// Operations clamp rather than corrupt: a move that would push a clip before the
 /// timeline origin, or a trim that would take an item under <see cref="MinSegmentTicks"/> or
 /// before the start of its source, is reduced to the largest amount that fits, and the applied
 /// amount is returned so callers can reflect it. Operations that cannot be partially applied
-/// (<see cref="Split"/>, <see cref="TryRegroupTrack"/>) reject instead.
+/// (<see cref="SplitItem"/>, <see cref="CloseGap"/>) reject instead.
 /// </summary>
 public static class TimelineOps
 {
@@ -36,28 +37,67 @@ public static class TimelineOps
     /// stretch shorter than this is taken whole.</summary>
     public const long MinInsertTicks = TimeSpan.TicksPerSecond;
 
-    /// <summary>The items an operation on <paramref name="itemId"/> applies to: every item
-    /// sharing its non-null <see cref="Item.GroupId"/>, or just the item itself when
-    /// ungrouped. Throws when the id is not in the project.</summary>
-    public static IReadOnlyList<Item> GetGroupedItems(Project project, Guid itemId)
+    /// <summary>The row plus every row sharing its <see cref="Track.GroupId"/>. An ungrouped row
+    /// is alone in the result, and an unknown id gives an empty one.</summary>
+    public static IReadOnlyList<Track> GroupTracks(Project project, Guid trackId)
     {
-        var item = Require(project, itemId);
-        if (item.GroupId == null)
-            return new[] { item };
+        var track = project.Tracks.FirstOrDefault(t => t.Id == trackId);
+        if (track == null)
+            return Array.Empty<Track>();
 
-        return project.Items.Where(i => i.GroupId == item.GroupId).ToList();
+        return track.GroupId is Guid group
+            ? project.Tracks.Where(t => t.GroupId == group).ToList()
+            : new[] { track };
     }
 
-    /// <summary>Shifts the item's whole group along the timeline by
-    /// <paramref name="deltaTicks"/>, clamped so no member starts before 0. A
-    /// <see cref="MediaContent.SpeedWarpExempt"/> member keeps the real-time (output) span it
-    /// had, which is the truth for such a clip: it plays on the output clock, so its project
-    /// duration is re-derived at the new position and changes when the move crosses into or
-    /// out of a speed item (clamped to the row like <see cref="SetSpeed"/>). Returns the delta
-    /// actually applied.</summary>
-    public static long Move(Project project, Guid itemId, long deltaTicks)
+    /// <summary>
+    /// The clips a drag of <paramref name="seedIds"/> brings: the seeds, plus each clip on a seed's
+    /// group rows that overlaps a clip already in the set in time, transitively. Spans are
+    /// half-open, so the two sides of a cut never link. An ungrouped seed brings only itself, and
+    /// non-overlapping clips stay out however they are grouped. Ids not in the project add
+    /// nothing.
+    /// </summary>
+    public static HashSet<Guid> TimeLinked(Project project, IEnumerable<Guid> seedIds)
     {
-        var members = GetGroupedItems(project, itemId);
+        var groupOfRow = new Dictionary<Guid, Guid?>();
+        foreach (var track in project.Tracks)
+            groupOfRow[track.Id] = track.GroupId;
+
+        var seeds = seedIds.ToHashSet();
+        var linked = new HashSet<Guid>();
+        var frontier = new Queue<Item>();
+        foreach (var item in project.Items)
+        {
+            if (seeds.Contains(item.Id) && linked.Add(item.Id))
+                frontier.Enqueue(item);
+        }
+
+        while (frontier.TryDequeue(out var item))
+        {
+            if (groupOfRow.GetValueOrDefault(item.TrackId) is not Guid group)
+                continue;
+
+            foreach (var other in project.Items)
+            {
+                if (groupOfRow.GetValueOrDefault(other.TrackId) == group && Overlaps(item, other)
+                    && linked.Add(other.Id))
+                    frontier.Enqueue(other);
+            }
+        }
+
+        return linked;
+    }
+
+    /// <summary>Shifts exactly the given clips along the timeline by
+    /// <paramref name="deltaTicks"/>, clamped so none starts before 0. A
+    /// <see cref="MediaContent.SpeedWarpExempt"/> clip re-fits as <see cref="ShiftItems"/>
+    /// describes, from <paramref name="outputSpanOf"/> when given. Returns the delta actually
+    /// applied. Throws when an id is not in the project.</summary>
+    public static long Move(Project project, IEnumerable<Guid> itemIds, long deltaTicks, Func<Item, long?> outputSpanOf = null)
+    {
+        var members = itemIds.Select(id => Require(project, id)).ToList();
+        if (members.Count == 0)
+            return 0;
 
         var minStart = members.Min(m => m.TimelineStartTicks);
         if (deltaTicks < -minStart)
@@ -66,50 +106,114 @@ public static class TimelineOps
         if (deltaTicks == 0)
             return 0;
 
-        // the exempt members' output spans under the warp before anything moves; a moved
-        // audio clip never changes the warp itself, so the same warp re-fits them afterwards
-        List<(Item Item, long OutputSpan)> exempt = null;
-        Playback.TimeWarp warp = null;
-        foreach (var m in members)
-        {
-            if (m.Content is not MediaContent { SpeedWarpExempt: true })
-                continue;
-
-            warp ??= Playback.TimeWarp.Build(project);
-            (exempt ??= new List<(Item, long)>()).Add((m,
-                warp.ToOutput(m.TimelineEndTicks) - warp.ToOutput(m.TimelineStartTicks)));
-        }
-
-        foreach (var m in members)
-            m.TimelineStartTicks += deltaTicks;
-
-        if (exempt != null)
-        {
-            foreach (var (m, outputSpan) in exempt)
-            {
-                var duration = warp.ToProject(warp.ToOutput(m.TimelineStartTicks) + outputSpan) - m.TimelineStartTicks;
-                m.DurationTicks = ClampDurationToRow(project, m, duration);
-            }
-        }
-
+        ShiftItems(project, members, _ => deltaTicks, outputSpanOf);
         return deltaTicks;
     }
 
     /// <summary>
-    /// Moves the in-point of a <b>single</b> item, group or not: positive
+    /// Moves each of <paramref name="items"/> along the timeline by its
+    /// <paramref name="deltaOf"/>, read once per item before anything moves: the one place clips
+    /// slide in time, so every slide treats exempt clips alike. A moved
+    /// <see cref="MediaContent.SpeedWarpExempt"/> clip keeps the real-time (output) span it had,
+    /// which is the truth for such a clip: it plays on the output clock, so its project duration
+    /// is re-derived at the new position (see <see cref="FitExemptItem"/>) and changes when the
+    /// slide crosses into or out of a speed item. An item whose delta is 0 is left entirely alone.
+    /// That span is measured from the clip's extent as the slide begins, unless
+    /// <paramref name="outputSpanOf"/> knows better: one step of a drag can have end-trimmed the
+    /// clip at a neighbour it has since moved away from, and the drag still knows its full span.
+    /// </summary>
+    public static void ShiftItems(Project project, IEnumerable<Item> items, Func<Item, long> deltaOf,
+        Func<Item, long?> outputSpanOf = null)
+    {
+        var moves = items.Select(i => (Item: i, Delta: deltaOf(i))).Where(m => m.Delta != 0).ToList();
+
+        // the exempt clips' output spans, under the warp before anything moves
+        List<(Item Item, long OutputSpan)> exempt = null;
+        Playback.TimeWarp warp = null;
+        var warpMoves = false;
+        foreach (var (item, _) in moves)
+        {
+            warpMoves |= item.Content is SpeedContent;
+            if (!IsExempt(item))
+                continue;
+
+            warp ??= Playback.TimeWarp.Build(project);
+            (exempt ??= new List<(Item, long)>()).Add((item, outputSpanOf?.Invoke(item)
+                ?? warp.OutputSpan(item.TimelineStartTicks, item.TimelineEndTicks)));
+        }
+
+        foreach (var (item, delta) in moves)
+            item.TimelineStartTicks += delta;
+
+        if (exempt == null)
+            return;
+
+        // a speed item in the set moved the warp along with the clips, so the spans land on
+        // the mapping it left behind
+        if (warpMoves)
+            warp = Playback.TimeWarp.Build(project);
+
+        foreach (var (item, outputSpan) in exempt)
+            FitExemptItem(project, warp, item, outputSpan);
+    }
+
+    /// <summary>The one re-fit of a <see cref="MediaContent.SpeedWarpExempt"/> clip: sets its
+    /// project duration to cover <paramref name="outputSpan"/> output ticks from its start under
+    /// <paramref name="warp"/>. Growth that reaches the next item on the row is end-trimmed
+    /// there, like <see cref="SetSpeed"/>, but the clip is never trimmed below the length it came
+    /// in with: one already lying on another item got there by a slide, which is a plain
+    /// collision, for validation to refuse as it does for any other clip.</summary>
+    public static void FitExemptItem(Project project, Playback.TimeWarp warp, Item item, long outputSpan)
+    {
+        var duration = warp.ProjectEndOf(item.TimelineStartTicks, outputSpan) - item.TimelineStartTicks;
+        item.DurationTicks = Math.Max(ClampDurationToRow(project, item, duration),
+            Math.Min(duration, item.DurationTicks));
+    }
+
+    /// <summary>
+    /// Slides everything at or past <paramref name="start"/> left by <paramref name="span"/> on
+    /// every row, clamped so nothing lands before <paramref name="start"/>: how a span already cut
+    /// out of the timeline closes up.
+    ///
+    /// <para>Clips that are <see cref="TimeLinked"/> move as one, by what the earliest of them can
+    /// move, so that nothing stops being in step with what it overlaps. A row the cut did not reach
+    /// can hold clips starting inside the span, each with its own clamp, and a linked set reaching
+    /// back before the span stays where it is. On rows the cut did reach nothing is left inside the
+    /// span to link across it, so a set there is wholly before it or wholly after it.</para>
+    /// </summary>
+    private static void CloseSpan(Project project, long start, long span)
+    {
+        var deltas = new Dictionary<Guid, long>();
+        foreach (var item in project.Items)
+        {
+            if (deltas.ContainsKey(item.Id))
+                continue;
+
+            var linked = TimeLinked(project, new[] { item.Id });
+            var first = project.Items.Where(i => linked.Contains(i.Id)).Min(i => i.TimelineStartTicks);
+            var delta = first >= start ? Math.Max(start, first - span) - first : 0;
+            foreach (var id in linked)
+                deltas[id] = delta;
+        }
+
+        ShiftItems(project, project.Items, i => deltas[i.Id]);
+    }
+
+    /// <summary>
+    /// Moves the in-point of a <b>single</b> item, grouped row or not: positive
     /// <paramref name="deltaTicks"/> shrinks it from the start, negative extends it earlier.
     /// Clamped so the item keeps at least <see cref="MinSegmentTicks"/>, starts at or after 0,
-    /// and — for media — never rewinds before the start of its source
-    /// (<see cref="MediaContent.SourceInTicks"/> stays ≥ 0). The media in-point moves with the
+    /// and — for a clip with a clock — never rewinds before the start of its source
+    /// (<see cref="SourceClockContent.SourceInTicks"/> stays ≥ 0). The in-point moves with the
     /// trim, so every instant the item still covers maps to the source frame it mapped to before:
-    /// trimming one member of a group cannot ungroup it from the others, which is why trim needs
-    /// no group scope. Returns the delta actually applied.
+    /// trimming a clip cannot put it out of step with the clips beside it on other rows, which is
+    /// why trim needs no group scope. Returns the delta actually applied.
     /// </summary>
     public static long TrimStart(Project project, Guid itemId, long deltaTicks)
     {
         var item = Require(project, itemId);
-        var media = item.Content as MediaContent;
-        var speed = SpeedOf(media);
+        var clock = item.Content as SourceClockContent;
+        var speed = SpeedOf(clock);
 
         var maxShrink = item.DurationTicks - MinSegmentTicks;
         if (deltaTicks > maxShrink)
@@ -120,11 +224,11 @@ public static class TimelineOps
         // An exempt clip consumes source on the output clock, so its room is measured there and
         // mapped back into project ticks (see ExemptStartHeadroom).
         // a freeze frame consumes no source, so only the origin bounds it.
-        var maxExtend = media == null || media.Freeze
+        var maxExtend = clock == null || clock.Freeze
             ? item.TimelineStartTicks
-            : media.SpeedWarpExempt
-                ? Math.Min(item.TimelineStartTicks, ExemptStartHeadroom(project, item, media, speed))
-                : Math.Min(item.TimelineStartTicks, (long)Math.Floor(media.SourceInTicks / speed));
+            : IsExempt(clock)
+                ? Math.Min(item.TimelineStartTicks, ExemptStartHeadroom(project, item, clock, speed))
+                : Math.Min(item.TimelineStartTicks, (long)Math.Floor(clock.SourceInTicks / speed));
         if (deltaTicks < -maxExtend)
             deltaTicks = -maxExtend;
 
@@ -134,22 +238,22 @@ public static class TimelineOps
         var oldStart = item.TimelineStartTicks;
         item.TimelineStartTicks += deltaTicks;
         item.DurationTicks -= deltaTicks;
-        if (media != null)
-            media.SourceInTicks = Math.Max(0, media.SourceInTicks
-                + SourceTicksBetween(project, media, oldStart, oldStart + deltaTicks));
+        if (clock != null)
+            clock.SourceInTicks = Math.Max(0, clock.SourceInTicks
+                + SourceTicksBetween(project, clock, oldStart, oldStart + deltaTicks));
 
         return deltaTicks;
     }
 
     /// <summary>
-    /// Moves the out-point of a <b>single</b> item, group or not: positive
+    /// Moves the out-point of a <b>single</b> item, grouped row or not: positive
     /// <paramref name="deltaTicks"/> lengthens it, negative shortens it, clamped so it keeps at
-    /// least <see cref="MinSegmentTicks"/> and — for media whose stream duration is known — never
-    /// extends past the end of its source (there is no material there: video would freeze on the
-    /// last frame and audio would mix to silence). An item already hanging past the source end
-    /// (older project, or a stale probe) may still shrink, it just cannot grow. The item's start
-    /// and in-point are untouched, so the source↔timeline mapping of every instant it still
-    /// covers is unchanged and grouped rows stay in sync. Returns the delta actually applied.
+    /// least <see cref="MinSegmentTicks"/> and — for a clip with a clock whose stream duration is
+    /// known — never extends past the end of its source (there is no material there: video would
+    /// freeze on the last frame and audio would mix to silence). An item already hanging past the
+    /// source end (older project, or a stale probe) may still shrink, it just cannot grow. The
+    /// item's start and in-point are untouched, so the source↔timeline mapping of every instant it
+    /// still covers is unchanged. Returns the delta actually applied.
     /// </summary>
     public static long TrimEnd(Project project, Guid itemId, long deltaTicks)
     {
@@ -159,21 +263,21 @@ public static class TimelineOps
         if (deltaTicks < -maxShrink)
             deltaTicks = Math.Min(0, -maxShrink);
 
-        if (item.Content is MediaContent { Freeze: false } media)
+        if (item.Content is SourceClockContent { Freeze: false } clock)
         {
-            var streamDuration = StreamDurationOf(project, media);
+            var streamDuration = StreamDurationOf(project, clock);
             if (streamDuration > 0)
             {
                 // remaining source, expressed in timeline ticks at the item's speed
-                var speed = SpeedOf(media);
-                var remainingTimeline = (long)Math.Floor((streamDuration - media.SourceInTicks) / speed);
+                var speed = SpeedOf(clock);
+                var remainingTimeline = (long)Math.Floor((streamDuration - clock.SourceInTicks) / speed);
                 long maxExtend;
-                if (media.SpeedWarpExempt)
+                if (IsExempt(clock))
                 {
                     // the remaining source plays out in output ticks; where that lands in
                     // project time depends on the warp between here and there.
                     var warp = Playback.TimeWarp.Build(project);
-                    var allowedEnd = warp.ToProject(warp.ToOutput(item.TimelineStartTicks) + Math.Max(0, remainingTimeline));
+                    var allowedEnd = warp.ProjectEndOf(item.TimelineStartTicks, Math.Max(0, remainingTimeline));
                     maxExtend = Math.Max(0, allowedEnd - item.TimelineEndTicks);
                 }
                 else
@@ -192,17 +296,21 @@ public static class TimelineOps
         return deltaTicks;
     }
 
-    /// <summary>The probed duration of the stream an item plays, or 0 when the source/stream is
-    /// missing or the probe recorded no duration — in which case trims are not source-bounded.</summary>
-    private static long StreamDurationOf(Project project, MediaContent media)
+    /// <summary>The probed duration of the stream an item plays, which for an overlay is its
+    /// source's screen stream, or 0 when the source/stream is missing or the probe recorded no
+    /// duration — in which case trims are not source-bounded.</summary>
+    private static long StreamDurationOf(Project project, SourceClockContent clock)
     {
         foreach (var source in project.Sources ?? Enumerable.Empty<Source>())
         {
-            if (source.Id != media.SourceId)
+            if (source.Id != clock.SourceId)
                 continue;
             foreach (var stream in source.Streams ?? Enumerable.Empty<SourceStream>())
             {
-                if (stream.Index == media.StreamIndex)
+                var playing = clock is MediaContent media
+                    ? stream.Index == media.StreamIndex
+                    : FrameComposer.IsScreenStream(source, stream.Index);
+                if (playing)
                     return stream.DurationTicks;
             }
         }
@@ -211,53 +319,60 @@ public static class TimelineOps
     }
 
     /// <summary>
-    /// Splits the item's group at <paramref name="timelineTicks"/>: every member covering
-    /// that instant becomes two back-to-back items, the right half starting exactly there with
-    /// its media in-point advanced by the left half's length. Right halves of a grouped group get
-    /// a fresh shared <see cref="Item.GroupId"/> (two grouped clips become two grouped pairs);
-    /// left halves keep the original. Entry transitions stay on the left, exit transitions move
-    /// to the right. All-or-nothing: returns false without touching the project when the target
-    /// item does not cover the instant, or when any covered member would end up shorter than
-    /// <see cref="MinSegmentTicks"/> on either side.
+    /// Cuts every clip running through <paramref name="timelineTicks"/>: each becomes two
+    /// back-to-back items, the right half starting exactly there with its in-point advanced by the
+    /// left half's length. Entry transitions stay on the left, exit transitions move to the right.
+    /// Half-open spans keep the two sides of the cut apart, so each drags separately afterwards
+    /// with no group state changing. A clip starting exactly there is already cut there, whether
+    /// by a right-click split or an earlier cut, so it takes no part.
+    ///
+    /// <para>All-or-nothing per group (an ungrouped row is a group of one): a sliver left on one
+    /// row would overlap the other side of the cut and chain both sides back together, so a group
+    /// where any half would be shorter than <see cref="MinSegmentTicks"/> is left whole, while
+    /// other groups are still cut. Returns whether anything was cut, and whether any group was
+    /// refused.</para>
     /// </summary>
-    public static bool Split(Project project, Guid itemId, long timelineTicks)
+    public static (bool Cut, bool Refused) SplitAcross(Project project, long timelineTicks)
     {
-        var target = Require(project, itemId);
-        if (!Covers(target, timelineTicks))
-            return false;
+        var cut = false;
+        var refused = false;
 
-        var covered = GetGroupedItems(project, itemId).Where(m => Covers(m, timelineTicks)).ToList();
+        // materialized first, since a cut adds to the items
+        var groups = project.Items.Where(i => i.TimelineStartTicks < timelineTicks && timelineTicks < i.TimelineEndTicks)
+            .GroupBy(i => project.TrackOf(i)?.GroupId ?? i.TrackId)
+            .Select(g => g.ToList())
+            .ToList();
 
-        // the right halves become a group of their own, so the two sides of the cut stay
-        // synced within themselves without the left side dragging the right one around.
-        return SplitCore(project, covered, timelineTicks,
-            target.GroupId == null ? (Guid?)null : Guid.NewGuid());
+        foreach (var covered in groups)
+        {
+            if (SplitCore(project, covered, timelineTicks))
+                cut = true;
+            else
+                refused = true;
+        }
+
+        return (cut, refused);
     }
 
     /// <summary>
-    /// Cuts <b>one</b> item, leaving the rest of its group alone — the timeline's right-click
-    /// split, where the pointer picked out a single clip and cutting its neighbors with it would
-    /// be an edit the user did not ask for.
-    ///
-    /// <para>Both halves keep the item's existing <see cref="Item.GroupId"/>: the clip is still
-    /// part of the same recording, it simply has two segments on its row now. Group operations
-    /// cope with that already — they only ever act on the members that cover the instant in
-    /// question (see <see cref="Split"/>).</para>
+    /// Cuts <b>one</b> item, leaving every other clip alone — the timeline's right-click split,
+    /// where the pointer picked out a single clip and cutting its neighbors with it would be an
+    /// edit the user did not ask for. On a grouped row the halves may stay chained through the
+    /// other rows; <see cref="SplitAcross"/> is the cut that separates.
     /// </summary>
     public static bool SplitItem(Project project, Guid itemId, long timelineTicks)
     {
         var target = Require(project, itemId);
-        if (!Covers(target, timelineTicks))
+        if (!target.Covers(timelineTicks))
             return false;
 
-        return SplitCore(project, new[] { target }, timelineTicks, target.GroupId);
+        return SplitCore(project, new[] { target }, timelineTicks);
     }
 
     /// <summary>Cuts every item in <paramref name="covered"/> at the instant, all-or-nothing: a cut
     /// that would leave any half shorter than <see cref="MinSegmentTicks"/> is refused outright
     /// rather than applied to some rows and not others.</summary>
-    private static bool SplitCore(Project project, IReadOnlyList<Item> covered, long timelineTicks,
-        Guid? rightGroup)
+    private static bool SplitCore(Project project, IReadOnlyList<Item> covered, long timelineTicks)
     {
         foreach (var m in covered)
         {
@@ -268,29 +383,9 @@ public static class TimelineOps
 
         foreach (var m in covered)
         {
-            var leftLength = timelineTicks - m.TimelineStartTicks;
+            var right = RightPart(project, m, timelineTicks);
 
-            var content = m.Content?.Clone();
-            if (content is MediaContent media)
-                media.SourceInTicks += SourceTicksBetween(project, media, m.TimelineStartTicks, timelineTicks);
-
-            var right = new Item
-            {
-                Id = Guid.NewGuid(),
-                TrackId = m.TrackId,
-                TimelineStartTicks = timelineTicks,
-                DurationTicks = m.TimelineEndTicks - timelineTicks,
-                Content = content,
-                Transform = m.Transform?.Clone() ?? new Transform(),
-                Surround = m.Surround?.Clone(),
-                Effect = m.Effect?.Clone(),
-                Entry = null,
-                Exit = m.Exit,
-                Volume = m.Volume,
-                GroupId = rightGroup,
-            };
-
-            m.DurationTicks = leftLength;
+            m.DurationTicks = timelineTicks - m.TimelineStartTicks;
             m.Exit = null;
             project.Items.Add(right);
         }
@@ -299,18 +394,35 @@ public static class TimelineOps
         return true;
     }
 
+    /// <summary>What <paramref name="item"/> plays from <paramref name="ticks"/> on, as a new item
+    /// not yet in the project: in-point advanced to that instant, the entry transition left
+    /// behind, the exit transition carried over.</summary>
+    private static Item RightPart(Project project, Item item, long ticks)
+    {
+        var right = item.Clone();
+        right.TimelineStartTicks = ticks;
+        right.DurationTicks = item.TimelineEndTicks - ticks;
+        right.Entry = null;
+        if (right.Content is SourceClockContent clock)
+            clock.SourceInTicks += SourceTicksBetween(project, clock, item.TimelineStartTicks, ticks);
+
+        return right;
+    }
+
     /// <summary>
-    /// Cuts the item's <b>own span</b> out of its group and closes the gap: every group
-    /// member is trimmed/split to remove what it played inside <c>[start, end)</c>, and every
+    /// Cuts the item's <b>own span</b> out of its group's rows and closes the gap: every clip on
+    /// those rows is trimmed/split to remove what it played inside <c>[start, end)</c>, and every
     /// remaining item that started at or after the cut shifts left by its length (clamped so
-    /// nothing shifts to before where the cut began). This is the multi-track generalization of
-    /// the v1 "cut": items on <b>all</b> tracks shift, so cross-track sync is preserved.
+    /// nothing shifts to before where the cut began, and time-linked clips by one amount: see
+    /// <see cref="CloseSpan"/>). This is the multi-track generalization of the v1 "cut": items on
+    /// <b>all</b> tracks shift, so cross-track sync is preserved. A row outside the group loses
+    /// nothing, so a clip of its that straddles the cut can be run into by the clip after it, for
+    /// validation to refuse.
     ///
-    /// <para>Scoped to the item's span — never "the whole group" — because one group can carry
-    /// several back-to-back segments per row (a recording built from keep-slices, or the two
-    /// halves a <see cref="SplitItem"/> leaves): deleting one clip must not take the rest of the
-    /// recording with it. When every member shares the clip's span (the common one-segment
-    /// column) this removes exactly the group as before.</para>
+    /// <para>Scoped to the item's span — never "the whole group" — because a row can carry several
+    /// back-to-back segments (a recording built from keep-slices, or the two halves a
+    /// <see cref="SplitItem"/> leaves): deleting one clip must not take the rest of the recording
+    /// with it.</para>
     /// </summary>
     public static void RippleDelete(Project project, Guid itemId)
     {
@@ -318,42 +430,20 @@ public static class TimelineOps
         var start = target.TimelineStartTicks;
         var end = target.TimelineEndTicks;
 
-        CutGroupRange(project, itemId, start, end);
-
-        var span = end - start;
-        foreach (var item in project.Items)
-        {
-            if (item.TimelineStartTicks >= start)
-                item.TimelineStartTicks = Math.Max(start, item.TimelineStartTicks - span);
-        }
-    }
-
-    /// <summary>The no-ripple counterpart of <see cref="RippleDelete"/>: cuts the item's span out
-    /// of its group in place, leaving the gap open and everything outside the group
-    /// untouched. The delete for an imported file's grouped rows, whose group means "streams of
-    /// one file" — closing the gap under unrelated material is the recording cut's semantics, not
-    /// the overlay's.</summary>
-    public static void DeleteGrouped(Project project, Guid itemId)
-    {
-        var target = Require(project, itemId);
-        CutGroupRange(project, itemId, target.TimelineStartTicks, target.TimelineEndTicks);
+        var rows = GroupTracks(project, target.TrackId).Select(t => t.Id).ToHashSet();
+        CutRange(project, project.Items.Where(i => rows.Contains(i.TrackId)), start, end);
+        CloseSpan(project, start, end - start);
     }
 
     /// <summary>
-    /// Removes what every member of the item's group plays inside <c>[start, end)</c>: a
-    /// member inside the range is removed, one straddling an edge is trimmed (splitting in two
-    /// when it hangs over both, exactly as <see cref="SplitCore"/> would cut it — in-point
-    /// advanced, entry left / exit right). A remnant shorter than <see cref="MinSegmentTicks"/>
-    /// is culled with the member rather than kept: the group's rows need not agree on their edges
-    /// (a recording's audio ends a hair before its video), and a delete that left a sub-minimum
-    /// sliver behind would strand an item no edit is allowed to produce.
+    /// Removes what each of <paramref name="candidates"/> plays inside <c>[start, end)</c>: one
+    /// inside the range is removed, one straddling an edge is trimmed (splitting in two when it
+    /// hangs over both, exactly as <see cref="SplitCore"/> would cut it — in-point advanced,
+    /// entry left / exit right). A remnant shorter than <see cref="MinSegmentTicks"/> is culled
+    /// rather than kept: rows need not agree on their edges (a recording's audio ends a hair
+    /// before its video), and a delete that left a sub-minimum sliver behind would strand an item
+    /// no edit is allowed to produce.
     /// </summary>
-    private static void CutGroupRange(Project project, Guid itemId, long start, long end) =>
-        CutRange(project, GetGroupedItems(project, itemId), start, end);
-
-    /// <summary>The body of <see cref="CutGroupRange"/> over any set of items: what each of
-    /// <paramref name="candidates"/> plays inside <c>[start, end)</c> is removed, with the same
-    /// trim/split/cull rules.</summary>
     private static void CutRange(Project project, IEnumerable<Item> candidates, long start, long end)
     {
         foreach (var m in candidates
@@ -363,27 +453,7 @@ public static class TimelineOps
             var rightLength = m.TimelineEndTicks - end;
 
             if (rightLength >= MinSegmentTicks)
-            {
-                var content = m.Content?.Clone();
-                if (content is MediaContent media)
-                    media.SourceInTicks += SourceTicksBetween(project, media, m.TimelineStartTicks, end);
-
-                project.Items.Add(new Item
-                {
-                    Id = Guid.NewGuid(),
-                    TrackId = m.TrackId,
-                    TimelineStartTicks = end,
-                    DurationTicks = rightLength,
-                    Content = content,
-                    Transform = m.Transform?.Clone() ?? new Transform(),
-                    Surround = m.Surround?.Clone(),
-                    Effect = m.Effect?.Clone(),
-                    Entry = null,
-                    Exit = m.Exit,
-                    Volume = m.Volume,
-                    GroupId = m.GroupId,
-                });
-            }
+                project.Items.Add(RightPart(project, m, end));
 
             if (leftLength >= MinSegmentTicks)
             {
@@ -397,8 +467,8 @@ public static class TimelineOps
         }
     }
 
-    /// <summary>Removes a single item, leaving a gap where it was: no ripple, and group
-    /// members are left alone (<see cref="RippleDelete"/> is the synced-segment delete). Returns
+    /// <summary>Removes a single item, leaving a gap where it was: no ripple, and clips on other
+    /// rows are left alone (<see cref="RippleDelete"/> is the delete that closes up). Returns
     /// false when the id is not in the project.</summary>
     public static bool Delete(Project project, Guid itemId)
     {
@@ -426,7 +496,7 @@ public static class TimelineOps
         {
             if (item.TrackId != trackId)
                 continue;
-            if (Covers(item, ticks))
+            if (item.Covers(ticks))
                 return null;
 
             if (item.TimelineEndTicks <= ticks)
@@ -456,29 +526,34 @@ public static class TimelineOps
         FindGap(project, gap.TrackId, gap.StartTicks) == gap;
 
     /// <summary>
-    /// Closes a gap on its own row: the item after it slides left onto the gap's start, and the
-    /// members of its group that sit at or past the gap slide with it, so a recording's other rows
-    /// (its audio, its cursor) stay in sync. Group members before the gap stay put — they are the
-    /// earlier segments the gap was opened from. Nothing else moves; a shift that runs a group
-    /// member into another item on its row is left for validation to refuse. Returns false
-    /// when the gap is not current.
+    /// Closes a gap: everything at or past its end on the row and the rest of the row's group
+    /// slides left onto the gap's start, so a recording's other rows (its audio, its cursor) stay
+    /// in sync. Clips before the gap stay put, and other rows do not move. Returns false when the
+    /// gap is not current, or when a clip on another row of the group overlaps the gap: closing
+    /// past it would put that row out of step, cutting it would delete material on a row the user
+    /// did not point at, and <see cref="RippleCloseGap"/> is the explicit way to remove the time
+    /// from every row. With nothing inside the gap and everything later shifting by the same
+    /// amount, no collision is possible.
     /// </summary>
     public static bool CloseGap(Project project, TimelineGap gap)
     {
         if (!IsCurrentGap(project, gap))
             return false;
 
+        var rows = GroupTracks(project, gap.TrackId).Select(t => t.Id).ToHashSet();
+        var onRows = project.Items.Where(i => rows.Contains(i.TrackId)).ToList();
+        if (onRows.Any(i => i.TimelineStartTicks < gap.EndTicks && i.TimelineEndTicks > gap.StartTicks))
+            return false;
+
         var span = gap.DurationTicks;
-        foreach (var m in GetGroupedItems(project, gap.RightItemId)
-                     .Where(m => m.TimelineStartTicks >= gap.EndTicks))
-            m.TimelineStartTicks -= span;
+        ShiftItems(project, onRows.Where(i => i.TimelineStartTicks >= gap.EndTicks), _ => -span);
 
         return true;
     }
 
     /// <summary>
     /// The gap's span cut out of the whole timeline: whatever any other row plays inside it is
-    /// removed (trimmed, split or dropped exactly as <see cref="RippleDelete"/> cuts a group), then
+    /// removed (trimmed, split or dropped exactly as <see cref="RippleDelete"/> cuts its rows), then
     /// everything at or past the gap shifts left by its length. Cross-row sync survives because
     /// every row loses the same span. Returns false when the gap is not current.
     /// </summary>
@@ -487,16 +562,8 @@ public static class TimelineOps
         if (!IsCurrentGap(project, gap))
             return false;
 
-        var start = gap.StartTicks;
-        var span = gap.DurationTicks;
-        CutRange(project, project.Items, start, gap.EndTicks);
-
-        foreach (var item in project.Items)
-        {
-            if (item.TimelineStartTicks >= start)
-                item.TimelineStartTicks = Math.Max(start, item.TimelineStartTicks - span);
-        }
-
+        CutRange(project, project.Items, gap.StartTicks, gap.EndTicks);
+        CloseSpan(project, gap.StartTicks, gap.DurationTicks);
         return true;
     }
 
@@ -518,8 +585,8 @@ public static class TimelineOps
     /// Fills the gap with a freeze frame (<see cref="MediaContent.Freeze"/>) of a neighbor: the
     /// last frame the left item shows, or the first frame the right item shows, held for the
     /// gap's whole length. The new item wears the neighbor's placement, surround and effect so
-    /// the picture does not jump at the seam; it carries no transitions and no group (a held
-    /// frame has no source clock to keep in sync). Returns the new item's id, or null when
+    /// the picture does not jump at the seam; it carries no transitions. Overlays on its group's
+    /// rows hold with it (<see cref="RebaseOverlays"/>). Returns the new item's id, or null when
     /// <see cref="CanFillGapWithFreeze"/> says no.
     /// </summary>
     public static Guid? FillGapWithFreeze(Project project, TimelineGap gap, bool fromLeft)
@@ -528,28 +595,23 @@ public static class TimelineOps
             return null;
 
         var neighbor = Require(project, fromLeft ? gap.LeftItemId.Value : gap.RightItemId);
-        var media = (MediaContent)neighbor.Content;
 
-        var content = (MediaContent)media.Clone();
-        content.SourceInTicks = fromLeft ? LastFrameTicks(project, neighbor, media) : media.SourceInTicks;
+        var item = neighbor.Clone();
+        item.TimelineStartTicks = gap.StartTicks;
+        item.DurationTicks = gap.DurationTicks;
+        item.Entry = null;
+        item.Exit = null;
+
+        var content = (MediaContent)item.Content;
+        if (fromLeft)
+            content.SourceInTicks = LastFrameTicks(project, neighbor, (MediaContent)neighbor.Content);
         content.Freeze = true;
         content.Speed = 1.0;
         content.SpeedWarpExempt = false;
 
-        var item = new Item
-        {
-            Id = Guid.NewGuid(),
-            TrackId = gap.TrackId,
-            TimelineStartTicks = gap.StartTicks,
-            DurationTicks = gap.DurationTicks,
-            Content = content,
-            Transform = neighbor.Transform?.Clone() ?? new Transform(),
-            Surround = neighbor.Surround?.Clone(),
-            Effect = neighbor.Effect?.Clone(),
-            Volume = neighbor.Volume,
-        };
         project.Items.Add(item);
         project.Normalize();
+        RebaseOverlays(project, item, gap.StartTicks, gap.EndTicks);
         return item.Id;
     }
 
@@ -586,13 +648,21 @@ public static class TimelineOps
     /// <summary>
     /// Fills the gap by un-trimming a neighbor into it: the left item's out-point moves to the
     /// gap's end, or the right item's in-point moves back to the gap's start, revealing the
-    /// source that was trimmed away. Single-item, like the trims it is made of — the neighbor's
-    /// group partners keep their own edges. All-or-nothing: returns false without touching the
-    /// project when the neighbor cannot cover the whole gap (see
+    /// source that was trimmed away. Single-item, like the trims it is made of — clips on the
+    /// neighbor's other group rows keep their own edges, and overlays there take their clock from
+    /// what the gap now shows (<see cref="RebaseOverlays"/>). All-or-nothing: returns false without
+    /// touching the project when the neighbor cannot cover the whole gap (see
     /// <see cref="CanExtendIntoGap"/>).
     /// </summary>
-    public static bool ExtendIntoGap(Project project, TimelineGap gap, bool fromLeft) =>
-        CanExtendIntoGap(project, gap, fromLeft) && ExtendIntoGapCore(project, gap, fromLeft);
+    public static bool ExtendIntoGap(Project project, TimelineGap gap, bool fromLeft)
+    {
+        if (!CanExtendIntoGap(project, gap, fromLeft) || !ExtendIntoGapCore(project, gap, fromLeft))
+            return false;
+
+        RebaseOverlays(project, Require(project, fromLeft ? gap.LeftItemId.Value : gap.RightItemId),
+            gap.StartTicks, gap.EndTicks);
+        return true;
+    }
 
     private static bool ExtendIntoGapCore(Project project, TimelineGap gap, bool fromLeft)
     {
@@ -630,8 +700,11 @@ public static class TimelineOps
     /// trims removed included — and the right clip is absorbed into it (its exit transition
     /// carried over). Everything after it on the row shifts by however far the right clip's end
     /// moved — left when the gap was wider than the removed material, right when it was
-    /// narrower — so the rest of the row keeps its spacing. Other rows, group partners included,
-    /// are untouched. Returns false when <see cref="CanRejoinGap"/> says no.
+    /// narrower — so the rest of the row keeps its spacing. Other rows, grouped or not, keep their
+    /// clips where they are; overlays on them take their clocks from what the row now shows
+    /// (<see cref="RebaseOverlays"/>): over the rejoined clip if nothing else moved, otherwise from
+    /// its start through the end of the timeline, for its recording and for every recording whose
+    /// screen moved with the rest of the row. Returns false when <see cref="CanRejoinGap"/> says no.
     /// </summary>
     public static bool RejoinGap(Project project, TimelineGap gap)
     {
@@ -647,227 +720,542 @@ public static class TimelineOps
         var sourceEnd = rm.SourceInTicks + SourceTicksBetween(project, rm, right.TimelineStartTicks, right.TimelineEndTicks);
         var sourceSpan = sourceEnd - lm.SourceInTicks;
         var newEnd = left.TimelineStartTicks + (speed == 1.0 ? sourceSpan : (long)Math.Round(sourceSpan / speed));
-        var shift = newEnd - right.TimelineEndTicks;
-
-        foreach (var item in project.Items)
-        {
-            if (item.TrackId == gap.TrackId && item.TimelineStartTicks >= right.TimelineEndTicks)
-                item.TimelineStartTicks += shift;
-        }
+        var rightEnd = right.TimelineEndTicks;
+        var shift = newEnd - rightEnd;
+        var moved = shift == 0
+            ? new List<Item>()
+            : project.Items.Where(i => i.TrackId == gap.TrackId && i.TimelineStartTicks >= rightEnd).ToList();
 
         left.DurationTicks = newEnd - left.TimelineStartTicks;
         left.Exit = right.Exit;
         project.Items.Remove(right);
+
+        // last, so an exempt clip that grows as it slides is limited by the row it lands on,
+        // not by the clip just absorbed
+        ShiftItems(project, moved, _ => shift);
+
+        var to = moved.Count == 0 ? newEnd : long.MaxValue;
+        var recordings = moved.Prepend(left).Select(i => ScreenSourceOf(project, i)).Where(s => s != null).Distinct();
+        foreach (var source in recordings)
+            RebaseSource(project, source, project.TrackOf(left), left.TimelineStartTicks, to);
+
         return true;
     }
 
-    /// <summary>Whether <paramref name="clip"/> — an item lifted off a row of kind
-    /// <paramref name="clipTrackKind"/> — can be pasted into the gap: the gap is current and at
-    /// least <see cref="MinSegmentTicks"/> long, the clip is media, text, an image, a solid, an
-    /// obscure box or a shape (effect items and input overlays belong to rows of their own), and its
-    /// row kind matches the gap's (a picture never lands on an audio row, nor a sound on a video row).</summary>
-    public static bool CanPasteIntoGap(Project project, TimelineGap gap, Item clip, TrackKind clipTrackKind)
+    /// <summary>
+    /// Whether the row can take <paramref name="content"/>, wherever on it the clip lands. Effect
+    /// items go on effect rows, one kind to a row and one speed row to a project. Audio rows take
+    /// sound and video rows everything else, by the stream a media clip plays; a clip whose stream
+    /// this project cannot name yet (its source is still to be added) passes on that count.
+    ///
+    /// <para>Cursor and keys rows stay homogeneous. The timeline classifies a row by its earliest
+    /// clip (<c>TimelineRowLayout.KindOf</c>), so a text card on a cursor row, or a cursor clip on
+    /// a text row, could change what the row is and how tall it draws. A row holding overlays takes
+    /// only more of that kind, whichever recording they came from, and overlays go only on an empty
+    /// row or one of their own kind. A wallpaper likewise goes only on an empty row or one of
+    /// wallpapers: in a picture row's front gap it would make that row a background row
+    /// (<see cref="IsBackgroundRow"/>), and the next wallpaper added would land in front of it.</para>
+    /// </summary>
+    public static bool CanHost(Track track, ItemContent content, Project project)
     {
-        if (clip == null || !IsCurrentGap(project, gap) || gap.DurationTicks < MinSegmentTicks)
+        if (track == null || content == null)
             return false;
 
-        var track = project.Tracks.FirstOrDefault(t => t.Id == gap.TrackId);
-        return clip.Content switch
+        var held = project.Items.Where(i => i.TrackId == track.Id).Select(i => i.Content);
+        var stream = content is MediaContent media ? StreamKindOf(project, media) : null;
+        return track.Kind switch
         {
-            MediaContent => track?.Kind == clipTrackKind,
-            TextContent or ImageContent or SolidContent or ObscureContent or ShapeContent => track?.Kind == TrackKind.Video,
-            _ => false,
+            TrackKind.Effect => content is SpeedContent or ZoomContent
+                                && held.All(c => c.GetType() == content.GetType())
+                                && (content is not SpeedContent
+                                    || !project.Items.Any(i => i.Content is SpeedContent && i.TrackId != track.Id)),
+            TrackKind.Audio => content is MediaContent && stream != StreamKind.Video,
+            _ => content is not (SpeedContent or ZoomContent) && stream != StreamKind.Audio
+                 && (content is InputOverlayContent or BackgroundContent
+                     ? held.All(c => c.GetType() == content.GetType())
+                     : !held.Any(c => c is InputOverlayContent)),
         };
     }
 
+    private static StreamKind? StreamKindOf(Project project, MediaContent media) =>
+        FrameComposer.FindSource(project, media.SourceId)?.Streams?
+            .FirstOrDefault(s => s.Index == media.StreamIndex)?.Kind;
+
+    // ----------------------------------------------------------------------------- copy and paste
+
     /// <summary>
-    /// Pastes <paramref name="clip"/> at the start of the gap, end-trimmed to fit when it is
-    /// longer than the gap. The clip must be a private copy (it is inserted as-is, re-identified:
-    /// a new id, the gap's row, no group). A media clip from another project brings its
-    /// <paramref name="clipSource"/> along when this project does not have that source yet.
-    /// Returns the new item's id, or null when <see cref="CanPasteIntoGap"/> says no.
+    /// What copying these clips puts on the clipboard: a project holding them, the rows they sit on
+    /// and every source they play, sharing nothing with <paramref name="project"/>. Ids not in the
+    /// project are ignored. A <see cref="MediaContent.SpeedWarpExempt"/> clip stores its output span
+    /// in <see cref="Item.DurationTicks"/>, because the project span it needs depends on the warp it
+    /// lands under (<see cref="Paste"/>). On a row with no other kind of clip, each one after the
+    /// first also stores its start as an output offset from the first's start, because the row is
+    /// one take, perhaps split, and only that clock keeps its pieces and pauses as they play.
     /// </summary>
-    public static Guid? PasteIntoGap(Project project, TimelineGap gap, Item clip, TrackKind clipTrackKind,
-        Source clipSource)
+    public static Project Lift(Project project, IEnumerable<Guid> itemIds)
     {
-        if (!CanPasteIntoGap(project, gap, clip, clipTrackKind))
-            return null;
+        var ids = itemIds.ToHashSet();
+        var items = project.Items.Where(i => ids.Contains(i.Id)).ToList();
+        var rows = items.Select(i => i.TrackId).ToHashSet();
+        var sources = items.Select(i => i.Content).OfType<SourceClockContent>().Select(c => c.SourceId).ToHashSet();
 
-        if (clip.Content is MediaContent media && project.Sources.All(s => s.Id != media.SourceId))
+        var clip = Project.FromJson(new Project
         {
-            if (clipSource == null || clipSource.Id != media.SourceId)
-                return null;
-            project.Sources.Add(clipSource);
+            Output = project.Output,
+            Sources = project.Sources.Where(s => sources.Contains(s.Id)).ToList(),
+            Tracks = project.Tracks.Where(t => rows.Contains(t.Id)).ToList(),
+            Items = items,
+        }.ToJson());
+
+        var warp = Playback.TimeWarp.Build(project);
+        foreach (var item in clip.Items.Where(IsExempt))
+            item.DurationTicks = warp.OutputSpan(item.TimelineStartTicks, item.TimelineEndTicks);
+
+        foreach (var row in OutputClockRows(clip))
+        {
+            var first = row.Min(i => i.TimelineStartTicks);
+            foreach (var item in row)
+                item.TimelineStartTicks = first + warp.OutputSpan(first, item.TimelineStartTicks);
         }
 
-        clip.Id = Guid.NewGuid();
-        clip.TrackId = gap.TrackId;
-        clip.TimelineStartTicks = gap.StartTicks;
-        clip.DurationTicks = Math.Min(clip.DurationTicks, gap.DurationTicks);
-        clip.GroupId = null;
-        project.Items.Add(clip);
-        project.Normalize();
-        return clip.Id;
+        return clip;
     }
 
-    /// <summary>Clears <see cref="Item.GroupId"/> on the given items so they edit
-    /// independently. Items not in the project throw; the rest of their old group is left
-    /// grouped.</summary>
-    public static void Ungroup(Project project, IEnumerable<Guid> itemIds)
+    /// <summary>Whether a <see cref="Paste"/> of <paramref name="clip"/> can fit it into the gap: the
+    /// clip has one row, of the gap's row's kind, the row can host all of it
+    /// (<see cref="CanHost"/>), and the gap is current and at least
+    /// <see cref="MinSegmentTicks"/> long.</summary>
+    public static bool CanFitInGap(Project project, Project clip, TimelineGap gap)
     {
-        foreach (var id in itemIds)
-            Require(project, id).GroupId = null;
-    }
+        if (clip.Tracks.Count != 1 || !IsCurrentGap(project, gap) || gap.DurationTicks < MinSegmentTicks)
+            return false;
 
-    /// <summary>Links the given items into a fresh group (replacing any group they were in) and
-    /// returns the new group id.</summary>
-    public static Guid Group(Project project, IEnumerable<Guid> itemIds)
-    {
-        var group = Guid.NewGuid();
-        foreach (var id in itemIds)
-            Require(project, id).GroupId = group;
-
-        return group;
-    }
-
-    /// <summary>Clears <see cref="Item.GroupId"/> on every item of a track — the row's sync
-    /// toggle turned off. The other members of those groups stay grouped to each other;
-    /// <see cref="TryRegroupTrack"/> is the inverse while the row is still aligned.</summary>
-    public static void UngroupTrack(Project project, Guid trackId)
-    {
-        foreach (var item in project.Items)
-        {
-            if (item.TrackId == trackId)
-                item.GroupId = null;
-        }
+        var row = project.Tracks.FirstOrDefault(t => t.Id == gap.TrackId);
+        return row?.Kind == clip.Tracks[0].Kind && clip.Items.All(i => CanHost(row, i.Content, project));
     }
 
     /// <summary>
-    /// Dissolves every group whose members all sit on one track. A group exists to keep
-    /// <i>rows</i> in step — the recording's screen, webcam and audio trimming and cutting as one
-    /// — so once only one row is left in it (the audio rows deleted, the webcam ungrouped, a
-    /// recording that never had anything but a screen) there is nothing left to keep in step,
-    /// and the group would only pin that row's clips in place. Cursor/keyboard overlay items
-    /// keep their group whatever the shape: validation requires it, and their row is defined by
-    /// the screen row it annotates. Returns true when anything changed.
+    /// Pastes <paramref name="clip"/> (from <see cref="Lift"/>, and private to this call: its
+    /// sources are taken as they are) so that its earliest clip starts at
+    /// <paramref name="anchor"/>, keeping relative time and row layout. Nothing already on the
+    /// timeline is overwritten.
+    ///
+    /// <para>Speed items go to the project's speed row, since a second one cannot validate, and if
+    /// they do not fit there the whole paste is refused with <c>Refused</c> set and nothing changed.
+    /// With no speed row here they get one (<see cref="InsertNewSpeedRow"/>). Everything else goes
+    /// by block: rows sharing a group are one block, and any other row is a block of its own. A
+    /// block returns to its own rows when they are all here, can host it and
+    /// are free over its spans, so its clips take those rows' groups. Otherwise the whole block
+    /// gets new rows (<see cref="InsertNewRows"/>), so a pasted cursor never ends up on a row under
+    /// its pasted screen, where it would compose invisibly. A <paramref name="fitGap"/> applies only
+    /// to a clip with one row: that row's clips go on the gap's row, the last end-trimmed to the gap
+    /// and those with no room dropped. Nothing is pasted when <see cref="CanFitInGap"/> says no.</para>
+    ///
+    /// <para>A <see cref="MediaContent.SpeedWarpExempt"/> clip takes the project span its output
+    /// span needs under the warp it lands on, and the free-span test uses that span. Those on a row
+    /// of nothing else land by output time from the first of them (<see cref="Lift"/>), so a split
+    /// take stays whole and continuous under any warp. Beside a plain clip of the same row one can
+    /// land longer than the room before it, and is end-trimmed.</para>
+    ///
+    /// <para>A screen clip landing on a grouped row hands the overlays already there its time
+    /// (<see cref="RebaseOverlays"/>). Pasted overlays keep the clocks they came with, and new rows
+    /// have no others to reach.</para>
+    /// </summary>
+    /// <returns>The pasted clips, how many rows were made for them (not counting a speed row), and
+    /// whether the speed row refused the paste.</returns>
+    public static (IReadOnlyList<Guid> Pasted, int NewRows, bool Refused) Paste(Project project, Project clip, long anchor,
+        TimelineGap? fitGap = null)
+    {
+        if (clip.Items.Count == 0)
+            return (Array.Empty<Guid>(), 0, false);
+
+        var gap = clip.Tracks.Count == 1 ? fitGap : null;
+        if (gap != null && !CanFitInGap(project, clip, gap.Value))
+            return (Array.Empty<Guid>(), 0, false);
+
+        var offset = anchor - clip.Items.Min(i => i.TimelineStartTicks);
+        var speedItems = clip.Items.Where(i => i.Content is SpeedContent).ToList();
+        var speedRow = FindSpeedTrack(project);
+        if (speedRow != null && speedItems.Any(s => project.Items.Any(i => i.TrackId == speedRow.Id
+                && i.TimelineStartTicks < s.TimelineEndTicks + offset && s.TimelineStartTicks + offset < i.TimelineEndTicks)))
+            return (Array.Empty<Guid>(), 0, true);
+
+        // nothing refuses past here
+        foreach (var source in clip.Sources)
+        {
+            if (project.Sources.All(s => s.Id != source.Id))
+                project.Sources.Add(source);
+        }
+
+        var warpBefore = Playback.TimeWarp.Build(project);
+        var pasted = new List<Item>();
+        void Place(Item from, Track row, long start, long duration)
+        {
+            var copy = from.Clone();
+            copy.TrackId = row.Id;
+            copy.TimelineStartTicks = start;
+            copy.DurationTicks = duration;
+            project.Items.Add(copy);
+            pasted.Add(copy);
+        }
+
+        foreach (var speed in speedItems)
+        {
+            speedRow ??= InsertNewSpeedRow(project, clip.TrackOf(speed));
+            Place(speed, speedRow, speed.TimelineStartTicks + offset, speed.DurationTicks);
+        }
+
+        var warp = speedItems.Count > 0 ? Playback.TimeWarp.Build(project) : warpBefore;
+
+        var firstOfRow = OutputClockRows(clip).ToDictionary(r => r.Key, r => r.Min(i => i.TimelineStartTicks));
+
+        (long Start, long End) SpanOf(Item from)
+        {
+            var start = from.TimelineStartTicks + offset;
+            if (!IsExempt(from))
+                return (start, start + from.DurationTicks);
+
+            var first = firstOfRow.GetValueOrDefault(from.TrackId, from.TimelineStartTicks) + offset;
+            var output = warp.ToOutput(first) + start - first;
+            return (start == first ? start : warp.ToProject(output), warp.ToProject(output + from.DurationTicks));
+        }
+
+        // where a clip already here will end once the session has re-fit it to the pasted speed items
+        long EndAfterPaste(Item item)
+        {
+            if (!IsExempt(item) || speedItems.Count == 0)
+                return item.TimelineEndTicks;
+            return warp.ProjectEndOf(item.TimelineStartTicks, warpBefore.OutputSpan(item.TimelineStartTicks, item.TimelineEndTicks));
+        }
+
+        bool Fits(Track row, IEnumerable<Item> clips) => clips.All(c =>
+        {
+            var (start, end) = SpanOf(c);
+            return CanHost(row, c.Content, project)
+                   && !project.Items.Any(i => i.TrackId == row.Id && i.TimelineStartTicks < end && start < EndAfterPaste(i));
+        });
+
+        var clipsOn = clip.Items.Where(i => i.Content is not SpeedContent).ToLookup(i => i.TrackId);
+        var blocks = clip.Tracks.Where(t => clipsOn.Contains(t.Id))
+            .OrderBy(t => t.Order).ThenBy(t => t.Id)
+            .GroupBy(t => t.GroupId ?? t.Id).Select(b => b.ToList()).ToList();
+
+        var newRows = 0;
+        foreach (var block in blocks)
+        {
+            if (gap is { } fit)
+            {
+                var row = project.Tracks.First(t => t.Id == fit.TrackId);
+                foreach (var from in clipsOn[block[0].Id])
+                {
+                    var (start, end) = SpanOf(from);
+                    var room = fit.EndTicks - start;
+                    var span = end - start;
+                    if (room > 0 && (span <= room || room >= MinSegmentTicks))
+                        Place(from, row, start, Math.Min(span, room));
+                }
+                continue;
+            }
+
+            var origins = block.Select(r => project.Tracks.FirstOrDefault(t => t.Id == r.Id)).ToList();
+            var reuse = origins.All(o => o != null) && origins.All(o => Fits(o, clipsOn[o.Id]));
+            var rows = reuse ? origins.ToDictionary(o => o.Id) : InsertNewRows(project, clip, block);
+            if (!reuse)
+                newRows += block.Count;
+
+            foreach (var row in block)
+            {
+                foreach (var from in clipsOn[row.Id])
+                {
+                    var (start, end) = SpanOf(from);
+                    Place(from, rows[row.Id], start, end - start);
+                }
+            }
+        }
+
+        // an output span can land longer than the room before a plain clip pasted on its row
+        foreach (var copy in pasted.Where(IsExempt))
+            copy.DurationTicks = ClampDurationToRow(project, copy, copy.DurationTicks);
+
+        var ids = pasted.Select(i => i.Id).ToList();
+        var mine = ids.ToHashSet();
+        foreach (var copy in pasted)
+            RebaseOverlays(project, copy, copy.TimelineStartTicks, copy.TimelineEndTicks, mine);
+
+        project.Normalize();
+        return (ids, newRows, false);
+    }
+
+    /// <summary>Whether this content plays on the output clock (<see cref="MediaContent.SpeedWarpExempt"/>).</summary>
+    public static bool IsExempt(ItemContent content) => content is MediaContent { SpeedWarpExempt: true };
+
+    private static bool IsExempt(Item item) => IsExempt(item.Content);
+
+    /// <summary>The clip's rows holding only clips on the output clock (<see cref="Lift"/>).</summary>
+    private static IEnumerable<IGrouping<Guid, Item>> OutputClockRows(Project clip) =>
+        clip.Items.GroupBy(i => i.TrackId).Where(r => r.All(IsExempt));
+
+    /// <summary>
+    /// New rows for a block whose own rows cannot take it, in the block's order and as one
+    /// contiguous stack per kind of row. Picture rows go directly above the block's topmost picture
+    /// row, and audio rows directly after its last audio row, because the timeline lists those
+    /// separately. A kind with no origin here (another project's rows, say) goes on top of the
+    /// picture rows or after the audio rows, except that a wallpaper with no row here goes behind
+    /// the picture, since on top it would cover it. Stacking them rather than placing each above its
+    /// own origin means an opaque pasted screen covers the original overlays, which would otherwise
+    /// compose over it as a second pointer. Two or more rows share a fresh group. They never join an
+    /// existing one, or the paste would be time-linked to the clips it overlaps.
+    /// </summary>
+    private static Dictionary<Guid, Track> InsertNewRows(Project project, Project clip, List<Track> block)
+    {
+        Func<Project, int> Slot(Track row) =>
+            row.Kind == TrackKind.Audio ? OrderAfterAudioRows
+            : IsBackgroundRow(clip, row) && project.Tracks.All(t => t.Id != row.Id) ? OrderBehindPicture
+            : OrderAbovePictureRows;
+
+        var group = block.Count > 1 ? Guid.NewGuid() : (Guid?)null;
+        var rows = new Dictionary<Guid, Track>();
+        foreach (var ofKind in block.GroupBy(Slot))
+        {
+            var ids = ofKind.Select(t => t.Id).ToHashSet();
+            var origins = project.Tracks.Where(t => ids.Contains(t.Id)).ToList();
+            var order = origins.Count > 0 ? origins.Max(t => t.Order) + 1 : ofKind.Key(project);
+
+            foreach (var row in ofKind)
+            {
+                var copy = row.Clone();
+                copy.GroupId = group;
+                rows[row.Id] = InsertTrackAt(project, copy, order++);
+            }
+        }
+
+        return rows;
+    }
+
+    /// <summary>The speed row for a project that has none, from the row its items were copied off.
+    /// There is only ever one, so unlike other new rows it is not named as a copy. And since only a
+    /// row that left the project can be replaced like this, it keeps its group: a Cut removes the
+    /// speed row while the group's other rows keep the id, and with none of them here the group
+    /// dissolves in <see cref="CollapseLoneGroups"/>.</summary>
+    private static Track InsertNewSpeedRow(Project project, Track from)
+    {
+        var row = from.Clone();
+        row.Name = from.Name;
+        row.GroupId = from.GroupId;
+        return InsertTrackAt(project, row, OrderAboveEverything(project));
+    }
+
+    /// <summary>Puts <paramref name="track"/> into the row order at <paramref name="order"/>. Every
+    /// row at or past it steps up one, because the order values need not be contiguous and a row
+    /// sharing the slot would be placed by its id.</summary>
+    public static Track InsertTrackAt(Project project, Track track, int order)
+    {
+        foreach (var existing in project.Tracks)
+        {
+            if (existing.Order >= order)
+                existing.Order++;
+        }
+
+        track.Order = order;
+        project.Tracks.Add(track);
+        return track;
+    }
+
+    /// <summary>Whether this is the speed row: an effect row is a speed row or a zoom row by what
+    /// its items are, and <see cref="Project.Validate"/> keeps it unique.</summary>
+    public static bool IsSpeedTrack(Project project, Track track) =>
+        track.Kind == TrackKind.Effect && project.Items.Any(i => i.TrackId == track.Id && i.Content is SpeedContent);
+
+    /// <summary>The row carrying the project's speed items, or null.</summary>
+    public static Track FindSpeedTrack(Project project) =>
+        project.Tracks.FirstOrDefault(t => IsSpeedTrack(project, t));
+
+    /// <summary>Whether a row is a background row: a video row whose earliest clip is a wallpaper,
+    /// the same test the timeline classifies rows by (<c>TimelineRowLayout.KindOf</c>).</summary>
+    public static bool IsBackgroundRow(Project project, Track track) =>
+        track.Kind == TrackKind.Video && project.Items
+            .Where(i => i.TrackId == track.Id)
+            .OrderBy(i => i.TimelineStartTicks).ThenBy(i => i.Id)
+            .FirstOrDefault()?.Content is BackgroundContent;
+
+    /// <summary>The slot a new wallpaper takes: behind every other row and in front of every
+    /// background row, so it is not hidden by the wallpapers there and does not hide the picture.
+    /// With no background rows that is slot 0, which shifts every row up one.</summary>
+    public static int OrderBehindPicture(Project project) =>
+        NextOrder(project.Tracks.Where(t => IsBackgroundRow(project, t)));
+
+    /// <summary>The slot above every picture and zoom row, under the audio rows and the speed row.</summary>
+    public static int OrderAbovePictureRows(Project project) =>
+        NextOrder(project.Tracks.Where(t => t.Kind != TrackKind.Audio && !IsSpeedTrack(project, t)));
+
+    /// <summary>The slot after every row except the speed row, which stays on top.</summary>
+    public static int OrderAfterAudioRows(Project project) =>
+        NextOrder(project.Tracks.Where(t => !IsSpeedTrack(project, t)));
+
+    /// <summary>The slot after every row.</summary>
+    public static int OrderAboveEverything(Project project) => NextOrder(project.Tracks);
+
+    private static int NextOrder(IEnumerable<Track> rows) => rows.Select(t => t.Order + 1).DefaultIfEmpty(0).Max();
+
+    // --------------------------------------------------------------------------------- groups
+
+    /// <summary>How many rows of this row's group hold clips, this row included: the count a group
+    /// is talked about in, since an emptied row is not a member
+    /// (<see cref="CollapseLoneGroups"/>).</summary>
+    public static int OccupiedGroupRows(Project project, Guid trackId)
+    {
+        var occupied = project.Items.Select(i => i.TrackId).ToHashSet();
+        return GroupTracks(project, trackId).Count(t => occupied.Contains(t.Id));
+    }
+
+    /// <summary>Whether <see cref="MergeIntoGroup"/> would do anything: at least two rows, not all
+    /// in one group already.</summary>
+    public static bool CanMergeIntoGroup(Project project, IEnumerable<Guid> trackIds)
+    {
+        var ids = trackIds.ToHashSet();
+        var rows = project.Tracks.Where(t => ids.Contains(t.Id)).ToList();
+        return rows.Count >= 2 && (rows[0].GroupId == null || rows.Any(t => t.GroupId != rows[0].GroupId));
+    }
+
+    /// <summary>
+    /// Puts these rows, and every row of any group they touch, into one group, so grouping never
+    /// takes a row out of a group it was in. The group of the lowest-order row that has one is kept,
+    /// and a new one is made when none has. Any kind of row can join. Returns how many rows of the
+    /// result hold clips, or 0 when <see cref="CanMergeIntoGroup"/> is false.
+    /// </summary>
+    public static int MergeIntoGroup(Project project, IEnumerable<Guid> trackIds)
+    {
+        var ids = trackIds.ToHashSet();
+        if (!CanMergeIntoGroup(project, ids))
+            return 0;
+
+        var rows = project.Tracks.Where(t => ids.Contains(t.Id)).OrderBy(t => t.Order).ToList();
+        var merged = rows.FirstOrDefault(t => t.GroupId != null)?.GroupId ?? Guid.NewGuid();
+        var touched = rows.Where(t => t.GroupId != null).Select(t => t.GroupId).ToHashSet();
+        foreach (var track in project.Tracks)
+        {
+            if (ids.Contains(track.Id) || touched.Contains(track.GroupId))
+                track.GroupId = merged;
+        }
+
+        return OccupiedGroupRows(project, rows[0].Id);
+    }
+
+    /// <summary>Takes these rows out of their groups. Their partners stay grouped to each other, and
+    /// <see cref="CollapseLoneGroups"/> dissolves what is left when only one of them holds clips.
+    /// Returns how many rows came out.</summary>
+    public static int UngroupTracks(Project project, IEnumerable<Guid> trackIds)
+    {
+        var ids = trackIds.ToHashSet();
+        var removed = 0;
+        foreach (var track in project.Tracks)
+        {
+            if (track.GroupId != null && ids.Contains(track.Id))
+            {
+                track.GroupId = null;
+                removed++;
+            }
+        }
+
+        return removed;
+    }
+
+    /// <summary>Dissolves every group these rows belong to, on all of its rows. Returns how many of
+    /// those rows hold clips.</summary>
+    public static int UngroupAll(Project project, IEnumerable<Guid> trackIds)
+    {
+        var ids = trackIds.ToHashSet();
+        var groups = project.Tracks.Where(t => t.GroupId != null && ids.Contains(t.Id)).Select(t => t.GroupId).ToHashSet();
+        var occupied = project.Items.Select(i => i.TrackId).ToHashSet();
+        var removed = 0;
+        foreach (var track in project.Tracks)
+        {
+            if (track.GroupId != null && groups.Contains(track.GroupId))
+            {
+                track.GroupId = null;
+                if (occupied.Contains(track.Id))
+                    removed++;
+            }
+        }
+
+        return removed;
+    }
+
+    /// <summary>
+    /// Dissolves every group with exactly one row holding clips, on all its rows: a group exists
+    /// to keep rows in step, so with one row left (the audio rows deleted, the webcam ungrouped, a
+    /// recording that never had anything but a screen) there is nothing left to keep in step. An
+    /// emptied row does not count as a member, and a group whose rows are all empty is left alone,
+    /// so a later paste can rejoin it. Returns true when anything changed.
     /// </summary>
     public static bool CollapseLoneGroups(Project project)
     {
         var changed = false;
-        foreach (var members in project.Items.Where(i => i.GroupId != null)
-                                             .GroupBy(i => i.GroupId.Value))
+        var occupied = project.Items.Select(i => i.TrackId).ToHashSet();
+        foreach (var rows in project.Tracks.Where(t => t.GroupId != null).GroupBy(t => t.GroupId.Value))
         {
-            if (members.Any(m => m.Content is CursorContent or KeyboardContent))
+            if (rows.Count(t => occupied.Contains(t.Id)) != 1)
                 continue;
 
-            if (members.Select(m => m.TrackId).Distinct().Skip(1).Any())
-                continue;
-
-            foreach (var m in members)
-                m.GroupId = null;
+            foreach (var track in rows)
+                track.GroupId = null;
             changed = true;
         }
 
         return changed;
     }
 
-    /// <summary>
-    /// Puts a track back into the groups it was ungrouped from, but only when that is still
-    /// true: every item of the row must overlap exactly one group on the other tracks, and must
-    /// agree with it on source alignment — same <c>TimelineStartTicks - SourceInTicks</c> offset,
-    /// the invariant a trim preserves and a move breaks. Items of the row may resolve to
-    /// <i>different</i> groups: after a <see cref="Split"/> each contiguous segment is its own
-    /// group, and each of the row's segments re-joins the one that covers it. Returns false
-    /// leaving the project untouched when any item overlaps no group, more than one, or a group it
-    /// has drifted from; a track with no items trivially succeeds.
-    /// </summary>
-    public static bool TryRegroupTrack(Project project, Guid trackId)
-    {
-        var row = project.Items.Where(i => i.TrackId == trackId).ToList();
-
-        // effect items never link: they have no source clock to be in sync with.
-        if (row.Any(i => i.Content is SpeedContent or ZoomContent))
-            return false;
-
-        var candidates = project.Items.Where(i => i.TrackId != trackId && i.GroupId != null).ToList();
-
-        var resolved = new List<(Item Item, Guid Group)>(row.Count);
-        foreach (var item in row)
-        {
-            var overlapping = candidates.Where(c => Overlaps(item, c)).ToList();
-            var groups = overlapping.Select(c => c.GroupId.Value).Distinct().ToList();
-            if (groups.Count != 1)
-                return false;
-
-            // one dissenting member is enough to make the row's claim of sync a lie.
-            if (!overlapping.All(c => Aligned(item, c)))
-                return false;
-
-            resolved.Add((item, groups[0]));
-        }
-
-        foreach (var (item, group) in resolved)
-            item.GroupId = group;
-
-        return true;
-    }
-
     private static bool Overlaps(Item a, Item b) =>
         a.TimelineStartTicks < b.TimelineEndTicks && b.TimelineStartTicks < a.TimelineEndTicks;
 
-    /// <summary>Whether two items map source time to timeline time identically. Only media carries
-    /// such a mapping — text, images and solids have nothing to disagree about. A re-timed item
-    /// (speed ≠ 1) or a freeze frame never re-links: its clock has left the recording's for good.</summary>
-    private static bool Aligned(Item a, Item b) =>
-        a.Content is not MediaContent ma || b.Content is not MediaContent mb ||
-        (!ma.Freeze && !mb.Freeze && SpeedOf(ma) == 1.0 && SpeedOf(mb) == 1.0 &&
-         a.TimelineStartTicks - ma.SourceInTicks == b.TimelineStartTicks - mb.SourceInTicks);
-
     /// <summary>
-    /// Sets a media item's <see cref="MediaContent.Speed"/>, re-timing the clip in place: the item
+    /// Sets a clip's <see cref="SourceClockContent.Speed"/>, re-timing it in place: the item
     /// keeps showing the same stretch of source, so its timeline duration scales by
     /// <c>oldSpeed / newSpeed</c>, anchored at its start. The new duration is clamped to at least
     /// <see cref="MinSegmentTicks"/> and to the gap before the next item on the track (slowing a
     /// clip down must not run it into its neighbor — the content is end-trimmed instead). Single
-    /// item, media only (a freeze frame has no speed); returns the speed actually stored (1.0 for
-    /// non-media and freeze frames).
+    /// item, on clips with a clock only (a freeze frame has no speed), though overlays on a screen
+    /// clip's group rows follow it (<see cref="RebaseOverlays"/>). Returns the speed actually stored
+    /// (1.0 for other contents and freeze frames).
     /// </summary>
     public static double SetSpeed(Project project, Guid itemId, double speed)
     {
         var item = Require(project, itemId);
-        if (item.Content is not MediaContent media || media.Freeze)
+        if (item.Content is not SourceClockContent clock || clock.Freeze)
             return 1.0;
 
         speed = Math.Clamp(speed, 0.01, 100);
-        var oldSpeed = SpeedOf(media);
+        var oldSpeed = SpeedOf(clock);
         if (speed == oldSpeed)
             return speed;
 
-        var sourceSpan = SourceTicksBetween(project, media, item.TimelineStartTicks, item.TimelineEndTicks);
+        var oldEnd = item.TimelineEndTicks;
+        var sourceSpan = SourceTicksBetween(project, clock, item.TimelineStartTicks, item.TimelineEndTicks);
         long newDuration;
-        if (media.SpeedWarpExempt)
+        if (IsExempt(clock))
         {
             // the same source plays out over sourceSpan / speed OUTPUT ticks; the project span
             // that covers is whatever the warp makes of it from the item's start.
             var warp = Playback.TimeWarp.Build(project);
-            var outputStart = warp.ToOutput(item.TimelineStartTicks);
-            newDuration = warp.ToProject(outputStart + (long)Math.Round(sourceSpan / speed)) - item.TimelineStartTicks;
+            newDuration = warp.ProjectEndOf(item.TimelineStartTicks, (long)Math.Round(sourceSpan / speed)) - item.TimelineStartTicks;
         }
         else
         {
             newDuration = (long)Math.Round(sourceSpan / speed);
         }
 
-        media.Speed = speed;
+        clock.Speed = speed;
         item.DurationTicks = ClampDurationToRow(project, item, newDuration);
+        RebaseOverlays(project, item, item.TimelineStartTicks, Math.Max(oldEnd, item.TimelineEndTicks));
         return speed;
     }
 
     /// <summary>A duration <paramref name="item"/> may take without breaking the model: at
     /// least <see cref="MinSegmentTicks"/>, and short of the next item on its row. The clamp
-    /// every re-timing applies (<see cref="SetSpeed"/>, an exempt clip's re-fit under a changed
-    /// warp or at a new position): a duration that ran the clip into its neighbor would be
-    /// rolled back by validation, and end-trimming the clip is the useful answer.</summary>
+    /// every re-timing applies (<see cref="SetSpeed"/>, <see cref="FitExemptItem"/>): a duration
+    /// that ran the clip into its neighbor would be rolled back by validation, and end-trimming
+    /// the clip is the useful answer. Only for a clip whose new length is what reaches the
+    /// neighbor, which <see cref="FitExemptItem"/> makes sure of.</summary>
     public static long ClampDurationToRow(Project project, Item item, long duration)
     {
         var limit = long.MaxValue;
@@ -882,50 +1270,141 @@ public static class TimelineOps
     }
 
     /// <summary>The item's playback speed with the model's "unset means realtime" collapsed:
-    /// always a positive factor, 1.0 for null media.</summary>
-    public static double SpeedOf(MediaContent media) =>
-        media != null && media.Speed > 0 ? media.Speed : 1.0;
+    /// always a positive factor, 1.0 for a null clock.</summary>
+    public static double SpeedOf(SourceClockContent clock) =>
+        clock != null && clock.Speed > 0 ? clock.Speed : 1.0;
 
     /// <summary>A timeline span rendered into source ticks at <paramref name="speed"/> — exact
     /// for realtime so speed-1 projects keep their integer-perfect math.</summary>
-    private static long ToSourceTicks(long timelineTicks, double speed) =>
+    public static long ToSourceTicks(long timelineTicks, double speed) =>
         speed == 1.0 ? timelineTicks : (long)Math.Round(timelineTicks * speed);
 
     /// <summary>
-    /// The source ticks a media item consumes between two project instants. For an ordinary
-    /// clip that is the project span at the clip's speed; for a <see cref="MediaContent.SpeedWarpExempt"/>
+    /// The source ticks a clip consumes between two project instants. For an ordinary clip that is
+    /// the project span at the clip's speed; for a <see cref="MediaContent.SpeedWarpExempt"/>
     /// clip it is the OUTPUT span between the two instants (the clip plays in real time under
     /// the project's speed items) at the clip's speed. Every operation that moves an in-point
     /// (trim, split, cut) goes through here so the two clocks cannot drift apart.
     /// </summary>
-    public static long SourceTicksBetween(Project project, MediaContent media, long fromProjectTicks,
+    public static long SourceTicksBetween(Project project, SourceClockContent clock, long fromProjectTicks,
         long toProjectTicks)
     {
-        if (media is { Freeze: true })
+        if (clock is { Freeze: true })
             return 0;
 
-        var speed = SpeedOf(media);
-        if (media == null || !media.SpeedWarpExempt)
+        var speed = SpeedOf(clock);
+        if (!IsExempt(clock))
             return ToSourceTicks(toProjectTicks - fromProjectTicks, speed);
 
         var warp = Playback.TimeWarp.Build(project);
-        return ToSourceTicks(warp.ToOutput(toProjectTicks) - warp.ToOutput(fromProjectTicks), speed);
+        return ToSourceTicks(warp.OutputSpan(fromProjectTicks, toProjectTicks), speed);
     }
 
     /// <summary>How far an exempt clip's start may move earlier before its in-point would rewind
     /// past the start of its source, in project ticks: the source it has behind the in-point
     /// plays out in output ticks, mapped back through the warp from the clip's output start.</summary>
-    private static long ExemptStartHeadroom(Project project, Item item, MediaContent media, double speed)
+    private static long ExemptStartHeadroom(Project project, Item item, SourceClockContent clock, double speed)
     {
         var warp = Playback.TimeWarp.Build(project);
         var outputStart = warp.ToOutput(item.TimelineStartTicks);
-        var roomOutput = (long)Math.Floor(media.SourceInTicks / speed);
+        var roomOutput = (long)Math.Floor(clock.SourceInTicks / speed);
         var earliest = warp.ToProject(Math.Max(0, outputStart - roomOutput));
         return Math.Max(0, item.TimelineStartTicks - earliest);
     }
 
-    private static bool Covers(Item item, long timelineTicks) =>
-        timelineTicks >= item.TimelineStartTicks && timelineTicks < item.TimelineEndTicks;
+    // --------------------------------------------------------------------------- overlay clocks
+
+    /// <summary>
+    /// Re-derives the clocks of the overlays that <paramref name="screen"/>'s row keeps in step
+    /// over <c>[from, to)</c>, from the screen clips now at those times: what an edit that changes
+    /// which source a stretch of a grouped row shows ends with. A move or a cut leaves each mapping
+    /// alone and needs none of this. A no-op unless <paramref name="screen"/> is a screen-stream
+    /// clip on a grouped video row. Reaches the cursor and keys clips of that source on the row's
+    /// group, and a clip's stretch with no screen clip keeps the clock it had. Where several rows of
+    /// the group play the screen at once the backmost leads. Overlays in <paramref name="except"/>
+    /// keep their clocks. See <see cref="OverlayClock.Rederive"/>.
+    /// </summary>
+    public static void RebaseOverlays(Project project, Item screen, long from, long to, IReadOnlySet<Guid> except = null)
+    {
+        if (ScreenSourceOf(project, screen) is { } source)
+            RebaseSource(project, source, project.TrackOf(screen), from, to, except);
+    }
+
+    /// <summary>The recording whose screen stream <paramref name="item"/> plays, or null when it
+    /// plays anything else.</summary>
+    private static Source ScreenSourceOf(Project project, Item item) =>
+        item.Content is MediaContent media && FrameComposer.FindSource(project, media.SourceId) is { } source
+            && FrameComposer.IsScreenStream(source, media.StreamIndex)
+            ? source
+            : null;
+
+    /// <summary><see cref="RebaseOverlays"/> for one recording on <paramref name="row"/>'s group,
+    /// whatever clip the edit started from.</summary>
+    private static void RebaseSource(Project project, Source source, Track row, long from, long to,
+        IReadOnlySet<Guid> except = null)
+    {
+        if (row is not { Kind: TrackKind.Video, GroupId: not null })
+            return;
+
+        // in row order, so that the search below finds the backmost first
+        project.Normalize();
+
+        var rows = GroupTracks(project, row.Id).Where(t => t.Kind == TrackKind.Video).Select(t => t.Id).ToHashSet();
+        var hosts = project.Items.Where(i => rows.Contains(i.TrackId) && FrameComposer.PlaysScreen(source, i)).ToList();
+        var overlays = project.Items.Where(i => i.Content is InputOverlayContent overlay
+            && overlay.SourceId == source.Id && rows.Contains(i.TrackId)
+            && i.TimelineStartTicks < to && i.TimelineEndTicks > from && except?.Contains(i.Id) != true).ToList();
+
+        foreach (var overlay in overlays)
+            OverlayClock.Rederive(project, overlay, from, to, t => hosts.FirstOrDefault(h => h.Covers(t)));
+
+        project.Normalize();
+    }
+
+    /// <summary>
+    /// The stretches of a cursor clip where <c>FrameComposer.ResolveCursorHost</c> finds a clip to
+    /// draw through: in timeline order, half-open, merged, and limited to the clip's own span.
+    /// Anywhere else the cursor draws nothing, and the timeline dims that part of the bar. Empty for
+    /// a clip that is not a cursor, or whose source is gone.
+    /// </summary>
+    public static IReadOnlyList<(long Start, long End)> CursorHostSpans(Project project, Item cursorItem)
+    {
+        var spans = new List<(long Start, long End)>();
+        if (cursorItem?.Content is not CursorContent cursor
+            || FrameComposer.FindSource(project, cursor.SourceId) is not { } source)
+            return spans;
+
+        var hosts = project.Items
+            .Where(i => i.TimelineStartTicks < cursorItem.TimelineEndTicks
+                        && cursorItem.TimelineStartTicks < i.TimelineEndTicks
+                        && FrameComposer.IsCursorHost(project, source, i))
+            .OrderBy(i => i.TimelineStartTicks);
+        foreach (var host in hosts)
+        {
+            var start = Math.Max(host.TimelineStartTicks, cursorItem.TimelineStartTicks);
+            var end = Math.Min(host.TimelineEndTicks, cursorItem.TimelineEndTicks);
+            if (spans.Count > 0 && start <= spans[^1].End)
+                spans[^1] = (spans[^1].Start, Math.Max(spans[^1].End, end));
+            else
+                spans.Add((start, end));
+        }
+
+        return spans;
+    }
+
+    /// <summary><see cref="RebaseOverlays"/> over what a trim added to <paramref name="item"/>, which
+    /// spanned <c>[oldStart, oldEnd)</c> before it. Revealing more of a clip does not change its
+    /// mapping, but an overlay can already be there on a clock of its own: left behind by a speed
+    /// change, or hanging off a neighbour that was trimmed shorter. What it had there was not this
+    /// clip's time, so it takes this clip's. Nothing that shrank needs this, and neither does an
+    /// overlay already in step, so a trim back out over its own overlay changes nothing.</summary>
+    public static void RebaseGrownSpan(Project project, Item item, long oldStart, long oldEnd)
+    {
+        if (item.TimelineStartTicks < oldStart)
+            RebaseOverlays(project, item, item.TimelineStartTicks, oldStart);
+        if (item.TimelineEndTicks > oldEnd)
+            RebaseOverlays(project, item, oldEnd, item.TimelineEndTicks);
+    }
 
     private static Item Require(Project project, Guid itemId)
     {

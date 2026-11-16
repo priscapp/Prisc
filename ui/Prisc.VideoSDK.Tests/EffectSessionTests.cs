@@ -288,7 +288,7 @@ namespace Prisc.VideoSDK.Tests
             var session = NewSession(out _, out _, out _);
             var item = session.AddSpeedEffect(Ms(1_000), Ms(5_000));
 
-            session.DeleteItem(item.Id);
+            session.DeleteItems(new[] { item.Id });
 
             Assert.False(session.HasSpeedTrack);
             Assert.DoesNotContain(session.Project.Tracks, t => t.Kind == TrackKind.Effect);
@@ -299,15 +299,15 @@ namespace Prisc.VideoSDK.Tests
         {
             var session = NewSession(out _, out _, out _);
             var item = session.AddSpeedEffect(Ms(1_000), Ms(5_000));
-            Assert.True(session.SplitAt(item.Id, Ms(3_000)));
+            Assert.True(session.SplitItemAt(item.Id, Ms(3_000)));
 
             var halves = session.Project.Items.Where(i => i.Content is SpeedContent).ToList();
             Assert.Equal(2, halves.Count);
 
-            session.DeleteItem(halves[0].Id);
+            session.DeleteItems(new[] { halves[0].Id });
             Assert.True(session.HasSpeedTrack);
 
-            session.DeleteItem(halves[1].Id);
+            session.DeleteItems(new[] { halves[1].Id });
             Assert.False(session.HasSpeedTrack);
         }
 
@@ -494,7 +494,7 @@ namespace Prisc.VideoSDK.Tests
             var failures = 0;
             session.ValidationFailed += (_, _) => failures++;
 
-            Assert.Equal(0, session.MoveItem(second.Id, -Ms(3_000)));
+            Assert.Equal(0, session.MoveLinked(second.Id, -Ms(3_000)));
 
             Assert.Equal(1, failures);
             Assert.Equal(Ms(6_000), session.Project.Items.Single(i => i.Id == second.Id).TimelineStartTicks);

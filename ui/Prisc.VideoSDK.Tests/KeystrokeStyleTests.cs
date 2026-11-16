@@ -656,9 +656,9 @@ namespace Prisc.VideoSDK.Tests
                 Streams = { new SourceStream { Index = 0, Kind = StreamKind.Video, Width = 1920, Height = 1080 } },
             };
             keyboard.SourceId = source.Id;
-            var screen = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Order = 0 };
-            var keys = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Order = 1 };
             var group = Guid.NewGuid();
+            var screen = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Order = 0, GroupId = group };
+            var keys = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Order = 1, GroupId = group };
             var project = new Project
             {
                 Output = new OutputSettings { WidthPx = 1920, HeightPx = 1080, FpsNum = 30, FpsDen = 1, SampleRate = 48000 },
@@ -669,13 +669,13 @@ namespace Prisc.VideoSDK.Tests
                     new Item
                     {
                         Id = Guid.NewGuid(), TrackId = screen.Id, TimelineStartTicks = 0,
-                        DurationTicks = 10 * TimeSpan.TicksPerSecond, GroupId = group,
+                        DurationTicks = 10 * TimeSpan.TicksPerSecond,
                         Content = new MediaContent { SourceId = source.Id, StreamIndex = 0 },
                     },
                     new Item
                     {
                         Id = Guid.NewGuid(), TrackId = keys.Id, TimelineStartTicks = 0,
-                        DurationTicks = 10 * TimeSpan.TicksPerSecond, Content = keyboard, GroupId = group,
+                        DurationTicks = 10 * TimeSpan.TicksPerSecond, Content = keyboard,
                         Transform = new Transform { X = 0.5, Y = 0.9, Scale = 0.5 },
                     },
                 },

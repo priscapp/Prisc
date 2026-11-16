@@ -14,8 +14,8 @@ namespace Prisc.VideoSDK.Tests
     /// The cursor and keys rows' previews, end to end below the pixels: the SDK's per-frame
     /// pointer speed and click pairing (<see cref="InputActivity"/>), the timeline adapter's
     /// re-bucketing into source-tick requests, the zoom-dependent folding of clicks and
-    /// keystroke runs into marks, and the timeline→source mapping through the hard-synced screen
-    /// item. Pure math, no Avalonia runtime — Prisc.Ui exposes its internals to this project.
+    /// keystroke runs into marks, and the timeline→source mapping on the clip's own clock.
+    /// Pure math, no Avalonia runtime — Prisc.Ui exposes its internals to this project.
     /// </summary>
     public class InputActivityTests
     {
@@ -394,124 +394,67 @@ namespace Prisc.VideoSDK.Tests
 
         private static long Sec(double s) => (long)(s * TimeSpan.TicksPerSecond);
 
-        private static Project TimingProject(out Source source, out Track screenTrack, out Track overlayTrack)
+        /// <summary>A click pressed exactly when the composer reads <paramref name="at"/> from the
+        /// clip's clock, and where the preview's mark for it lands in item-local pixels.</summary>
+        private static double PreviewXOfComposerTime(Item item, SourceClockContent clock, long at, double tpp)
         {
-            source = new Source
+            var composerTicks = FrameComposer.SourceTimeTicks(clock, item, at);
+            var span = InputPreviewMath.SpanOf(item, clock).Value;
+            var clicks = new[] { new CursorClickSpan(composerTicks, composerTicks) };
+            return Assert.Single(InputPreviewMath.ClickMarks(clicks, span.SourceInTicks, span.Speed, tpp)).X;
+        }
+
+        [Theory]
+        [InlineData(1.0)]
+        [InlineData(2.0)]
+        [InlineData(0.5)]
+        public void Cursor_preview_marks_land_at_the_instant_the_composer_reads_them(double speed)
+        {
+            const double tpp = 10_000;
+            var item = new Item
             {
-                Id = Guid.NewGuid(),
-                Path = "rec.mp4",
-                InputCapturePath = "rec.jsonl",
-                Streams = new List<SourceStream>
-                {
-                    new SourceStream { Index = 0, Kind = StreamKind.Video, Width = 1920, Height = 1080 },
-                    new SourceStream { Index = 1, Kind = StreamKind.Audio },
-                },
+                Id = Guid.NewGuid(), TimelineStartTicks = Sec(10), DurationTicks = Sec(5),
+                Content = new CursorContent { SourceInTicks = Sec(4), Speed = speed },
             };
-            screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Order = 0, Name = "Screen" };
-            overlayTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Order = 1, Name = "Cursor" };
-            var project = new Project();
-            project.Sources.Add(source);
-            project.Tracks.Add(screenTrack);
-            project.Tracks.Add(overlayTrack);
-            return project;
+            var clock = (CursorContent)item.Content;
+
+            foreach (var at in new[] { Sec(10), Sec(11), Sec(13) })
+                Assert.Equal((at - item.TimelineStartTicks) / tpp, PreviewXOfComposerTime(item, clock, at, tpp), 3);
+
+            // and it covers exactly what the clip plays, to where the composer stops reading
+            var span = InputPreviewMath.SpanOf(item, clock).Value;
+            Assert.Equal(FrameComposer.SourceTimeTicks(clock, item, item.TimelineEndTicks),
+                span.SourceInTicks + span.SourceDurationTicks);
+        }
+
+        [Theory]
+        [InlineData(1.0)]
+        [InlineData(2.0)]
+        public void Key_preview_blips_land_at_the_instant_the_composer_reads_them(double speed)
+        {
+            const double tpp = 10_000;
+            var item = new Item
+            {
+                Id = Guid.NewGuid(), TimelineStartTicks = Sec(10), DurationTicks = Sec(5),
+                Content = new KeyboardContent { SourceInTicks = Sec(4), Speed = speed },
+            };
+            var clock = (KeyboardContent)item.Content;
+            var composerTicks = FrameComposer.SourceTimeTicks(clock, item, Sec(13));
+            var span = InputPreviewMath.SpanOf(item, clock).Value;
+
+            var blip = Assert.Single(InputPreviewMath.KeyBlips(
+                new[] { new TimelineKeyRun(composerTicks, composerTicks + Sec(1), 2) },
+                span.SourceInTicks, span.Speed, tpp));
+
+            Assert.Equal(Sec(3) / tpp, blip.X, 3);
         }
 
         [Fact]
-        public void Overlay_time_runs_through_the_linked_screen_item()
+        public void A_clip_holding_a_freeze_has_no_span_to_preview()
         {
-            var project = TimingProject(out var source, out var screenTrack, out var overlayTrack);
-            var group = Guid.NewGuid();
+            var item = new Item { DurationTicks = Sec(5), Content = new CursorContent { SourceInTicks = Sec(4), Freeze = true } };
 
-            // the screen segment starts 4s into the recording and sits at 10s on the timeline; the
-            // overlay mirrors its span and link group
-            project.Items.Add(new Item
-            {
-                Id = Guid.NewGuid(), TrackId = screenTrack.Id, GroupId = group,
-                TimelineStartTicks = Sec(10), DurationTicks = Sec(5),
-                Content = new MediaContent { SourceId = source.Id, StreamIndex = 0, SourceInTicks = Sec(4) },
-            });
-            var overlay = new Item
-            {
-                Id = Guid.NewGuid(), TrackId = overlayTrack.Id, GroupId = group,
-                TimelineStartTicks = Sec(10), DurationTicks = Sec(5),
-                Content = new CursorContent { SourceId = source.Id },
-            };
-            project.Items.Add(overlay);
-
-            Assert.True(OverlayTiming.TryResolve(project, overlay, source.Id, out var sourceIn, out var speed));
-            Assert.Equal(Sec(4), sourceIn);
-            Assert.Equal(1.0, speed);
-        }
-
-        [Fact]
-        public void Overlay_prefers_its_own_link_group_and_offsets_into_a_wider_screen_item()
-        {
-            var project = TimingProject(out var source, out var screenTrack, out var overlayTrack);
-            var mine = Guid.NewGuid();
-
-            // another segment of the same recording overlaps too but belongs to another group
-            project.Items.Add(new Item
-            {
-                Id = Guid.NewGuid(), TrackId = screenTrack.Id, GroupId = Guid.NewGuid(),
-                TimelineStartTicks = Sec(0), DurationTicks = Sec(30),
-                Content = new MediaContent { SourceId = source.Id, StreamIndex = 0, SourceInTicks = Sec(100) },
-            });
-            // the partner starts 2s before the overlay at 2× speed: the overlay's start is 4s of
-            // source past the partner's SourceIn
-            project.Items.Add(new Item
-            {
-                Id = Guid.NewGuid(), TrackId = screenTrack.Id, GroupId = mine,
-                TimelineStartTicks = Sec(8), DurationTicks = Sec(10),
-                Content = new MediaContent { SourceId = source.Id, StreamIndex = 0, SourceInTicks = Sec(1), Speed = 2.0 },
-            });
-            var overlay = new Item
-            {
-                Id = Guid.NewGuid(), TrackId = overlayTrack.Id, GroupId = mine,
-                TimelineStartTicks = Sec(10), DurationTicks = Sec(5),
-                Content = new KeyboardContent { SourceId = source.Id },
-            };
-            project.Items.Add(overlay);
-
-            Assert.True(OverlayTiming.TryResolve(project, overlay, source.Id, out var sourceIn, out var speed));
-            Assert.Equal(Sec(5), sourceIn);
-            Assert.Equal(2.0, speed);
-        }
-
-        [Fact]
-        public void Overlay_ignores_audio_and_webcam_streams_and_fails_without_a_screen_item()
-        {
-            var project = TimingProject(out var source, out var screenTrack, out var overlayTrack);
-            var audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Order = 0 };
-            project.Tracks.Add(audioTrack);
-
-            // the audio item of the same recording covers the overlay, but it is not the screen
-            project.Items.Add(new Item
-            {
-                Id = Guid.NewGuid(), TrackId = audioTrack.Id,
-                TimelineStartTicks = 0, DurationTicks = Sec(30),
-                Content = new MediaContent { SourceId = source.Id, StreamIndex = 1 },
-            });
-            // neither is a screen item that does not overlap
-            project.Items.Add(new Item
-            {
-                Id = Guid.NewGuid(), TrackId = screenTrack.Id,
-                TimelineStartTicks = Sec(20), DurationTicks = Sec(5),
-                Content = new MediaContent { SourceId = source.Id, StreamIndex = 0 },
-            });
-            var overlay = new Item
-            {
-                Id = Guid.NewGuid(), TrackId = overlayTrack.Id,
-                TimelineStartTicks = Sec(10), DurationTicks = Sec(5),
-                Content = new CursorContent { SourceId = source.Id },
-            };
-            project.Items.Add(overlay);
-
-            Assert.False(OverlayTiming.TryResolve(project, overlay, source.Id, out var sourceIn, out var speed));
-            Assert.Equal(0, sourceIn);
-            Assert.Equal(1.0, speed);
-
-            Assert.False(OverlayTiming.TryResolve(null, overlay, source.Id, out _, out _));
-            Assert.False(OverlayTiming.TryResolve(project, overlay, Guid.NewGuid(), out _, out _));
+            Assert.Null(InputPreviewMath.SpanOf(item, (CursorContent)item.Content));
         }
     }
 }

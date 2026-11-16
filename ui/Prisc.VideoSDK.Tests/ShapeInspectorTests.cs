@@ -484,7 +484,6 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(TimelineRowKind.Shape, TimelineRowLayout.KindOf(track, session.Project.Items));
             Assert.Equal(TimelineRowLayout.ShapeRowHeight, TimelineRowLayout.HeightOf(TimelineRowKind.Shape));
             Assert.Equal(TimelineRowBlock.Video, TimelineRowLayout.BlockOf(TimelineRowKind.Shape));
-            Assert.False(TimelineRowLayout.IsInputOverlay(TimelineRowKind.Shape));
         }
 
         [Fact]

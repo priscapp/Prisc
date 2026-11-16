@@ -293,7 +293,7 @@ namespace Prisc.VideoSDK.Tests
                 webcam: "{\"stream_index\":1,\"rect\":{\"x\":0,\"y\":0,\"w\":320,\"h\":240}}")).Project;
 
             Assert.Equal(6, project.Items.Count); // 2 segments x 3 streams
-            var groups = project.Items.Select(i => i.GroupId).Distinct().ToList();
+            var groups = project.Tracks.Select(t => t.GroupId).Distinct().ToList();
             var group = Assert.Single(groups);
             Assert.NotNull(group);
         }

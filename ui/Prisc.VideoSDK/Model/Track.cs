@@ -28,6 +28,19 @@ public sealed class Track
     /// <summary>Stacking/row position. Ascending order composites later (on top) for video.</summary>
     public int Order { get; set; }
 
+    /// <summary>The group this row belongs to, or null. A group is a tag shared by rows, with no
+    /// other existence: dragging a clip on a grouped row brings the clips overlapping it on the
+    /// group's rows (<see cref="TimelineOps.TimeLinked"/>). It only affects editing and nothing
+    /// composes differently for it. A group with one row left holding clips dissolves
+    /// (<see cref="TimelineOps.CollapseLoneGroups"/>).</summary>
+    public Guid? GroupId { get; set; }
+
+    /// <summary>The row's clips cannot be moved, resized, rotated or cropped on the canvas
+    /// (<see cref="Editing.EditorSession.EditPlacement"/> refuses). It says nothing about time:
+    /// moves on the timeline, trims, splits and deletes all still apply, and so do undo and redo,
+    /// which restore history. Offered on video rows, the only ones with a placement to protect.</summary>
+    public bool PlacementLocked { get; set; }
+
     /// <summary>Video: excluded from the picture. Meaningless for audio (use <see cref="Muted"/>).</summary>
     public bool Hidden { get; set; }
 
@@ -44,8 +57,19 @@ public sealed class Track
     /// <see cref="Denoise"/> is on.</summary>
     public double DenoiseStrength { get; set; } = 1.0;
 
-    /// <summary>UI hint: the editor refuses to start edits on a locked track. Not enforced by
-    /// <see cref="TimelineOps"/> — a link-group op started from an unlocked member still applies
-    /// to the whole group.</summary>
-    public bool Locked { get; set; }
+    /// <summary>The row's settings on a new row, named as a copy and in no group: a copy of a row
+    /// is its own material, and a caller that wants the copies grouped says with what. Where it
+    /// goes is <see cref="TimelineOps.InsertTrackAt"/>'s to say.</summary>
+    public Track Clone() => new Track
+    {
+        Id = Guid.NewGuid(),
+        Kind = Kind,
+        Name = String.IsNullOrEmpty(Name) ? Name : Name + " copy",
+        Order = Order,
+        PlacementLocked = PlacementLocked,
+        Hidden = Hidden,
+        Muted = Muted,
+        Denoise = Denoise,
+        DenoiseStrength = DenoiseStrength,
+    };
 }

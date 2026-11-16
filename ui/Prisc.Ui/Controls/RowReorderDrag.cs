@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Shapes;
@@ -66,12 +65,6 @@ namespace Prisc.UI.Controls
         /// whole list, unless the host partitions rows into blocks a drag cannot cross.</summary>
         (int Start, int End) SlotGroup(int row);
 
-        /// <summary>Bends the slot the pointer asked for to one the host's model will actually
-        /// honor — for boundaries a block cannot express, e.g. a pair of rows glued together that
-        /// nothing may land between. Called on every move, so it must be idempotent and cheap; the
-        /// default accepts whatever the pointer picked.</summary>
-        int CoerceSlot(int row, int slot) => slot;
-
         /// <summary>False refuses the press outright — e.g. while another control's gesture owns
         /// the model and a mid-gesture mutation would be rolled back with it.</summary>
         bool CanBeginDrag { get; }
@@ -111,17 +104,7 @@ namespace Prisc.UI.Controls
         /// <summary>The drag grip: two columns of four dots (a 6x13 box), the arrangement every
         /// reorderable list uses. Drawn at its natural size — a grip that scaled with the row
         /// would read as a different control on short rows.</summary>
-        public static readonly Geometry DragGripGeometry = BuildDragGrip(DefaultGripDotRows);
-
-        /// <summary>Dot rows in the ordinary grip.</summary>
-        public const int DefaultGripDotRows = 4;
-
-        /// <summary>Taller grips — a host that spans one grip over several rows asks for more
-        /// dots rather than a scaled glyph, so the dots stay the size the other grips have.</summary>
-        private static readonly Dictionary<int, Geometry> GripGeometries = new Dictionary<int, Geometry>
-        {
-            [DefaultGripDotRows] = DragGripGeometry,
-        };
+        public static readonly Geometry DragGripGeometry = BuildDragGrip();
 
         private readonly Control _owner;
         private readonly Visual _coordinateSpace;
@@ -135,7 +118,7 @@ namespace Prisc.UI.Controls
         private bool _dragging;      // …and past the threshold, so the drop indicator is up
         private double _originY;
         private IPointer _pointer;
-        private Control _pressedGrip;
+        private TopLevel _tipsOffOn;
 
         /// <summary>
         /// <paramref name="owner"/> takes the pointer capture, the grabbing cursor and the move/
@@ -160,11 +143,8 @@ namespace Prisc.UI.Controls
         /// <summary>The grip cell: a transparent <see cref="Border"/> (a null background would not
         /// hit-test, leaving only the dots themselves grabbable) around the dot pattern, carrying
         /// the grab cursor and the press that opens a drag. <paramref name="draggable"/> false
-        /// builds the same cell empty and inert, purely to keep the column aligned.
-        /// <paramref name="dotRows"/> is the height of the dot pattern, for a grip that spans more
-        /// than one row (two columns always).</summary>
-        public Control BuildGrip(int rowIndex, bool draggable, IBrush restBrush, IBrush hoverBrush, Thickness margin,
-            int dotRows = DefaultGripDotRows)
+        /// builds the same cell empty and inert, purely to keep the column aligned.</summary>
+        public Control BuildGrip(int rowIndex, bool draggable, IBrush restBrush, IBrush hoverBrush, Thickness margin)
         {
             var grip = new Border
             {
@@ -180,12 +160,9 @@ namespace Prisc.UI.Controls
                 return grip;
             }
 
-            if (!GripGeometries.TryGetValue(dotRows, out var geometry))
-                GripGeometries[dotRows] = geometry = BuildDragGrip(dotRows);
-
             var dots = new Path
             {
-                Data = geometry,
+                Data = DragGripGeometry,
                 Fill = restBrush,
                 Stretch = Stretch.None,
                 Opacity = GripRestOpacity,
@@ -228,11 +205,14 @@ namespace Prisc.UI.Controls
                 _originY = e.GetPosition(_coordinateSpace).Y;
                 _pointer = e.Pointer;
 
-                // no tooltip while the button is down — clearing the tip (not just closing) keeps
-                // the hover timer from re-opening it mid-drag; EndDrag puts it back
+                // no tooltip while the button is down. The tooltip service follows the hit test and
+                // ignores capture, so another row's grip, or a button past the end of the list, would
+                // open its own under the pointer: off for the whole window, until EndDrag
                 ToolTip.SetIsOpen(grip, false);
-                ToolTip.SetTip(grip, null);
-                _pressedGrip = grip;
+                _tipsOffOn = TopLevel.GetTopLevel(_owner);
+                if (_tipsOffOn != null)
+                    ToolTip.SetServiceEnabled(_tipsOffOn, false);
+
                 e.Pointer.Capture(_owner); // the owner, not the grip: the drag leaves the row at once
                 _owner.Cursor = DragCursors.Grabbing; // the capture makes the owner's cursor the shown one
                 e.Handled = true; // rows may select on press; a grab is not a click
@@ -270,8 +250,7 @@ namespace Prisc.UI.Controls
             }
 
             var (start, end) = _host.SlotGroup(_fromRow);
-            SetDropSlot(_host.CoerceSlot(_fromRow, RowReorderMath.DropSlot(start, end, y, _host.RowExtent)),
-                start, end);
+            SetDropSlot(RowReorderMath.DropSlot(start, end, y, _host.RowExtent), start, end);
         }
 
         private void Owner_PointerReleased(object sender, PointerReleasedEventArgs e)
@@ -333,11 +312,9 @@ namespace Prisc.UI.Controls
             _owner.Cursor = null;
             HookEscape(false);
 
-            if (_pressedGrip != null)
-            {
-                ToolTip.SetTip(_pressedGrip, GripTip);
-                _pressedGrip = null;
-            }
+            // cleared, not set true: the window goes back to whatever it inherited
+            _tipsOffOn?.ClearValue(ToolTip.ServiceEnabledProperty);
+            _tipsOffOn = null;
         }
 
         private void SetDropSlot(int slot, int start, int end)
@@ -356,7 +333,7 @@ namespace Prisc.UI.Controls
             _indicator.IsVisible = true;
         }
 
-        private static Geometry BuildDragGrip(int dotRows)
+        private static Geometry BuildDragGrip()
         {
             const double diameter = 2.5;
             const double pitch = 3.5;
@@ -364,7 +341,7 @@ namespace Prisc.UI.Controls
             var dots = new GeometryGroup();
             for (var column = 0; column < 2; column++)
             {
-                for (var row = 0; row < dotRows; row++)
+                for (var row = 0; row < 4; row++)
                     dots.Children.Add(new EllipseGeometry(
                         new Rect(column * pitch, row * pitch, diameter, diameter)));
             }

@@ -38,10 +38,36 @@ public sealed class Project
     /// humans when a render goes wrong).</summary>
     public string ToJson() => JsonSerializer.Serialize(this, ProjectJsonContext.Default.Project);
 
-    /// <summary>Round-trip counterpart of <see cref="ToJson"/>. Throws
-    /// <see cref="JsonException"/> on malformed input.</summary>
-    public static Project FromJson(string json) =>
-        JsonSerializer.Deserialize(json, ProjectJsonContext.Default.Project);
+    /// <summary>Round-trip counterpart of <see cref="ToJson"/>, and the one way in for a saved
+    /// file, so every reader gets one in the current shape (see <see cref="ProjectMigration"/>).
+    /// Throws <see cref="JsonException"/> on malformed input.</summary>
+    public static Project FromJson(string json) => FromJson(json, out _);
+
+    /// <summary><see cref="FromJson(string)"/> for the caller that owns the file:
+    /// <paramref name="upgraded"/> says the file predates the current shape, so what it holds is
+    /// about to be replaced by the next save.</summary>
+    public static Project FromJson(string json, out bool upgraded)
+    {
+        var project = JsonSerializer.Deserialize(json, ProjectJsonContext.Default.Project);
+        upgraded = ProjectMigration.Upgrade(project);
+        return project;
+    }
+
+    /// <summary>The row <paramref name="item"/> sits on. Null for a null item, or for one whose
+    /// row is not in the project.</summary>
+    public Track TrackOf(Item item)
+    {
+        if (item == null)
+            return null;
+
+        foreach (var track in Tracks)
+        {
+            if (track.Id == item.TrackId)
+                return track;
+        }
+
+        return null;
+    }
 
     /// <summary>The timeline's length in 100ns ticks: the maximum <see cref="Item.TimelineEndTicks"/>
     /// across all items, 0 for an empty project. This is the duration the renderer produces —
@@ -217,10 +243,7 @@ public sealed class Project
                         errors.Add($"Item {item.Id} references unknown source {media.SourceId}.");
                     else if (source.Streams == null || !source.Streams.Any(s => s.Index == media.StreamIndex))
                         errors.Add($"Item {item.Id} references stream {media.StreamIndex} which source {media.SourceId} does not have.");
-                    if (media.SourceInTicks < 0)
-                        errors.Add($"Item {item.Id} has a negative source in-point ({media.SourceInTicks} ticks).");
-                    if (!(media.Speed > 0) || Double.IsInfinity(media.Speed))
-                        errors.Add($"Item {item.Id} has a non-positive playback speed ({media.Speed}).");
+                    CheckClock(errors, item.Id, media);
                     // a held frame is a picture; there is nothing to hold on an audio row.
                     if (media.Freeze && track != null && track.Kind != TrackKind.Video)
                         errors.Add($"Freeze frame item {item.Id} is on non-video track {track.Id}.");
@@ -242,6 +265,7 @@ public sealed class Project
                 case CursorContent cursor:
                     if (!sourceById.ContainsKey(cursor.SourceId))
                         errors.Add($"Item {item.Id} references unknown source {cursor.SourceId}.");
+                    CheckClock(errors, item.Id, cursor);
                     // negated comparisons so NaN fails the check rather than sailing through.
                     if (!(cursor.Size >= 0.25 && cursor.Size <= 5))
                         errors.Add($"Item {item.Id} has a cursor size {cursor.Size} outside 0.25..5.");
@@ -255,6 +279,7 @@ public sealed class Project
                 case KeyboardContent keyboard:
                     if (!sourceById.ContainsKey(keyboard.SourceId))
                         errors.Add($"Item {item.Id} references unknown source {keyboard.SourceId}.");
+                    CheckClock(errors, item.Id, keyboard);
                     if (!(keyboard.FontSize >= 8 && keyboard.FontSize <= 200))
                         errors.Add($"Item {item.Id} has a keyboard font size {keyboard.FontSize} outside 8..200.");
                     if (keyboard.LingerMs < 0 || keyboard.LingerMs > 10000)
@@ -370,8 +395,6 @@ public sealed class Project
             {
                 if (track != null && track.Kind != TrackKind.Effect)
                     errors.Add($"Item {item.Id} places {item.Content.GetType().Name} on non-effect track {track.Id}.");
-                if (item.GroupId != null)
-                    errors.Add($"Effect item {item.Id} carries a group.");
                 if (item.Entry != null && item.Entry.Kind != TransitionKind.Ramp)
                     errors.Add($"Effect item {item.Id} has a non-ramp entry transition ({item.Entry.Kind}).");
                 if (item.Exit != null && item.Exit.Kind != TransitionKind.Ramp)
@@ -382,15 +405,9 @@ public sealed class Project
                 errors.Add($"Item {item.Id} places {item.Content.GetType().Name} on effect track {track.Id}.");
             }
 
-            // input-overlay items live on video rows only and are hard-synced to their
-            // recording: an item without a group could drift from the screen it annotates.
-            if (item.Content is CursorContent or KeyboardContent)
-            {
-                if (track != null && track.Kind != TrackKind.Video)
-                    errors.Add($"Item {item.Id} places {item.Content.GetType().Name} on non-video track {track.Id}.");
-                if (item.GroupId == null)
-                    errors.Add($"Input overlay item {item.Id} carries no group.");
-            }
+            // input-overlay items live on video rows only
+            if (item.Content is InputOverlayContent && track != null && track.Kind != TrackKind.Video)
+                errors.Add($"Item {item.Id} places {item.Content.GetType().Name} on non-video track {track.Id}.");
         }
 
         // effect rows are homogeneous (a row is a speed row or a zoom row, decided by its items)
@@ -435,6 +452,16 @@ public sealed class Project
         }
 
         return errors;
+    }
+
+    /// <summary>A clip's in-point and speed, which media, cursor and keys clips share.</summary>
+    private static void CheckClock(List<string> errors, Guid itemId, SourceClockContent clock)
+    {
+        if (clock.SourceInTicks < 0)
+            errors.Add($"Item {itemId} has a negative source in-point ({clock.SourceInTicks} ticks).");
+        // negated comparison so NaN fails the check rather than sailing through.
+        if (!(clock.Speed > 0) || Double.IsInfinity(clock.Speed))
+            errors.Add($"Item {itemId} has a non-positive playback speed ({clock.Speed}).");
     }
 
     /// <summary>One of the cursor highlight's three multipliers, against the single range they

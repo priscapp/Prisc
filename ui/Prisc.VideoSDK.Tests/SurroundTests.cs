@@ -32,7 +32,6 @@ namespace Prisc.VideoSDK.Tests
             var videoTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0 };
             var overlayTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Overlay", Order = 1 };
 
-            var group = Guid.NewGuid();
             video = new Item
             {
                 Id = Guid.NewGuid(),
@@ -40,7 +39,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = 0,
                 DurationTicks = Ms(5_000),
                 Content = new MediaContent { SourceId = sourceId, StreamIndex = 0 },
-                GroupId = group,
             };
             var second = new Item
             {
@@ -49,7 +47,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = Ms(5_000),
                 DurationTicks = Ms(5_000),
                 Content = new MediaContent { SourceId = sourceId, StreamIndex = 0, SourceInTicks = Ms(5_000) },
-                GroupId = group,
             };
             image = new Item
             {
@@ -174,7 +171,7 @@ namespace Prisc.VideoSDK.Tests
                 i => i.Surround = Surround.Create(SurroundKind.Glow, cursor: false),
                 "test", structural: false, origin: new object());
 
-            Assert.True(session.SplitAt(video.Id, Ms(2_000)));
+            Assert.True(session.SplitItemAt(video.Id, Ms(2_000)));
 
             var halves = session.Project.Items
                 .Where(i => i.TrackId == video.TrackId && i.TimelineStartTicks < Ms(5_000))
@@ -503,7 +500,7 @@ namespace Prisc.VideoSDK.Tests
                     {
                         Id = sourceId,
                         Path = @"C:\rec\input.mp4",
-                        InputCapturePath = @"C:\rec\input-capture.jsonl",
+                        InputCapturePath = TestPath.ExistingCapture,
                         Streams =
                         {
                             new SourceStream { Index = 0, Kind = StreamKind.Video, Width = 1920, Height = 1080, AvgFrameRateNum = 30, AvgFrameRateDen = 1, DurationTicks = Ms(60_000) },

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -193,6 +194,44 @@ namespace Prisc.VideoSDK.Tests
                 queue.Dispose();
                 demuxer.Dispose();
                 sink.Dispose();
+            }
+        }
+
+        /// <summary>The demux thread clears the producer interrupt as it serves a seek, so a seek
+        /// that raised it only after asking could leave it up for good: the file is then read to
+        /// its end into nothing, and the stream never delivers another frame. It takes the demux
+        /// thread winning a race of a few instructions, so this asks many times while it is busy
+        /// reading.</summary>
+        [Fact]
+        public void A_seek_always_leaves_the_demuxer_feeding_its_queue()
+        {
+            RequireFFmpeg();
+
+            var demuxer = new Demuxer();
+            var queue = new PacketQueue(32);
+            try
+            {
+                var info = demuxer.Open(EncodeVideoFixture(2));
+                demuxer.AttachQueue(info.VideoStreams[0].StreamIndex, queue);
+                demuxer.Start();
+
+                for (int i = 0; i < 5000; i++)
+                {
+                    demuxer.SeekAndFlush(TimeSpan.Zero);
+                    var sw = Stopwatch.StartNew();
+                    while (queue.Count == 0)
+                    {
+                        Assert.True(sw.ElapsedMilliseconds < 10000, $"seek {i} left the queue starving");
+                        Thread.Yield();
+                    }
+                }
+            }
+            finally
+            {
+                demuxer.Stop();
+                queue.Stop();
+                queue.Dispose();
+                demuxer.Dispose();
             }
         }
     }

@@ -635,8 +635,8 @@ namespace Prisc.UI.VideoEditor
 
         /// <summary>
         /// Where a take is written: beside <c>videoedit.json</c>, with the session's other files
-        /// (the waveform cache, the AI sidecars), or next to the file being edited in the dev
-        /// harness, which has no session directory. Named by the wall clock, with a counter for a
+        /// (the waveform cache, the AI sidecars), or next to the file being edited under
+        /// <c>--video-edit</c>, which has no session directory. Named by the wall clock, with a counter for a
         /// second take inside the same second.
         /// </summary>
         private string NewVoiceTakePath()

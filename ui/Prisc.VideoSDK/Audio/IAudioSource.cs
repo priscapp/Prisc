@@ -42,5 +42,15 @@ namespace Prisc.VideoSDK.Audio
         /// </summary>
         bool ReadSamples(Guid sourceId, int streamIndex, long sourcePosFrames, float[] dst,
             int frames, out int framesRead);
+
+        /// <summary>
+        /// The same, for a clip in <paramref name="lane"/> (see <c>StreamLanes</c>): each lane of a
+        /// stream holds its own read position, so clips that play one stream at once do not take
+        /// turns dragging it back and forth. Lane 0 is the overload above. A source with one
+        /// position per stream ignores the lane.
+        /// </summary>
+        bool ReadSamples(Guid sourceId, int streamIndex, int lane, long sourcePosFrames, float[] dst,
+            int frames, out int framesRead)
+            => ReadSamples(sourceId, streamIndex, sourcePosFrames, dst, frames, out framesRead);
     }
 }

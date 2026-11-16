@@ -114,7 +114,10 @@ namespace Prisc.UI.VideoEditor
                 canvas.Translate((float)_videoRect.X, (float)_videoRect.Y);
                 canvas.Scale((float)(_videoRect.Width / width), (float)(_videoRect.Height / height));
 
-                FrameComposer.Compose(_project, timeTicks, frames, canvas, width, height);
+                // the frames are held per lane of the player's project; the project drawn here can
+                // be the crop draw's isolated copy, whose own lanes would all read 0
+                FrameComposer.Compose(_project, timeTicks, frames, canvas, width, height,
+                    StreamLanes.Assign(_player.Project));
             }
             finally
             {

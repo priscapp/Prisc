@@ -7,17 +7,19 @@ namespace Prisc.VideoSDK.Composition
 {
     /// <summary>
     /// The render path's <see cref="IFrameSource"/>: forward decode, no playback machinery. Each
-    /// requested (sourceId, streamIndex) lazily opens its own <see cref="SyncStreamDecoder"/> and a
-    /// <see cref="SequentialFrameCursor{T}"/> holding current + next; requests decode forward
+    /// requested (sourceId, streamIndex, lane) lazily opens its own <see cref="SyncStreamDecoder"/>
+    /// and a <see cref="SequentialFrameCursor{T}"/> holding current + next; requests decode forward
     /// while <c>next.pts &lt;= t</c>, so lookups follow the latest-PTS-at-or-before-t contract
     /// (see <see cref="IFrameSource"/>) for CFR and VFR alike.
     ///
     /// <para>
-    /// Requests per stream are expected to run forward — that is what a timeline whose items read
-    /// their source in order produces, and it decodes each stream exactly once. A request that goes
-    /// backwards is legal but costly: the timeline reads that stream out of source order (a clip
-    /// moved behind an earlier one, split halves swapped, the same span used twice), so the decoder
-    /// container-seeks to the keyframe at or before the wanted time and the cursor restarts there
+    /// Requests per lane are expected to run forward — that is what a timeline whose clips read
+    /// their source in order produces, and it decodes each lane exactly once. Clips that overlap at
+    /// different source times sit in lanes of their own (<c>StreamLanes</c>), so they never take
+    /// turns seeking one decoder. A request that goes backwards is legal but costly: the lane reads
+    /// out of source order (a clip moved behind an earlier one, split halves swapped, the same span
+    /// used twice one after the other, clips past the lane cap), so the decoder container-seeks to
+    /// the keyframe at or before the wanted time and the cursor restarts there
     /// (<see cref="RepositionCount"/> counts these). Frames still come out identical to a forward
     /// decode; only the decode work is repeated.
     /// </para>
@@ -38,8 +40,8 @@ namespace Prisc.VideoSDK.Composition
         private readonly bool _ownsPool;
         private readonly string _sidecarCacheDir;
         private readonly HashSet<(Guid SourceId, int StreamIndex)> _matteStreams;
-        private readonly Dictionary<(Guid SourceId, int StreamIndex), StreamState> _streams
-            = new Dictionary<(Guid, int), StreamState>();
+        private readonly Dictionary<(Guid SourceId, int StreamIndex, int Lane), StreamState> _streams
+            = new Dictionary<(Guid, int, int), StreamState>();
         private int _repositions;
         private bool _disposed;
 
@@ -94,11 +96,14 @@ namespace Prisc.VideoSDK.Composition
         internal int RepositionCount => _repositions;
 
         public bool TryGetFrame(Guid sourceId, int streamIndex, long sourceTimeTicks, out FrameRef frame)
+            => TryGetFrame(sourceId, streamIndex, sourceTimeTicks, 0, out frame);
+
+        public bool TryGetFrame(Guid sourceId, int streamIndex, long sourceTimeTicks, int lane, out FrameRef frame)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             frame = default;
 
-            var key = (sourceId, streamIndex);
+            var key = (sourceId, streamIndex, lane);
             if (!_streams.TryGetValue(key, out var state))
             {
                 state = OpenStream(sourceId, streamIndex);
@@ -129,11 +134,11 @@ namespace Prisc.VideoSDK.Composition
             if (decoded != null)
             {
                 // the covering frame changed: upload it (the cache takes buffer ownership and
-                // evicts this stream's previous image).
+                // evicts this lane's previous image).
                 image = _cache.Upload(sourceId, streamIndex, ptsTicks,
-                    decoded.Buffer, decoded.Width, decoded.Height, decoded.RowBytes);
+                    decoded.Buffer, decoded.Width, decoded.Height, decoded.RowBytes, lane);
             }
-            else if (!_cache.TryGet(sourceId, streamIndex, out image, out _))
+            else if (!_cache.TryGet(sourceId, streamIndex, out image, out _, lane))
             {
                 return false; // delivered frame was evicted externally
             }
@@ -147,11 +152,11 @@ namespace Prisc.VideoSDK.Composition
                 if (decodedMask != null)
                 {
                     mask = _cache.UploadMask(sourceId, streamIndex, maskPts,
-                        decodedMask.Buffer, decodedMask.Width, decodedMask.Height, decodedMask.RowBytes);
+                        decodedMask.Buffer, decodedMask.Width, decodedMask.Height, decodedMask.RowBytes, lane);
                 }
                 else
                 {
-                    _cache.TryGetMask(sourceId, streamIndex, out mask, out _);
+                    _cache.TryGetMask(sourceId, streamIndex, out mask, out _, lane);
                 }
             }
 

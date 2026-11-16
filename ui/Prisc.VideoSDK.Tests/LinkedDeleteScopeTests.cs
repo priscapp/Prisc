@@ -8,18 +8,17 @@ using Xunit;
 namespace Prisc.VideoSDK.Tests
 {
     /// <summary>
-    /// Linked deletes are scoped to the clicked clip's span, never "the whole link group": one
-    /// group can carry several back-to-back segments per row — a recording built from keep-slices
-    /// shares one group across all of them, and a single-item split leaves both halves in the
-    /// original group — and deleting one clip must not wipe the rest of the recording (the bug
-    /// these tests pin down: delete emptied the entire timeline).
+    /// Linked deletes are scoped to the clicked clip's span, never "the whole group": a group's rows
+    /// can carry several back-to-back segments — a recording built from keep-slices, or the two
+    /// halves of a single-item split — and deleting one clip must not wipe the rest of the recording
+    /// (the bug these tests pin down: delete emptied the entire timeline).
     /// </summary>
     public class LinkedDeleteScopeTests
     {
         private static long Ms(long ms) => ms * TimeSpan.TicksPerMillisecond;
 
         /// <summary>The real recording mapping: screen/webcam/audio rows over one source, one item
-        /// per kept slice per row, all slices sharing one link group.</summary>
+        /// per kept slice per row, all rows sharing one group.</summary>
         private static Project BuildRecording(long audioStreamDurationMs = 60_000, params KeepSegment[] segments) =>
             RecordingProject.Build(new RecordingProjectSpec
             {
@@ -49,7 +48,6 @@ namespace Prisc.VideoSDK.Tests
             var before = session.Project.ToJson();
 
             var firstScreen = ScreenItemAt(session, 0);
-            Assert.True(session.IsRippleGroup(firstScreen.Id));
             session.RippleDeleteItem(firstScreen.Id);
 
             // the second slice survives on every row and slides back to the origin
@@ -95,50 +93,6 @@ namespace Prisc.VideoSDK.Tests
             session.RippleDeleteItem(audio.Id);
 
             Assert.Empty(session.Project.Items);
-            Assert.Empty(session.Project.Validate());
-        }
-
-        [Fact]
-        public void Deleting_one_half_of_a_split_import_keeps_the_other_half_and_trims_its_audio()
-        {
-            var project = BuildRecording(segments: new[] { new KeepSegment(0, Ms(10_000)) });
-            var session = new EditorSession(project, null, null);
-
-            var probe = new MediaProbeResult
-            {
-                Path = @"C:\media\clip.mp4",
-                DurationTicks = Ms(8_000),
-                VideoStreams = new[]
-                {
-                    new VideoStreamProbe { StreamIndex = 0, Width = 1280, Height = 720, AvgFrameRateNum = 30, AvgFrameRateDen = 1, DurationTicks = Ms(8_000) },
-                },
-                AudioStreams = new[] { new AudioStreamProbe { StreamIndex = 1, SampleRate = 48_000, Channels = 2, DurationTicks = Ms(7_900) } },
-                HasAudio = true,
-            };
-            Assert.NotEmpty(session.ImportMedia(@"C:\media\clip.mp4", probe, 0));
-
-            var clipSource = session.Project.Sources.First(s => s.Path == @"C:\media\clip.mp4");
-            Item ClipItem(int streamIndex, long startTicks) => session.Project.Items.First(i =>
-                i.Content is MediaContent m && m.SourceId == clipSource.Id
-                && m.StreamIndex == streamIndex && i.TimelineStartTicks == startTicks);
-
-            var video = ClipItem(0, 0);
-            Assert.False(session.IsRippleGroup(video.Id));
-            Assert.True(session.SplitItemAt(video.Id, Ms(4_000)));
-
-            session.DeleteGroup(ClipItem(0, Ms(4_000)).Id);
-
-            // the left video half stays, and the file's audio is trimmed back to match — no
-            // ripple, nothing else on the timeline moved
-            var leftVideo = ClipItem(0, 0);
-            var audio = ClipItem(1, 0);
-            Assert.Equal(Ms(4_000), leftVideo.DurationTicks);
-            Assert.Equal(Ms(4_000), audio.DurationTicks);
-            Assert.DoesNotContain(session.Project.Items, i =>
-                i.Content is MediaContent m && m.SourceId == clipSource.Id && i.TimelineStartTicks >= Ms(4_000));
-            Assert.All(session.Project.Items.Where(i =>
-                    i.Content is MediaContent m && m.SourceId != clipSource.Id),
-                i => Assert.Equal(Ms(10_000), i.DurationTicks));
             Assert.Empty(session.Project.Validate());
         }
     }

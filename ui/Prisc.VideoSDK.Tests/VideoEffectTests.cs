@@ -141,7 +141,7 @@ namespace Prisc.VideoSDK.Tests
             var session = NewSession(out var video, out _, out _, out _);
             session.SetItemEffect(video.Id, new VideoEffect { Kind = VideoEffectKind.BgBlur, Amount = 0.4 });
 
-            Assert.True(session.SplitAt(video.Id, Ms(4_000)));
+            Assert.True(session.SplitItemAt(video.Id, Ms(4_000)));
 
             var halves = session.Project.Items
                 .Where(i => i.TrackId == video.TrackId)

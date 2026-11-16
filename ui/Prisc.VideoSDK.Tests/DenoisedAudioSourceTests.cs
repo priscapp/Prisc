@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using Prisc.VideoSDK.Ai;
 using Prisc.VideoSDK.Audio;
@@ -346,6 +347,74 @@ namespace Prisc.VideoSDK.Tests
             source.UpdateProject(AudioProject(sourceId, sourcePath, strength: 0.5));
             float expected = RawValue * 0.5f + DenoisedValue * 0.5f;
             Assert.All(Read(source, sourceId, 1, 200, 100), v => Assert.Equal(expected, v, 3));
+        }
+
+        /// <summary>The raw stream, recording the lane each read arrives in.</summary>
+        private sealed class LaneSource : IAudioSource
+        {
+            public readonly List<int> Lanes = new List<int>();
+
+            public bool ReadSamples(Guid sourceId, int streamIndex, long sourcePosFrames, float[] dst,
+                int frames, out int framesRead)
+                => ReadSamples(sourceId, streamIndex, 0, sourcePosFrames, dst, frames, out framesRead);
+
+            public bool ReadSamples(Guid sourceId, int streamIndex, int lane, long sourcePosFrames, float[] dst,
+                int frames, out int framesRead)
+            {
+                Lanes.Add(lane);
+                Array.Fill(dst, RawValue, 0, frames * 2);
+                framesRead = frames;
+                return true;
+            }
+        }
+
+        [Theory]
+        [InlineData(false, false, 1.0)] // no sidecar wanted: raw passes through
+        [InlineData(true, false, 1.0)] // wanted, but none exists yet: raw passes through
+        [InlineData(true, true, 0.5)] // the raw half of a blend
+        public void Reads_of_the_raw_stream_keep_their_lane(bool denoise, bool sidecar, double strength)
+        {
+            if (sidecar)
+                RequireFFmpeg();
+            var sourceId = Guid.NewGuid();
+            string recording = WriteFakeRecording();
+            if (sidecar)
+                WriteSidecar(sourceId, 1, recording);
+            var project = AudioProject(sourceId, recording, denoise, strength);
+            var raw = new LaneSource();
+            using var source = new DenoisedAudioSource(raw, project, _cacheDir);
+
+            var dst = new float[100 * 2];
+            Assert.True(((IAudioSource)source).ReadSamples(sourceId, 1, 2, 0, dst, 100, out _));
+
+            Assert.Equal(new[] { 2 }, raw.Lanes);
+        }
+
+        [Theory]
+        [InlineData(1.0)]
+        [InlineData(0.5)]
+        public void Each_lane_reads_the_sidecar_from_its_own_position(double strength)
+        {
+            // alternating two far-apart positions on one lane would seek the wav back on each read;
+            // here the second position is only ever read forward, in its own lane
+            RequireFFmpeg();
+            var sourceId = Guid.NewGuid();
+            string recording = WriteFakeRecording();
+            WriteSidecar(sourceId, 1, recording);
+            var project = AudioProject(sourceId, recording, denoise: true, strength: strength);
+            using var source = new DenoisedAudioSource(new LaneSource(), project, _cacheDir);
+            float expected = RawValue + (DenoisedValue - RawValue) * (float)strength;
+
+            var dst = new float[1000 * 2];
+            for (int i = 0; i < 4; i++)
+            {
+                Assert.True(source.ReadSamples(sourceId, 1, 0, 1000L * i, dst, 1000, out _));
+                Assert.Equal(expected, dst[0], 1e-4f);
+                Assert.True(source.ReadSamples(sourceId, 1, 1, 8000L + 1000L * i, dst, 1000, out _));
+                Assert.Equal(expected, dst[0], 1e-4f);
+            }
+
+            Assert.Equal(0, source.SidecarRepositionCount);
         }
 
         [Fact]

@@ -29,10 +29,10 @@ namespace Prisc.VideoSDK.Tests
         {
             var sourceId = Guid.NewGuid();
             var linkGroup = Guid.NewGuid();
-            var screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0 };
-            var webcamTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Webcam", Order = 1 };
+            var screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0, GroupId = linkGroup };
+            var webcamTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Webcam", Order = 1, GroupId = linkGroup };
             var textTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Overlay", Order = 2 };
-            var audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 3 };
+            var audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 3, GroupId = linkGroup };
 
             Item Media(Track track, int streamIndex, long start, long duration) => new Item
             {
@@ -41,7 +41,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = start,
                 DurationTicks = duration,
                 Content = new MediaContent { SourceId = sourceId, StreamIndex = streamIndex, SourceInTicks = start },
-                GroupId = linkGroup,
             };
 
             screen = Media(screenTrack, 0, 0, Ms(10_000));
@@ -907,8 +906,8 @@ namespace Prisc.VideoSDK.Tests
             ((System.Windows.Input.ICommand)vm.CommandUngroup).Execute(null);
 
             Assert.False(vm.IsGrouped);
-            Assert.Null(Live(session, webcamA.Id).GroupId);
-            Assert.Null(Live(session, webcamB.Id).GroupId);
+            Assert.Null(session.Project.TrackOf(Live(session, webcamA.Id)).GroupId);
+            Assert.Null(session.Project.TrackOf(Live(session, webcamB.Id)).GroupId);
         }
 
         [Fact]
@@ -918,7 +917,7 @@ namespace Prisc.VideoSDK.Tests
             session.Select(text.Id);
             vm.PositionX = 0.3;
 
-            session.DeleteItem(text.Id, origin: null);
+            session.DeleteItems(new[] { text.Id }, origin: null);
             Assert.False(vm.HasSelection);
             Assert.False(vm.ShowText);
 
@@ -968,22 +967,24 @@ namespace Prisc.VideoSDK.Tests
         // ---------------------------------------------------------------------- playback speed
 
         [Fact]
-        public void Speed_ShownOnlyForUngroupedMedia()
+        public void Speed_ShownForMediaGroupedOrNotWithACaptionOnlyOnAGroupedRow()
         {
             var (session, vm) = NewInspector(out var screen, out _, out _, out var audio, out var text);
 
-            // linked media: the row still moves with its recording, so no speed control
             session.Select(screen.Id);
-            Assert.False(vm.ShowSpeed);
+            Assert.True(vm.ShowSpeed);
+            Assert.True(vm.ShowSpeedGroupCaption);
 
             // a text card has no source clock at all
             session.Select(text.Id);
             Assert.False(vm.ShowSpeed);
+            Assert.False(vm.ShowSpeedGroupCaption);
 
-            // desyncing the audio row exposes it (audio and video alike)
-            session.UngroupTrack(session.Project.Items.First(i => i.Id == audio.Id).TrackId, null);
+            // audio and video alike, and ungrouped there is nothing to explain
+            session.UngroupTracks(new[] { session.Project.Items.First(i => i.Id == audio.Id).TrackId }, null);
             session.Select(audio.Id);
             Assert.True(vm.ShowSpeed);
+            Assert.False(vm.ShowSpeedGroupCaption);
             Assert.Equal(1.0, vm.SpeedChoice.Value);
         }
 
@@ -991,7 +992,7 @@ namespace Prisc.VideoSDK.Tests
         public void Speed_WritesThroughTheSessionAndRetimes()
         {
             var (session, vm) = NewInspector(out var screen, out _, out _, out _, out _);
-            session.UngroupTrack(screen.TrackId, null);
+            session.UngroupTracks(new[] { screen.TrackId }, null);
             session.Select(screen.Id);
 
             var twoX = SelectedItemViewModel.SpeedOptions.First(o => o.Value == 2.0);

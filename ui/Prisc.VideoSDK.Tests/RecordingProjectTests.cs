@@ -141,8 +141,8 @@ namespace Prisc.VideoSDK.Tests
                 Assert.All(items, i => Assert.Equal(streamIndex, StreamIndexOf(i)));
             }
 
-            // one recording is one link group, however many rows it made
-            Assert.Single(project.Items.Select(i => i.GroupId).Distinct());
+            // one recording is one group, however many rows it made
+            Assert.NotNull(Assert.Single(project.Tracks.Select(t => t.GroupId).Distinct()));
         }
 
         [Fact]
@@ -225,7 +225,7 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(before.Sources[0].Id, after.Sources[0].Id);
             Assert.Equal(before.Tracks.Select(t => t.Id).ToArray(), after.Tracks.Select(t => t.Id).ToArray());
             Assert.Equal(ids.AudioTrackIds.ToArray(), AudioTracks(after).Select(t => t.Id).ToArray());
-            Assert.Single(after.Items.Select(i => i.GroupId).Distinct());
+            Assert.Equal(ids.GroupId, Assert.Single(after.Tracks.Select(t => t.GroupId).Distinct()));
         }
 
         // ------------------------------------------------------------------------ screen mask

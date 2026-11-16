@@ -1,7 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Prisc.UI.VideoEditor;
+using Prisc.VideoSDK.Composition;
 using Prisc.VideoSDK.Model;
+using Prisc.VideoSDK.Playback;
+using SkiaSharp;
 using Xunit;
 
 namespace Prisc.VideoSDK.Tests
@@ -102,6 +106,55 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal((0.8, 0.7, 0.25), (transform.X, transform.Y, transform.Scale));
 
             Assert.Null(CropDrawMath.BuildIsolatedProject(project, Guid.NewGuid()));
+        }
+
+        private sealed class LaneRecorder : IFrameSource
+        {
+            public List<(int Lane, long Requested)> Requests { get; } = new List<(int, long)>();
+
+            public bool TryGetFrame(Guid sourceId, int streamIndex, long sourceTimeTicks, out FrameRef frame)
+                => throw new InvalidOperationException("the composer must always say which lane it wants");
+
+            public bool TryGetFrame(Guid sourceId, int streamIndex, long sourceTimeTicks, int lane, out FrameRef frame)
+            {
+                Requests.Add((lane, sourceTimeTicks));
+                frame = default;
+                return false;
+            }
+        }
+
+        [Fact]
+        public void IsolatedProject_ComposedWithThePlayersLanes_AsksForTheLaneItsClipPlaysOn()
+        {
+            long second = TimeSpan.TicksPerSecond;
+            var sourceId = Guid.NewGuid();
+            var row0 = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Order = 0 };
+            var row1 = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Order = 1 };
+            var original = new Item
+            {
+                Id = Guid.NewGuid(),
+                TrackId = row0.Id,
+                DurationTicks = 20 * second,
+                Content = new MediaContent { SourceId = sourceId },
+            };
+            var paste = new Item
+            {
+                Id = Guid.NewGuid(),
+                TrackId = row1.Id,
+                TimelineStartTicks = 5 * second,
+                DurationTicks = 5 * second,
+                Content = new MediaContent { SourceId = sourceId, SourceInTicks = 30 * second },
+            };
+            var project = new Project { Tracks = { row0, row1 }, Items = { original, paste } };
+            var lanes = StreamLanes.Assign(project);
+            Assert.Equal(1, StreamLanes.LaneOf(lanes, paste.Id));
+
+            var isolated = CropDrawMath.BuildIsolatedProject(project, paste.Id);
+            var frames = new LaneRecorder();
+            using var surface = SKSurface.Create(new SKImageInfo(16, 16));
+            FrameComposer.Compose(isolated, 7 * second, frames, surface.Canvas, 16, 16, lanes);
+
+            Assert.Equal((1, 32 * second), Assert.Single(frames.Requests));
         }
     }
 }

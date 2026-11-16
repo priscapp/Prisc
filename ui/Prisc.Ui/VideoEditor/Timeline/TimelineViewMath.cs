@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
+using Prisc.VideoSDK.Model;
 using Prisc.VideoSDK.Playback;
 
 // The timeline's pure math (this file, TimelineRowLayout, TimelineHitTester, the persistence
@@ -237,6 +239,13 @@ namespace Prisc.UI.VideoEditor.Timeline
             return t.ToString(subSecond ? @"m\:ss\.f" : @"m\:ss");
         }
 
+        /// <summary>Whether the ruler can pin the total against the end of the project. The Fit view
+        /// puts that end exactly on the right edge, give or take the division's rounding, and it is
+        /// still on screen there: a strict comparison lets the last regular label centre itself on
+        /// the edge instead, and lose its right half.</summary>
+        public static bool IsRulerEndInView(double endX, double viewportWidth) =>
+            endX > 0 && endX <= viewportWidth + 0.5;
+
         /// <summary>One notch on the ruler: where it lands on the timeline's (project-time) x axis,
         /// and the output instant it stands for — the two are the same tick only on unwarped
         /// footage.</summary>
@@ -356,7 +365,114 @@ namespace Prisc.UI.VideoEditor.Timeline
             return bands;
         }
 
+        // ------------------------------------------------------------------------------ drag status
+
+        /// <summary>What the status line says about a move drag carrying
+        /// <paramref name="moveCount"/> clips: nothing for a plain single-clip move.</summary>
+        public static string MoveStatus(int moveCount, int selectionCount, bool selectionOnly)
+        {
+            if (selectionOnly)
+                return "Moving only the selected clips.";
+
+            if (moveCount > selectionCount)
+            {
+                var alone = selectionCount > 1 ? "the selected clips" : "this clip";
+                return $"Moving {moveCount} linked clips. Hold Alt as you press to move only {alone}.";
+            }
+
+            return selectionCount > 1 ? $"Moving {selectionCount} selected clips." : null;
+        }
+
+        /// <summary>An entry that acts on the selection: "Delete" for one clip, "Delete 3 Clips" for
+        /// more.</summary>
+        public static string ClipCountLabel(string verb, int selectionCount) =>
+            selectionCount > 1 ? $"{verb} {selectionCount} Clips" : verb;
+
+        public static string UngroupLabel(int rows) => rows > 1 ? $"Ungroup {rows} Tracks" : "Ungroup Track";
+
+        /// <summary>The gap menu's Paste. A clipboard with several rows does not go into the gap, so
+        /// it says so.</summary>
+        public static string GapPasteLabel(int clips, int rows) => rows > 1 ? $"Paste {clips} Clips at Gap Start" : "Paste";
+
+        public static string GapPasteTip(int rows) =>
+            rows > 1 ? "Clips return to their own tracks, or new tracks if those are occupied." : null;
+
+        /// <summary>The shortcut modifier as its key is named on this OS.</summary>
+        private static string PrimaryKey(bool isMacOS) => isMacOS ? "Cmd" : "Ctrl";
+
+        public static string SplitClipTip(bool isMacOS) =>
+            $"Cuts this clip only. {PrimaryKey(isMacOS)}+K cuts every track, so the two sides can move apart.";
+
+        // --------------------------------------------------------------------------------- groups
+
+        /// <summary>How many colors tell groups apart. Groups are numbered from zero in
+        /// <see cref="GroupNumbers"/> and the colors repeat from there.</summary>
+        public const int GroupColorCount = 6;
+
+        /// <summary>Each group's number: in order of its lowest row. So colors cannot collide below
+        /// seven groups, and may shift when rows are reordered.</summary>
+        public static IReadOnlyDictionary<Guid, int> GroupNumbers(Project project)
+        {
+            var numbers = new Dictionary<Guid, int>();
+            foreach (var track in project.Tracks.OrderBy(t => t.Order))
+            {
+                if (track.GroupId is Guid group)
+                    numbers.TryAdd(group, numbers.Count);
+            }
+
+            return numbers;
+        }
+
+        /// <summary>Whether a row wears its group's badge. A row with no clips does not: it does not
+        /// count as a member of its group (see <see cref="TimelineOps.CollapseLoneGroups"/>).</summary>
+        public static bool ShowsGroupBadge(Project project, Track track) =>
+            track?.GroupId != null && project.Items.Any(i => i.TrackId == track.Id);
+
+        /// <summary>How the inspector and the badge word membership, given the rows of the group that
+        /// hold clips besides this one.</summary>
+        public static string GroupedWith(int otherRows) =>
+            otherRows == 1 ? "Grouped with 1 other track" : $"Grouped with {otherRows} other tracks";
+
+        public static string GroupBadgeTip(int otherRows, bool isMacOS)
+        {
+            var key = PrimaryKey(isMacOS);
+            return $"{GroupedWith(otherRows)}, shown in the same colour. Dragging a clip moves the clips overlapping " +
+                   $"it on these tracks. Change with {key}+G, {key}+Shift+G or the track's properties.";
+        }
+
+        public const string PlacementBadgeTip =
+            "Placement locked: can't move on the preview, can still move in time. Change in the track's properties.";
+
+        public static string NotGroupedCaption(bool isMacOS)
+        {
+            var key = PrimaryKey(isMacOS);
+            return $"Not grouped. {key}+click a clip on another track, then press {key}+G.";
+        }
+
         // -------------------------------------------------------------------------------- snapping
+
+        /// <summary>Snap targets in tie-break order: the origin, the playhead, then the edges of
+        /// every clip outside <paramref name="moving"/> (see <see cref="Snap"/>: ties go to the earlier
+        /// entry). A clip on the move is no target: it travels with the drag, so snapping to it would
+        /// chase itself.</summary>
+        public static List<long> SnapTargets(Project project, long playheadTicks, IEnumerable<Guid> moving)
+        {
+            var targets = new List<long> { 0, playheadTicks };
+            if (project == null)
+                return targets;
+
+            var excluded = moving.ToHashSet();
+            foreach (var other in project.Items)
+            {
+                if (excluded.Contains(other.Id))
+                    continue;
+
+                targets.Add(other.TimelineStartTicks);
+                targets.Add(other.TimelineEndTicks);
+            }
+
+            return targets;
+        }
 
         /// <summary>How far, in ticks, a dragged edge reaches for a snap target at this zoom — the
         /// pointer tolerance expressed in time, so snapping feels identical at every zoom.</summary>
@@ -391,6 +507,25 @@ namespace Prisc.UI.VideoEditor.Timeline
             }
 
             return found ? best : (long?)null;
+        }
+
+        /// <summary>What is left of <c>[start, end)</c> outside <paramref name="covered"/>, which is
+        /// in order, merged and inside the span (<see cref="TimelineOps.CursorHostSpans"/>): the
+        /// parts of a cursor bar the timeline dims.</summary>
+        public static List<(long Start, long End)> Uncovered(long start, long end,
+            IReadOnlyList<(long Start, long End)> covered)
+        {
+            var left = new List<(long Start, long End)>();
+            foreach (var (from, to) in covered)
+            {
+                if (from > start)
+                    left.Add((start, from));
+                start = to;
+            }
+
+            if (end > start)
+                left.Add((start, end));
+            return left;
         }
     }
 }

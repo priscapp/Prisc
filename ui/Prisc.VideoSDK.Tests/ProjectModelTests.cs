@@ -12,7 +12,7 @@ namespace Prisc.VideoSDK.Tests
         private static long Ms(long ms) => ms * TimeSpan.TicksPerMillisecond;
 
         /// <summary>A fully-populated project exercising every content type, both transitions,
-        /// crop, mask and link groups — the JSON round-trip must preserve all of it. Ids are
+        /// crop, mask and a track group — the JSON round-trip must preserve all of it. Ids are
         /// fixed so two builds of this project serialize identically.</summary>
         private static Project FullProject()
         {
@@ -41,9 +41,9 @@ namespace Prisc.VideoSDK.Tests
                 },
                 Tracks =
                 {
-                    new Track { Id = videoTrack, Kind = TrackKind.Video, Name = "Screen", Order = 0 },
-                    new Track { Id = overlayTrack, Kind = TrackKind.Video, Name = "Webcam", Order = 1, Hidden = false },
-                    new Track { Id = audioTrack, Kind = TrackKind.Audio, Name = "Audio", Order = 2, Muted = true, Locked = true },
+                    new Track { Id = videoTrack, Kind = TrackKind.Video, Name = "Screen", Order = 0, GroupId = linkGroup },
+                    new Track { Id = overlayTrack, Kind = TrackKind.Video, Name = "Webcam", Order = 1, Hidden = false, GroupId = linkGroup },
+                    new Track { Id = audioTrack, Kind = TrackKind.Audio, Name = "Audio", Order = 2, Muted = true },
                 },
                 Items =
                 {
@@ -56,7 +56,6 @@ namespace Prisc.VideoSDK.Tests
                         Content = new MediaContent { SourceId = sourceId, StreamIndex = 0, SourceInTicks = Ms(2_500) },
                         Entry = new Transition { Kind = TransitionKind.Fade, DurationTicks = Ms(300), Easing = TransitionEasing.CubicOut },
                         Exit = new Transition { Kind = TransitionKind.SlideLeft, DurationTicks = Ms(500), Easing = TransitionEasing.CubicInOut },
-                        GroupId = linkGroup,
                     },
                     new Item
                     {
@@ -77,7 +76,6 @@ namespace Prisc.VideoSDK.Tests
                             Crop = new CropRect { Left = 0.1, Top = 0.05, Right = 0.1, Bottom = 0.05 },
                             Mask = new Mask { Shape = MaskShape.RoundedRect, CornerRadius = 0.25 },
                         },
-                        GroupId = linkGroup,
                     },
                     new Item
                     {
@@ -87,7 +85,6 @@ namespace Prisc.VideoSDK.Tests
                         DurationTicks = Ms(10_000),
                         Content = new MediaContent { SourceId = sourceId, StreamIndex = 2, SourceInTicks = Ms(2_500) },
                         Volume = 0.75,
-                        GroupId = linkGroup,
                     },
                     new Item
                     {
@@ -174,8 +171,101 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(TransitionEasing.CubicOut, screen.Entry.Easing);
             Assert.Equal(TransitionKind.SlideLeft, screen.Exit.Kind);
 
-            Assert.Equal(screen.GroupId, webcam.GroupId);
-            Assert.NotNull(screen.GroupId);
+            Assert.NotNull(restored.TrackOf(screen).GroupId);
+            Assert.Equal(restored.TrackOf(screen).GroupId, restored.TrackOf(webcam).GroupId);
+            Assert.Null(restored.Tracks.Single(t => t.Name == "Audio").GroupId);
+        }
+
+        /// <summary>Track.Locked is gone, but every project saved while it existed carries the key,
+        /// true or false. It must load, mean nothing, and not come back.</summary>
+        [Fact]
+        public void A_saved_Locked_flag_is_ignored_and_not_written_back()
+        {
+            var json = FullProject().ToJson();
+            Assert.DoesNotContain("\"Locked\"", json);
+
+            var withFlag = json.Replace("\"Muted\": true", "\"Muted\": true, \"Locked\": true");
+            Assert.Contains("\"Locked\"", withFlag);
+
+            Assert.Equal(json, Project.FromJson(withFlag).ToJson());
+        }
+
+        // ---------------------------------------------------------------------------------- items
+
+        /// <summary>An item with every writable property away from its default. The clone test
+        /// below refuses an item that is not, so a property added to <see cref="Item"/> later has
+        /// to be added here too, and then fails until <see cref="Item.Clone"/> carries it.</summary>
+        private static Item FullItem() => new Item
+        {
+            Id = Guid.NewGuid(),
+            TrackId = Guid.NewGuid(),
+            TimelineStartTicks = Ms(2_000),
+            DurationTicks = Ms(3_000),
+            Content = new MediaContent { SourceId = Guid.NewGuid(), StreamIndex = 2, SourceInTicks = Ms(500), Speed = 1.5, SpeedWarpExempt = true },
+            Transform = new Transform { X = 0.25, Y = 0.75, Scale = 0.5 },
+            Surround = Surround.Create(SurroundKind.Glow, cursor: false),
+            Effect = new VideoEffect { Kind = VideoEffectKind.BgBlur, Amount = 0.4 },
+            Entry = new Transition { Kind = TransitionKind.Fade, DurationTicks = Ms(300), Easing = TransitionEasing.CubicOut },
+            Exit = new Transition { Kind = TransitionKind.SlideLeft, DurationTicks = Ms(500), Easing = TransitionEasing.CubicInOut },
+            Volume = 0.5,
+        };
+
+        [Fact]
+        public void Clone_carries_every_property_under_a_new_id_and_shares_no_object()
+        {
+            var item = FullItem();
+            var defaults = new Item();
+            // the legacy id only exists between a read and its migration, and no copy is made there
+            var writable = typeof(Item).GetProperties()
+                .Where(p => p.CanWrite && p.Name != nameof(Item.LegacyLinkGroupId)).ToList();
+            Assert.All(writable, p => Assert.NotEqual(p.GetValue(defaults), p.GetValue(item)));
+
+            var clone = item.Clone();
+
+            Assert.NotEqual(item.Id, clone.Id);
+            Assert.NotEqual(Guid.Empty, clone.Id);
+            Assert.All(writable.Where(p => !p.PropertyType.IsValueType),
+                p => Assert.NotSame(p.GetValue(item), p.GetValue(clone)));
+
+            // apart from the id, the clone reads back exactly as the original does
+            clone.Id = item.Id;
+            Assert.Equal(new Project { Items = { item } }.ToJson(), new Project { Items = { clone } }.ToJson());
+        }
+
+        [Fact]
+        public void Clone_of_a_bare_item_stays_bare_with_the_default_placement()
+        {
+            var clone = new Item { Transform = null }.Clone();
+
+            Assert.Null(clone.Content);
+            Assert.Null(clone.Surround);
+            Assert.Null(clone.Effect);
+            Assert.Null(clone.Entry);
+            Assert.Null(clone.Exit);
+            Assert.NotNull(clone.Transform);
+        }
+
+        [Fact]
+        public void Covers_is_half_open()
+        {
+            var item = new Item { TimelineStartTicks = 100, DurationTicks = 50 };
+
+            Assert.False(item.Covers(99));
+            Assert.True(item.Covers(100));
+            Assert.True(item.Covers(149));
+            Assert.False(item.Covers(150));
+        }
+
+        [Fact]
+        public void TrackOf_finds_the_items_row_and_is_null_when_there_is_none()
+        {
+            var project = FullProject();
+
+            foreach (var item in project.Items)
+                Assert.Equal(item.TrackId, project.TrackOf(item).Id);
+
+            Assert.Null(project.TrackOf(null));
+            Assert.Null(project.TrackOf(new Item { TrackId = Guid.NewGuid() }));
         }
 
         [Fact]
@@ -196,13 +286,14 @@ namespace Prisc.VideoSDK.Tests
             var project = FullProject();
             var json = project.ToJson();
 
-            // the solid item has no transitions, no crop/mask, no link group — none of those
-            // keys should appear for it. Cheap proxy: count occurrences across the file.
+            // the solid item has no transitions, no crop/mask — none of those keys should appear
+            // for it, and the audio row has no group. Cheap proxy: count occurrences across the file.
             Assert.Equal(1, CountOf(json, "\"Entry\":"));
             Assert.Equal(1, CountOf(json, "\"Exit\":"));
             Assert.Equal(1, CountOf(json, "\"Crop\":"));
             Assert.Equal(1, CountOf(json, "\"Mask\":"));
-            Assert.Equal(3, CountOf(json, "\"LinkGroupId\":")); // the wire name GroupId keeps (JsonPropertyName)
+            Assert.Equal(2, CountOf(json, "\"GroupId\":"));
+            Assert.Equal(0, CountOf(json, "\"LinkGroupId\":")); // read from old files, never written
         }
 
         private static int CountOf(string haystack, string needle)

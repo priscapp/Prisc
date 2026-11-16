@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Prisc.VideoSDK.Model;
+using LaneKey = (System.Guid SourceId, int StreamIndex, int Lane);
 
 namespace Prisc.VideoSDK.Playback
 {
@@ -12,17 +13,19 @@ namespace Prisc.VideoSDK.Playback
     /// (every unmuted stream audible, gaps silenced, per-sample gain — the render mixer's own
     /// semantics), so audio tracks contribute only to <see cref="DurationTicks"/>.
     ///
-    /// Per referenced video stream it holds the item spans as <see cref="Segment"/>s
-    /// (timeline-ordered), giving the same timeline→source mapping <c>FrameComposer</c> uses
+    /// Per lane of each referenced video stream (see <see cref="StreamLanes"/>: one lane is what one
+    /// decoder can serve) it holds the item spans as <see cref="Segment"/>s (timeline-ordered),
+    /// giving the same timeline→source mapping <c>FrameComposer</c> uses
     /// (<c>src = SourceIn + (t - TimelineStart)</c>), plus the inverse used to pace source-stamped
-    /// frames against the timeline clock, and the stream's interior source cuts as a
-    /// <see cref="SkipRangeSchedule"/> (the source spans no item covers between consecutive
-    /// segments — a cut made in the editor).
+    /// frames against the timeline clock, and the source the lane must never surface as a
+    /// <see cref="SkipRangeSchedule"/> (the spans no item plays — a cut made in the editor).
     ///
-    /// Assumptions (documented, not enforced) about video streams: items of one stream appear in
-    /// source order (trim/cut/split never reorder), and their timelines are gapless. The mapping
-    /// degrades gracefully otherwise — a source instant inside a cut maps to the seam, a timeline
-    /// instant in a gap maps to the next segment's in-point.
+    /// The segments of a lane can run in any source order and repeat a span: a pasted clip does
+    /// both. A source instant played twice therefore has two timeline instants, and the pacing map
+    /// picks by where the playhead is. They do not overlap at different source times, up to the
+    /// lane cap. The mapping degrades gracefully where a timeline has gaps — a source instant no
+    /// segment plays maps to the seam, a timeline instant in a gap maps to the next segment's
+    /// in-point.
     /// </summary>
     internal sealed class ProjectTimelineMap
     {
@@ -62,6 +65,15 @@ namespace Prisc.VideoSDK.Playback
             /// <see cref="long.MinValue"/>, which means "nothing covers the instant".</summary>
             private static long FreezeIdentity(long tlStart) => long.MinValue + 1 + tlStart;
 
+            /// <summary>Whether the segment plays at this timeline instant.</summary>
+            public bool Covers(long tlTicks) => tlTicks >= TlStart && tlTicks < TlEnd;
+
+            /// <summary>Whether the segment plays this source instant. A hold plays none.</summary>
+            public bool Plays(long srcTicks) => srcTicks >= SrcIn && srcTicks < SrcEnd;
+
+            /// <summary>Where this segment's mapping puts a source instant on the timeline.</summary>
+            public long TimelineOf(long srcTicks) => TlStart + ToTimeline(srcTicks - SrcIn);
+
             /// <summary>A timeline span inside this segment, rendered into source ticks.</summary>
             public long ToSource(long timelineTicks) =>
                 Freeze ? 0 : Speed == 1.0 ? timelineTicks : (long)Math.Round(timelineTicks * Speed);
@@ -71,7 +83,7 @@ namespace Prisc.VideoSDK.Playback
                 Speed == 1.0 ? sourceTicks : (long)Math.Round(sourceTicks / Speed);
         }
 
-        /// <summary>The mapping for one (sourceId, streamIndex).</summary>
+        /// <summary>The mapping for one (sourceId, streamIndex, lane).</summary>
         internal sealed class StreamMap
         {
             private readonly Segment[] _segments; // timeline order
@@ -85,8 +97,8 @@ namespace Prisc.VideoSDK.Playback
 
             public IReadOnlyList<Segment> Segments => _segments;
 
-            /// <summary>Interior source spans not covered by any segment (the cut-out material),
-            /// in source time. Frames whose pts land here must never surface in the preview.</summary>
+            /// <summary>Source spans no segment plays (the cut-out material), in source time. Frames
+            /// whose pts land here must never surface in the preview.</summary>
             public SkipRangeSchedule SourceCuts { get; }
 
             /// <summary>Timeline instant → source instant, mirroring the composer's per-item
@@ -111,44 +123,117 @@ namespace Prisc.VideoSDK.Playback
                 // seeking a decode pipeline there presents the first trimmed-away frame (the
                 // preview would show material a render never contains). SrcEnd − 1 combined
                 // with the workers' floor-to-covering-frame exact-seek discard resolves to the
-                // last kept frame instead.
-                return Math.Max(_segments[^1].SrcIn, _segments[^1].SrcEnd - 1);
+                // last kept frame instead. The last to end, which a shorter copy inside it is not.
+                var last = _segments[0];
+                foreach (var seg in _segments)
+                {
+                    if (seg.TlEnd >= last.TlEnd)
+                        last = seg;
+                }
+
+                return Math.Max(last.SrcIn, last.SrcEnd - 1);
             }
 
             /// <summary>Source instant → timeline instant (the pacing map handed to the decode
-            /// workers). A source instant inside a cut clamps to the seam (the end of the segment
-            /// preceding the cut); before all segments clamps to the first segment's start.</summary>
-            public long SourceToTimeline(long srcTicks)
+            /// workers). A span played twice has two answers, and the one closest to
+            /// <paramref name="nearTlTicks"/> (the playhead) is the frame's: nothing else tells a
+            /// frame of the original from the same frame of its copy. A source instant no segment
+            /// plays clamps to the seam (the end of the segment preceding it in source order);
+            /// before all segments clamps to the first segment's start.</summary>
+            public long SourceToTimeline(long srcTicks, long nearTlTicks)
             {
-                long best = long.MinValue;
-                long bestSrcEnd = long.MinValue;
+                long nearest = long.MinValue;
+                long nearestDistance = long.MaxValue;
+                long seam = long.MinValue;
+                long seamSrcEnd = long.MinValue;
                 foreach (var seg in _segments)
                 {
-                    if (srcTicks >= seg.SrcIn && srcTicks < seg.SrcEnd)
-                        return seg.TlStart + seg.ToTimeline(srcTicks - seg.SrcIn);
-                    if (seg.SrcEnd <= srcTicks && seg.SrcEnd > bestSrcEnd)
+                    if (seg.Plays(srcTicks))
                     {
-                        bestSrcEnd = seg.SrcEnd;
-                        best = seg.TlEnd;
+                        long tl = seg.TimelineOf(srcTicks);
+                        long distance = Math.Abs(tl - nearTlTicks);
+                        if (distance < nearestDistance)
+                        {
+                            nearestDistance = distance;
+                            nearest = tl;
+                        }
+                    }
+                    else if (seg.SrcEnd <= srcTicks && seg.SrcEnd > seamSrcEnd)
+                    {
+                        seamSrcEnd = seg.SrcEnd;
+                        seam = seg.TlEnd;
                     }
                 }
 
-                if (best != long.MinValue)
-                    return best;
+                if (nearestDistance != long.MaxValue)
+                    return nearest;
+                if (seam != long.MinValue)
+                    return seam;
                 return _segments.Length > 0 ? _segments[0].TlStart : srcTicks;
             }
 
-            /// <summary>Whether a freeze segment covers the timeline instant — where the frame on
-            /// screen is a held one whose pts says nothing about the playhead.</summary>
-            public bool IsFrozenAt(long tlTicks)
+            /// <summary>The timeline instant of a frame the segment covering
+            /// <paramref name="tlTicks"/> plays itself; false when nothing covers the instant or that
+            /// segment does not play the frame. That is what a landed seek's frame must pass before
+            /// it can say where the playhead is. Past the footage it is only the last kept frame. A
+            /// hold plays no source, so its frame says nothing about the instant inside it. And a clip
+            /// that starts between two frames opens on the frame before its in-point, which belongs
+            /// to whatever else plays that source.</summary>
+            public bool TryMapInSegmentAt(long tlTicks, long srcTicks, out long frameTlTicks)
             {
                 foreach (var seg in _segments)
                 {
-                    if (tlTicks >= seg.TlStart && tlTicks < seg.TlEnd)
-                        return seg.Freeze;
+                    if (seg.Covers(tlTicks))
+                    {
+                        frameTlTicks = seg.TimelineOf(srcTicks);
+                        return seg.Plays(srcTicks);
+                    }
                 }
 
+                frameTlTicks = 0;
                 return false;
+            }
+
+            /// <summary>The timeline instant of the frame a forward step just presented, from the
+            /// playhead <paramref name="fromTlTicks"/>. After playback the frame can sit a few ms
+            /// behind the stopped clock, so the clip under the playhead answers first: a frame it
+            /// plays is at its instant there, even behind the playhead, and a frame from before its
+            /// in-point has yet to reach it, so the playhead holds. Any other frame goes to the first
+            /// place at or after the playhead that plays it. A frame played only behind the playhead
+            /// means the step ran off the end of a repeat, so the playhead stops at that clip's end,
+            /// where its seam then re-syncs the decoder. Off every clip it goes where the pacing map
+            /// says, unless that is behind the playhead.</summary>
+            public long StepForward(long srcTicks, long fromTlTicks)
+            {
+                long next = long.MaxValue;
+                long coveringEnd = long.MinValue;
+                bool beforeCovering = false;
+                foreach (var seg in _segments)
+                {
+                    bool plays = seg.Plays(srcTicks);
+                    long tl = seg.TimelineOf(srcTicks);
+                    if (seg.Covers(fromTlTicks))
+                    {
+                        if (plays)
+                            return tl;
+                        if (coveringEnd == long.MinValue)
+                        {
+                            coveringEnd = seg.TlEnd;
+                            beforeCovering = srcTicks < seg.SrcIn;
+                        }
+                    }
+
+                    if (plays && tl >= fromTlTicks && tl < next)
+                        next = tl;
+                }
+
+                if (beforeCovering)
+                    return fromTlTicks;
+                if (next != long.MaxValue)
+                    return next;
+                return coveringEnd != long.MinValue
+                    ? coveringEnd
+                    : Math.Max(fromTlTicks, SourceToTimeline(srcTicks, fromTlTicks));
             }
 
             /// <summary>The source-timeline offset of the segment covering the timeline instant,
@@ -159,7 +244,7 @@ namespace Prisc.VideoSDK.Playback
             {
                 foreach (var seg in _segments)
                 {
-                    if (tlTicks >= seg.TlStart && tlTicks < seg.TlEnd)
+                    if (seg.Covers(tlTicks))
                         return seg.Offset;
                 }
 
@@ -168,30 +253,44 @@ namespace Prisc.VideoSDK.Playback
 
             private static SkipRangeSchedule BuildCuts(Segment[] segments)
             {
-                // a hold plays no source, so the cut between two played segments is measured
-                // straight across it — a freeze between the halves of a split cuts nothing.
+                // the complement of what is played, whatever order it is played in. A hold plays no
+                // source, so it bounds nothing: a freeze between the halves of a split cuts nothing.
                 var played = Array.FindAll(segments, s => !s.Freeze);
+                if (played.Length == 0)
+                    return SkipRangeSchedule.Empty;
+
+                long playedUntil = 0;
+                foreach (var seg in played)
+                    playedUntil = Math.Max(playedUntil, seg.TlEnd);
+
+                Array.Sort(played, (a, b) => a.SrcIn.CompareTo(b.SrcIn));
                 List<TimeRange> ranges = null;
+                long coveredTo = played[0].SrcEnd;
                 for (int i = 1; i < played.Length; i++)
                 {
-                    long cutStart = played[i - 1].SrcEnd;
-                    long cutEnd = played[i].SrcIn;
-                    if (cutEnd > cutStart)
-                    {
-                        ranges ??= new List<TimeRange>();
-                        ranges.Add(new TimeRange(new TimeSpan(cutStart), new TimeSpan(cutEnd)));
-                    }
+                    if (played[i].SrcIn > coveredTo)
+                        (ranges ??= new List<TimeRange>()).Add(
+                            new TimeRange(new TimeSpan(coveredTo), new TimeSpan(played[i].SrcIn)));
+                    coveredTo = Math.Max(coveredTo, played[i].SrcEnd);
                 }
+
+                // Past the furthest source played is cut too when a segment that reaches it hands
+                // over to another one: the decoder runs on into that material until the hop lands.
+                // After the timeline's last segment nothing follows, which is every source-ordered
+                // lane, and frames past its end stay as they always were.
+                if (Array.Exists(played, s => s.SrcEnd == coveredTo && s.TlEnd < playedUntil))
+                    (ranges ??= new List<TimeRange>()).Add(
+                        new TimeRange(new TimeSpan(coveredTo), TimeSpan.MaxValue));
 
                 return ranges == null ? SkipRangeSchedule.Empty : new SkipRangeSchedule(ranges);
             }
         }
 
-        private readonly Dictionary<(Guid SourceId, int StreamIndex), StreamMap> _video;
+        private readonly Dictionary<LaneKey, StreamMap> _video;
 
         private ProjectTimelineMap(
-            Dictionary<(Guid, int), StreamMap> video,
-            (Guid, int)? primaryVideo,
+            Dictionary<LaneKey, StreamMap> video,
+            LaneKey? primaryVideo,
             long durationTicks)
         {
             _video = video;
@@ -199,18 +298,18 @@ namespace Prisc.VideoSDK.Playback
             DurationTicks = durationTicks;
         }
 
-        public IReadOnlyDictionary<(Guid SourceId, int StreamIndex), StreamMap> VideoStreams => _video;
+        public IReadOnlyDictionary<LaneKey, StreamMap> VideoStreams => _video;
 
-        /// <summary>The stream whose immediate-present frames define the paused position and whose
-        /// segment offsets drive seam detection: the first media item on the lowest-order visible
-        /// video track (the screen recording, in a recording project).</summary>
-        public (Guid SourceId, int StreamIndex)? PrimaryVideo { get; }
+        /// <summary>The lane whose immediate-present frames define the paused position: that of the
+        /// first media item on the lowest-order visible video track (the screen recording, in a
+        /// recording project).</summary>
+        public LaneKey? PrimaryVideo { get; }
 
         /// <summary>Timeline length — the whole project's, so audio (or text/image) items running
         /// past the last video frame still count.</summary>
         public long DurationTicks { get; }
 
-        public bool TryGetVideo((Guid, int) key, out StreamMap map) => _video.TryGetValue(key, out map);
+        public bool TryGetVideo(LaneKey key, out StreamMap map) => _video.TryGetValue(key, out map);
 
         public static ProjectTimelineMap Build(Project project)
         {
@@ -225,8 +324,9 @@ namespace Prisc.VideoSDK.Playback
 
             var items = project.Items ?? new List<Item>();
 
-            var videoSegments = new Dictionary<(Guid, int), List<Segment>>();
-            (Guid, int)? primary = null;
+            var lanes = StreamLanes.Assign(project);
+            var videoSegments = new Dictionary<LaneKey, List<Segment>>();
+            LaneKey? primary = null;
 
             foreach (var track in tracks)
             {
@@ -246,7 +346,7 @@ namespace Prisc.VideoSDK.Playback
                 foreach (var item in trackItems)
                 {
                     var media = (MediaContent)item.Content;
-                    var key = (media.SourceId, media.StreamIndex);
+                    LaneKey key = (media.SourceId, media.StreamIndex, StreamLanes.LaneOf(lanes, item.Id));
                     var segment = new Segment(item.TimelineStartTicks, item.TimelineEndTicks,
                         media.SourceInTicks, TimelineOps.SpeedOf(media), media.Freeze);
 
@@ -257,7 +357,7 @@ namespace Prisc.VideoSDK.Playback
                 }
             }
 
-            var video = new Dictionary<(Guid, int), StreamMap>();
+            var video = new Dictionary<LaneKey, StreamMap>();
             foreach (var (key, segments) in videoSegments)
                 video[key] = new StreamMap(segments);
 

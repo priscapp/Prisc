@@ -335,14 +335,8 @@
         <Style Selector="TextBlock.caption">
             <Setter Property="Foreground" Value="#999999" />
         </Style>
-        <Style Selector="TextBlock.bannerText">
-            <Setter Property="Foreground" Value="#BBBBBB" />
-        </Style>
         <Style Selector="TextBlock.emptyText">
             <Setter Property="Foreground" Value="#88FFFFFF" />
-        </Style>
-        <Style Selector="Border.banner">
-            <Setter Property="Background" Value="#3d3d3d" />
         </Style>
         <!--  the colour wells, which are borders wrapping a swatch and its hex readout. Sized
               here rather than on each of the six: the height is the chrome's, since the field it
@@ -455,18 +449,11 @@
         <Style Selector="insp|InspectorPanel[IsModern=True] TextBlock.caption">
             <Setter Property="Foreground" Value="{DynamicResource SemiColorText2}" />
         </Style>
-        <Style Selector="insp|InspectorPanel[IsModern=True] TextBlock.bannerText">
-            <Setter Property="Foreground" Value="{DynamicResource SemiColorText1}" />
-        </Style>
         <Style Selector="insp|InspectorPanel[IsModern=True] TextBlock.strong">
             <Setter Property="Foreground" Value="{DynamicResource SemiColorText0}" />
         </Style>
         <Style Selector="insp|InspectorPanel[IsModern=True] TextBlock.emptyText">
             <Setter Property="Foreground" Value="{DynamicResource SemiColorText2}" />
-        </Style>
-        <Style Selector="insp|InspectorPanel[IsModern=True] Border.banner">
-            <Setter Property="Background" Value="{DynamicResource SemiColorFill1}" />
-            <Setter Property="CornerRadius" Value="6" />
         </Style>
         <!--  the colour wells and the text fields: the same surface the themed spinners beside
               them are drawn on, so a row does not mix two families of box  -->
@@ -562,110 +549,248 @@
             TextAlignment="Center"
             TextWrapping="Wrap" />
 
+        <!--  several clips selected: no mixed-value editing, only what acts on all of them  -->
+        <StackPanel
+            Margin="10"
+            IsVisible="{Binding ShowMultiSelection}"
+            Spacing="14">
+            <StackPanel Spacing="2">
+                <TextBlock
+                    FontWeight="Bold"
+                    Classes="strong"
+                    Text="{Binding MultiSelectionTitle}"
+                    TextTrimming="CharacterEllipsis" />
+                <TextBlock
+                    FontSize="11"
+                    Classes="caption"
+                    Text="{Binding MultiSelectionCaption}" />
+            </StackPanel>
+            <StackPanel Classes="section">
+                <DockPanel>
+                    <TextBlock Classes="section" Text="TRACK" />
+                    <Rectangle Classes="sectionRule" />
+                </DockPanel>
+                <WrapPanel ItemSpacing="6" LineSpacing="6">
+                    <Button Command="{Binding CommandGroupTracks}" Content="Group Tracks" />
+                    <Button Command="{Binding CommandUngroup}" Content="Ungroup Tracks" />
+                    <Button Command="{Binding CommandUngroupAll}" Content="Ungroup All" />
+                </WrapPanel>
+            </StackPanel>
+        </StackPanel>
+
         <!--  The tile pickers further down are fixed grids that never scroll on their own, so
               their selection must not drag this one. A ListBox with AutoScrollToSelectedItem
               left on (the default) asks for its selected tile to be brought into view the first
               time it is realized, and that request bubbles up to this ScrollViewer and lands the
               panel halfway down its own content the first time a section holding a picker is
-              shown. Every picker therefore sets AutoScrollToSelectedItem="False".  -->
+              shown. Every picker therefore sets AutoScrollToSelectedItem="False". A spinner's
+              caret makes the same request whenever a selection change re-binds its number, which
+              ThemedSpinner swallows while the field is not focused.  -->
         <ScrollViewer HorizontalScrollBarVisibility="Disabled" IsVisible="{Binding ShowProperties}">
             <StackPanel Margin="10" Spacing="14">
 
-                <!--  subject: which row/kind the numbers below belong to, with the row's own
-                      hide/mute switches beside it — they are about the track, not any one value,
-                      so they live in the title, not in a section.  -->
-                <DockPanel>
-                    <StackPanel
-                        DockPanel.Dock="Right"
-                        VerticalAlignment="Center"
-                        Orientation="Horizontal"
-                        Spacing="2">
-                        <controls:ToolButton
-                            x:Name="btnHide"
-                            Width="24"
-                            Height="24"
-                            Padding="4"
-                            CanToggle="True"
-                            IconPath="{StaticResource IconEye}"
-                            IsChecked="{Binding TrackHidden, Mode=TwoWay}"
-                            IsVisible="{Binding ShowTrackHidden}"
-                            ToolTip.Tip="Hide this track" />
-                        <controls:ToolButton
-                            x:Name="btnMute"
-                            Width="24"
-                            Height="24"
-                            Padding="4"
-                            CanToggle="True"
-                            IconPath="{StaticResource IconSpeakerEnabled}"
-                            IsChecked="{Binding TrackMuted, Mode=TwoWay}"
-                            IsVisible="{Binding ShowTrackMuted}"
-                            ToolTip.Tip="Mute this track" />
-                    </StackPanel>
-                    <StackPanel Spacing="2">
-                        <TextBlock
-                            FontWeight="Bold"
-                            Classes="strong"
-                            Text="{Binding SubjectName}"
-                            TextTrimming="CharacterEllipsis" />
-                        <TextBlock
-                            FontSize="11"
-                            Classes="caption"
-                            Text="{Binding SubjectKind}" />
-                    </StackPanel>
-                </DockPanel>
+                <!--  subject: which row/kind the numbers below belong to  -->
+                <StackPanel Spacing="2">
+                    <TextBlock
+                        FontWeight="Bold"
+                        Classes="strong"
+                        Text="{Binding SubjectName}"
+                        TextTrimming="CharacterEllipsis" />
+                    <TextBlock
+                        FontSize="11"
+                        Classes="caption"
+                        Text="{Binding SubjectKind}" />
+                </StackPanel>
 
-                <!--  playback speed: media rows only, and only once ungrouped — a grouped segment
-                      keeps the recording's clock (see SelectedItemViewModel.ShowSpeed). Sits
-                      under the title because it re-times the whole clip, not one property.  -->
-                <DockPanel Classes="row" IsVisible="{Binding ShowSpeed}">
-                    <!--  the dot's default is the 1.0 option object, assigned in code-behind: an
-                          attribute would be a string, which neither the equality nor the reset
-                          write-back can hand to a SpeedOption binding  -->
-                    <Panel Classes="dot" DockPanel.Dock="Left">
-                        <controls:ResetDefaultButton x:Name="dotSpeed" CurrentValue="{Binding SpeedChoice, Mode=TwoWay}" />
-                    </Panel>
-                    <TextBlock Classes="label" Text="Speed" />
-                    <controls:ThemedDropDown x:Name="ddSpeed" SelectedItem="{Binding SpeedChoice, Mode=TwoWay}" />
-                </DockPanel>
+                <!--  the row the clip sits on: its group and its switches. There is no selection of
+                      rows, so this is how a row is configured: through a clip on it.  -->
+                <StackPanel Classes="section">
+                    <DockPanel>
+                        <StackPanel
+                            DockPanel.Dock="Right"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal"
+                            Spacing="2">
+                            <controls:ToolButton
+                                x:Name="btnHide"
+                                Width="24"
+                                Height="24"
+                                Padding="4"
+                                CanToggle="True"
+                                IconPath="{StaticResource IconEye}"
+                                IsChecked="{Binding TrackHidden, Mode=TwoWay}"
+                                IsVisible="{Binding ShowTrackHidden}"
+                                ToolTip.Tip="Hide this track" />
+                            <controls:ToolButton
+                                x:Name="btnMute"
+                                Width="24"
+                                Height="24"
+                                Padding="4"
+                                CanToggle="True"
+                                IconPath="{StaticResource IconSpeakerEnabled}"
+                                IsChecked="{Binding TrackMuted, Mode=TwoWay}"
+                                IsVisible="{Binding ShowTrackMuted}"
+                                ToolTip.Tip="Mute this track" />
+                        </StackPanel>
+                        <TextBlock Classes="section" Text="TRACK" />
+                        <Rectangle Classes="sectionRule" />
+                    </DockPanel>
 
-                <!--  grouped-object banner: shown only while the row still moves with its recording.
-                      An ungrouped row shows nothing at all — "not grouped" is the unremarkable state.  -->
-                <Border
-                    Padding="8"
-                    Classes="banner"
-                    CornerRadius="4"
-                    IsVisible="{Binding IsGrouped}">
-                    <StackPanel Spacing="6">
+                    <StackPanel IsVisible="{Binding IsGrouped}" Spacing="6">
                         <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
-                            <!--  the timeline's link-badge orange (TimelinePalette.GroupBadgeBrush,
-                                  dark) — the banner and the badge are the same mark. Width only:
-                                  a fixed Height would top-align the Uniform-stretched ink.  -->
+                            <!--  the fill is the group's color, from code-behind (RefreshGroupIcon).
+                                  Width only: a fixed Height would top-align the Uniform-stretched ink.  -->
                             <Path
+                                x:Name="iconTrackGroup"
                                 Grid.Column="0"
                                 Width="14"
                                 VerticalAlignment="Center"
                                 Data="{StaticResource IconLink}"
-                                Fill="#FF9F43"
                                 Stretch="Uniform" />
                             <TextBlock
                                 Grid.Column="1"
                                 VerticalAlignment="Center"
-                                FontWeight="Bold"
                                 Classes="strong"
-                                Text="Grouped object" />
+                                Text="{Binding TrackGroupText}"
+                                TextWrapping="Wrap" />
                         </Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Button Command="{Binding CommandUngroup}" Content="Ungroup" />
+                            <Button Command="{Binding CommandUngroupAll}" Content="Ungroup All" />
+                        </StackPanel>
+                    </StackPanel>
+                    <TextBlock
+                        FontSize="11"
+                        Classes="caption"
+                        IsVisible="{Binding IsNotGrouped}"
+                        Text="{Binding NotGroupedCaption}"
+                        TextWrapping="Wrap" />
+
+                    <StackPanel IsVisible="{Binding ShowPlacementLock}" Spacing="6">
+                        <ToggleButton
+                            HorizontalAlignment="Left"
+                            IsChecked="{Binding PlacementLocked, Mode=TwoWay}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <Path
+                                    Width="14"
+                                    VerticalAlignment="Center"
+                                    Data="{StaticResource IconPinned}"
+                                    Fill="{Binding $parent[ToggleButton].Foreground}"
+                                    Stretch="Uniform" />
+                                <TextBlock VerticalAlignment="Center" Text="{Binding PlacementLockLabel}" />
+                            </StackPanel>
+                        </ToggleButton>
                         <TextBlock
                             FontSize="11"
-                            Classes="bannerText"
-                            Text="This object moves, splits and cuts together with the other tracks from its recording."
+                            Classes="caption"
+                            IsVisible="{Binding PlacementLocked}"
+                            Text="Can't be moved, resized, rotated or cropped on the preview. Can still move in time."
                             TextWrapping="Wrap" />
-                        <Button
-                            x:Name="btnUngroup"
-                            HorizontalAlignment="Left"
-                            Content="Ungroup…"
-                            IsVisible="{Binding CanUngroup}" />
                     </StackPanel>
-                </Border>
+
+                    <TextBlock
+                        FontSize="11"
+                        Classes="caption"
+                        IsVisible="{Binding ShowCursorTrack}"
+                        Text="Draws while a clip of its recording is on the timeline at the same moment. Hide that clip's row to show only the cursor."
+                        TextWrapping="Wrap" />
+
+                    <!--  AI denoise, a property of the row like the mute above it: the mix
+                          plays the generated sidecar instead of the raw stream (and degrades to
+                          raw until the analysis below finishes). Grayed out on Intel Macs (the
+                          inference binary is Apple Silicon only) — the tooltip rides the row,
+                          which stays hittable while the disabled checkbox is not.  -->
+                    <DockPanel
+                        Classes="row"
+                        Background="Transparent"
+                        IsVisible="{Binding ShowAudio}"
+                        ToolTip.Tip="{Binding AiEffectsDisabledTip}">
+                        <Panel Classes="dot" DockPanel.Dock="Left">
+                            <!--  bool default is assigned in code-behind for the same reason the
+                                  enum ones are: a XAML DefaultValue is a string  -->
+                            <controls:ResetDefaultButton x:Name="dotDenoise" CurrentValue="{Binding Denoise, Mode=TwoWay}" />
+                        </Panel>
+                        <TextBlock Classes="label" Text="Speech Enhancer" />
+                        <CheckBox
+                            IsChecked="{Binding Denoise, Mode=TwoWay}"
+                            IsEnabled="{Binding AiEffectsSupported}"
+                            Theme="{StaticResource InspectorCheckBox}" />
+                    </DockPanel>
+
+                    <DockPanel Classes="row" IsVisible="{Binding ShowDenoiseStrength}">
+                        <Panel Classes="dot" DockPanel.Dock="Left">
+                            <controls:ResetDefaultButton CurrentValue="{Binding DenoiseStrength, Mode=TwoWay}" DefaultValue="1" />
+                        </Panel>
+                        <TextBlock Classes="label" Text="Strength" />
+                        <controls:ThemedSpinner
+                            DisplayScale="100"
+                            Max="1"
+                            Min="0"
+                            SpinAmount="0.05"
+                            Suffix="%"
+                            Value="{Binding DenoiseStrength, Mode=TwoWay}" />
+                    </DockPanel>
+
+                    <!--  the dot slot indents the note to the option rows' own label column; the
+                          percentage and the little arc ring (the render button's, at row scale)
+                          dock to the row's right edge — where every other row's editor ends — so
+                          the ring holds still while the numbers tick  -->
+                    <DockPanel Classes="row" IsVisible="{Binding ShowDenoiseStatus}">
+                        <Panel Classes="dot" DockPanel.Dock="Left" />
+                        <Grid
+                            Width="16"
+                            Height="16"
+                            DockPanel.Dock="Right"
+                            VerticalAlignment="Center"
+                            IsVisible="{Binding DenoiseAnalyzing}">
+                            <Ellipse
+                                Width="14"
+                                Height="14"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Classes="ringTrack"
+                                StrokeThickness="2" />
+                            <Path
+                                Data="{Binding DenoiseProgress, Converter={StaticResource progressToArc}}"
+                                Stretch="None"
+                                Classes="ringArc"
+                                StrokeLineCap="Round"
+                                StrokeThickness="2" />
+                        </Grid>
+                        <TextBlock
+                            Margin="0,0,8,0"
+                            DockPanel.Dock="Right"
+                            VerticalAlignment="Center"
+                            Classes="dim"
+                            IsVisible="{Binding DenoiseAnalyzing}"
+                            Text="{Binding DenoisePercentText}" />
+                        <TextBlock Classes="label" Text="{Binding DenoiseStatusText}" ToolTip.Tip="{Binding DenoiseStatusDetail}" />
+                    </DockPanel>
+                </StackPanel>
+
+                <!--  playback speed: every clip with a clock of its own (see
+                      SelectedItemViewModel.ShowSpeed). Sits high in the panel because it re-times
+                      the whole clip, not one property.  -->
+                <StackPanel IsVisible="{Binding ShowSpeed}" Spacing="2">
+                    <DockPanel Classes="row">
+                        <!--  the dot's default is the 1.0 option object, assigned in code-behind: an
+                              attribute would be a string, which neither the equality nor the reset
+                              write-back can hand to a SpeedOption binding  -->
+                        <Panel Classes="dot" DockPanel.Dock="Left">
+                            <controls:ResetDefaultButton x:Name="dotSpeed" CurrentValue="{Binding SpeedChoice, Mode=TwoWay}" />
+                        </Panel>
+                        <TextBlock Classes="label" Text="Speed" />
+                        <controls:ThemedDropDown x:Name="ddSpeed" SelectedItem="{Binding SpeedChoice, Mode=TwoWay}" />
+                    </DockPanel>
+                    <!--  indented to the label column, like the analysis note in AUDIO  -->
+                    <TextBlock
+                        Margin="14,0,0,0"
+                        FontSize="11"
+                        Classes="caption"
+                        IsVisible="{Binding ShowSpeedGroupCaption}"
+                        Text="This clip only. A Speed effect changes every track together."
+                        TextWrapping="Wrap" />
+                </StackPanel>
 
                 <!--  placement  -->
                 <StackPanel Classes="section" IsVisible="{Binding ShowTransform}">
@@ -676,7 +801,7 @@
 
                     <!--  0-100% of the canvas, except for a line or arrow, whose padded box may
                           legally sit centered off the canvas (see PositionMin)  -->
-                    <DockPanel Classes="row">
+                    <DockPanel Classes="row" IsEnabled="{Binding PlacementEditable}">
                         <Panel Classes="dot" DockPanel.Dock="Left">
                             <controls:ResetDefaultButton CurrentValue="{Binding PositionX, Mode=TwoWay}" DefaultValue="0.5" />
                         </Panel>
@@ -690,7 +815,7 @@
                             Value="{Binding PositionX, Mode=TwoWay}" />
                     </DockPanel>
 
-                    <DockPanel Classes="row">
+                    <DockPanel Classes="row" IsEnabled="{Binding PlacementEditable}">
                         <Panel Classes="dot" DockPanel.Dock="Left">
                             <controls:ResetDefaultButton CurrentValue="{Binding PositionY, Mode=TwoWay}" DefaultValue="0.5" />
                         </Panel>
@@ -704,7 +829,7 @@
                             Value="{Binding PositionY, Mode=TwoWay}" />
                     </DockPanel>
 
-                    <DockPanel Classes="row" IsVisible="{Binding ShowScale}">
+                    <DockPanel Classes="row" IsEnabled="{Binding PlacementEditable}" IsVisible="{Binding ShowScale}">
                         <Panel Classes="dot" DockPanel.Dock="Left">
                             <controls:ResetDefaultButton CurrentValue="{Binding Scale, Mode=TwoWay}" DefaultValue="1" />
                         </Panel>
@@ -720,7 +845,7 @@
                             Value="{Binding Scale, Mode=TwoWay}" />
                     </DockPanel>
 
-                    <DockPanel Classes="row" IsVisible="{Binding ShowScaleHeight}">
+                    <DockPanel Classes="row" IsEnabled="{Binding PlacementEditable}" IsVisible="{Binding ShowScaleHeight}">
                         <!--  the same 100% the Width row resets to: for a wallpaper that is the
                               output canvas (100% x 100% is the insertion size), and for an
                               unlocked picture it is the canvas height, the one value the axis has
@@ -741,7 +866,7 @@
                     <!--  hidden for the keystroke overlay: the composer draws its block upright
                           whatever Transform.Rotation says, so the spinner would write a number
                           nothing reads.  -->
-                    <DockPanel Classes="row" IsVisible="{Binding ShowRotation}">
+                    <DockPanel Classes="row" IsEnabled="{Binding PlacementEditable}" IsVisible="{Binding ShowRotation}">
                         <Panel Classes="dot" DockPanel.Dock="Left">
                             <controls:ResetDefaultButton CurrentValue="{Binding Rotation, Mode=TwoWay}" DefaultValue="0" />
                         </Panel>
@@ -770,8 +895,9 @@
                     </DockPanel>
                 </StackPanel>
 
-                <!--  aspect ratio + crop  -->
-                <StackPanel Classes="section" IsVisible="{Binding ShowCrop}">
+                <!--  aspect ratio + crop: all of it placement, so unlike the section above it can
+                      be disabled in one  -->
+                <StackPanel Classes="section" IsEnabled="{Binding PlacementEditable}" IsVisible="{Binding ShowCrop}">
                     <!--  hidden outright while the crop follows a window: the window's rect is
                           the shown region and the box takes its shape, so a preset, a fit mode and
                           a free height are all dropped by WindowCropMath.Effective. See
@@ -1371,7 +1497,7 @@
                         </Button>
                     </DockPanel>
 
-                    <DockPanel Classes="row">
+                    <DockPanel Classes="row" IsEnabled="{Binding PlacementEditable}">
                         <Panel Classes="dot" DockPanel.Dock="Left">
                             <controls:ResetDefaultButton CurrentValue="{Binding FontSize, Mode=TwoWay}" DefaultValue="48" />
                         </Panel>
@@ -1466,77 +1592,6 @@
                             Text="Exempt from speed warp"
                             TextWrapping="Wrap" />
                         <CheckBox IsChecked="{Binding SpeedWarpExempt, Mode=TwoWay}" Theme="{StaticResource InspectorCheckBox}" />
-                    </DockPanel>
-
-                    <!--  AI denoise, a property of the row like the mute it sits under: the mix
-                          plays the generated sidecar instead of the raw stream (and degrades to
-                          raw until the analysis below finishes). Grayed out on Intel Macs (the
-                          inference binary is Apple Silicon only) — the tooltip rides the row,
-                          which stays hittable while the disabled checkbox is not.  -->
-                    <DockPanel
-                        Classes="row"
-                        Background="Transparent"
-                        ToolTip.Tip="{Binding AiEffectsDisabledTip}">
-                        <Panel Classes="dot" DockPanel.Dock="Left">
-                            <!--  bool default is assigned in code-behind for the same reason the
-                                  enum ones are: a XAML DefaultValue is a string  -->
-                            <controls:ResetDefaultButton x:Name="dotDenoise" CurrentValue="{Binding Denoise, Mode=TwoWay}" />
-                        </Panel>
-                        <TextBlock Classes="label" Text="Speech Enhancer" />
-                        <CheckBox
-                            IsChecked="{Binding Denoise, Mode=TwoWay}"
-                            IsEnabled="{Binding AiEffectsSupported}"
-                            Theme="{StaticResource InspectorCheckBox}" />
-                    </DockPanel>
-
-                    <DockPanel Classes="row" IsVisible="{Binding ShowDenoiseStrength}">
-                        <Panel Classes="dot" DockPanel.Dock="Left">
-                            <controls:ResetDefaultButton CurrentValue="{Binding DenoiseStrength, Mode=TwoWay}" DefaultValue="1" />
-                        </Panel>
-                        <TextBlock Classes="label" Text="Strength" />
-                        <controls:ThemedSpinner
-                            DisplayScale="100"
-                            Max="1"
-                            Min="0"
-                            SpinAmount="0.05"
-                            Suffix="%"
-                            Value="{Binding DenoiseStrength, Mode=TwoWay}" />
-                    </DockPanel>
-
-                    <!--  the dot slot indents the note to the option rows' own label column; the
-                          percentage and the little arc ring (the render button's, at row scale)
-                          dock to the row's right edge — where every other row's editor ends — so
-                          the ring holds still while the numbers tick  -->
-                    <DockPanel Classes="row" IsVisible="{Binding ShowDenoiseStatus}">
-                        <Panel Classes="dot" DockPanel.Dock="Left" />
-                        <Grid
-                            Width="16"
-                            Height="16"
-                            DockPanel.Dock="Right"
-                            VerticalAlignment="Center"
-                            IsVisible="{Binding DenoiseAnalyzing}">
-                            <Ellipse
-                                Width="14"
-                                Height="14"
-                                HorizontalAlignment="Center"
-                                VerticalAlignment="Center"
-                                Classes="ringTrack"
-                                StrokeThickness="2" />
-                            <Path
-                                Data="{Binding DenoiseProgress, Converter={StaticResource progressToArc}}"
-                                Stretch="None"
-                                Classes="ringArc"
-                                StrokeLineCap="Round"
-                                StrokeThickness="2" />
-                        </Grid>
-                        <TextBlock
-                            Margin="0,0,8,0"
-                            DockPanel.Dock="Right"
-                            VerticalAlignment="Center"
-                            Classes="dim"
-                            IsVisible="{Binding DenoiseAnalyzing}"
-                            Text="{Binding DenoisePercentText}" />
-                        <TextBlock Classes="label" Text="{Binding DenoiseStatusText}" ToolTip.Tip="{Binding DenoiseStatusDetail}" />
                     </DockPanel>
                 </StackPanel>
 
@@ -1670,6 +1725,7 @@
                           ItemsSource is assigned in code-behind, like the other pickers'.  -->
                     <ListBox
                         x:Name="listShapeKind"
+                        IsEnabled="{Binding PlacementEditable}"
                         AutoScrollToSelectedItem="False"
                         Margin="0,0,-4,-4"
                         Padding="0"
@@ -1897,7 +1953,7 @@
                 </StackPanel>
 
                 <!--  cursor overlay: where it is drawn is the recording's business (the capture
-                      file places it), so the whole section is about what it looks like. The size
+                      file places it, through the clip it draws over), so the whole section is about what it looks like. The size
                       and shadow rows leave the panel entirely under the native style, which draws
                       the recorded cursor box and carries both of its own.  -->
                 <StackPanel Classes="section" IsVisible="{Binding ShowCursorTrack}">

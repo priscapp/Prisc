@@ -289,7 +289,7 @@ namespace Prisc.VideoSDK.Tests
         {
             var (project, _, item) = OneShape(Everything());
 
-            Assert.True(TimelineOps.Split(project, item.Id, Ms(2_000)));
+            Assert.True(TimelineOps.SplitItem(project, item.Id, Ms(2_000)));
 
             var halves = project.Items.OrderBy(i => i.TimelineStartTicks).ToList();
             Assert.Equal(2, halves.Count);
@@ -318,15 +318,13 @@ namespace Prisc.VideoSDK.Tests
             });
             var session = new EditorSession(project, null, null);
 
-            Assert.True(session.CanCopyItem(item.Id));
-            Assert.True(session.CopyItem(item.Id));
+            Assert.True(session.CopyItems(new[] { item.Id }));
 
             var gap = session.FindGap(track.Id, Ms(7_000));
             Assert.NotNull(gap);
             Assert.True(session.CanPasteIntoGap(gap.Value));
-            var pasted = session.PasteIntoGap(gap.Value);
+            var pasted = Assert.Single(session.PasteIntoGap(gap.Value));
 
-            Assert.NotNull(pasted);
             var copy = session.Project.Items.Single(i => i.Id == pasted);
             Assert.Equal(Json(Everything()), Json(copy.Content));
             Assert.Equal(Ms(5_000), copy.TimelineStartTicks);
@@ -336,6 +334,7 @@ namespace Prisc.VideoSDK.Tests
         public void A_shape_never_pastes_onto_an_audio_row()
         {
             var (project, _, item) = OneShape();
+            var clip = TimelineOps.Lift(project, new[] { item.Id });
             var audio = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 1 };
             project.Tracks.Add(audio);
             project.Items.Add(new Item
@@ -349,7 +348,7 @@ namespace Prisc.VideoSDK.Tests
             var gap = TimelineOps.FindGap(project, audio.Id, Ms(1_000));
 
             Assert.NotNull(gap);
-            Assert.False(TimelineOps.CanPasteIntoGap(project, gap.Value, item, TrackKind.Video));
+            Assert.False(TimelineOps.CanFitInGap(project, clip, gap.Value));
         }
 
         // --------------------------------------------------------------------------- session

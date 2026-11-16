@@ -163,7 +163,7 @@ namespace Prisc.VideoSDK.Tests
             var track = TrackOf(session, item);
             Assert.Equal(EditorSession.VoiceTrackName, track.Name);
             Assert.Equal(TrackKind.Audio, track.Kind);
-            Assert.Equal(item.Id, session.PrimarySelectedItem?.Id);
+            Assert.Equal(item.Id, session.SoleSelectedItem?.Id);
             Assert.Empty(session.Project.Validate());
 
             // one step back takes the row and the clip together, and there is nothing behind it
@@ -252,7 +252,7 @@ namespace Prisc.VideoSDK.Tests
             Assert.True(((MediaContent)item.Content).SpeedWarpExempt);
 
             // and it re-fits like any exempt clip once the speed item goes
-            session.DeleteItem(session.Project.Items.Single(i => i.Content is SpeedContent).Id);
+            session.DeleteItems(new[] { session.Project.Items.Single(i => i.Content is SpeedContent).Id });
             Assert.Equal(Ms(2_000), session.Project.Items.Single(i => i.Id == item.Id).DurationTicks);
         }
 
@@ -305,7 +305,7 @@ namespace Prisc.VideoSDK.Tests
         {
             var session = NewSession();
             var solid = session.Project.Items.Single();
-            session.MoveItem(solid.Id, Ms(1_000));
+            session.MoveLinked(solid.Id, Ms(1_000));
             session.Undo();
             Assert.True(session.CanRedo);
             Assert.False(session.CanUndo);
@@ -326,7 +326,7 @@ namespace Prisc.VideoSDK.Tests
         {
             var session = NewSession();
             var solid = session.Project.Items.Single();
-            session.MoveItem(solid.Id, Ms(1_000));
+            session.MoveLinked(solid.Id, Ms(1_000));
             session.Undo();
 
             Record(session, 0, Ms(1_000));
@@ -343,7 +343,7 @@ namespace Prisc.VideoSDK.Tests
 
             using (var gesture = session.BeginGesture("Move"))
             {
-                session.MoveItem(solid.Id, Ms(500));
+                session.MoveLinked(solid.Id, Ms(500));
                 Assert.Throws<InvalidOperationException>(() =>
                     session.FinishVoiceTake(take, TestPath.Native(@"C:\rec\voice.wav"), WavProbe(Ms(2_000)), Ms(2_000)));
                 Assert.True(session.IsVoiceTakeActive);
@@ -396,7 +396,7 @@ namespace Prisc.VideoSDK.Tests
 
             using (var gesture = session.BeginGesture("Move"))
             {
-                session.MoveItem(solid.Id, Ms(500));
+                session.MoveLinked(solid.Id, Ms(500));
                 session.CancelVoiceTake(take);
                 gesture.Commit();
             }

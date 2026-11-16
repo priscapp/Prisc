@@ -11,7 +11,8 @@ namespace Prisc.VideoSDK.Model;
 /// <see cref="MediaContent.SourceInTicks"/>.
 ///
 /// Mutate items through <see cref="TimelineOps"/>, not directly: that is the only place the
-/// <see cref="GroupId"/> semantics live.
+/// time-link semantics live. What an item moves with follows from its row
+/// (<see cref="Track.GroupId"/>) and its span; an item carries no group state of its own.
 /// </summary>
 public sealed class Item
 {
@@ -29,6 +30,11 @@ public sealed class Item
     /// <summary>Exclusive end of the item on the output timeline.</summary>
     [JsonIgnore]
     public long TimelineEndTicks => TimelineStartTicks + DurationTicks;
+
+    /// <summary>Whether the item plays at <paramref name="timelineTicks"/>. The span is half-open,
+    /// so two back-to-back items never both cover the instant they meet at.</summary>
+    public bool Covers(long timelineTicks) =>
+        timelineTicks >= TimelineStartTicks && timelineTicks < TimelineEndTicks;
 
     public ItemContent Content { get; set; }
 
@@ -56,9 +62,28 @@ public sealed class Item
     /// <summary>Linear gain applied to the item's audio, 1.0 = unity.</summary>
     public double Volume { get; set; } = 1.0;
 
-    /// <summary>Items sharing a non-null group id move/cut/split as one — the rows that came from
-    /// a single recording, or the streams of one imported file. Null = ungrouped. Serialized under
-    /// its original name so every saved project still reads.</summary>
+    /// <summary>The link group a project saved before track groups carries on each item, under
+    /// the name those files used. <see cref="ProjectMigration"/> reads it on load, turns it into
+    /// <see cref="Track.GroupId"/> and nulls it, so it is never written back and is null everywhere
+    /// past <see cref="Project.FromJson(string)"/>.</summary>
     [JsonPropertyName("LinkGroupId")]
-    public Guid? GroupId { get; set; }
+    public Guid? LegacyLinkGroupId { get; set; }
+
+    /// <summary>A deep copy under a new <see cref="Id"/>: the same row, span and look, sharing no
+    /// object with this item. What a particular copy must not keep (a transition on the edge a cut
+    /// created) is the caller's to clear.</summary>
+    public Item Clone() => new Item
+    {
+        Id = Guid.NewGuid(),
+        TrackId = TrackId,
+        TimelineStartTicks = TimelineStartTicks,
+        DurationTicks = DurationTicks,
+        Content = Content?.Clone(),
+        Transform = Transform?.Clone() ?? new Transform(),
+        Surround = Surround?.Clone(),
+        Effect = Effect?.Clone(),
+        Entry = Entry?.Clone(),
+        Exit = Exit?.Clone(),
+        Volume = Volume,
+    };
 }

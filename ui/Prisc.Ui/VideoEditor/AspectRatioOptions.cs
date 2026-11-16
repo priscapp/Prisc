@@ -186,7 +186,7 @@ namespace Prisc.UI.VideoEditor
                 {
                     if (!visible.Contains(item.TrackId) || item.Content is not (MediaContent or ImageContent))
                         continue;
-                    if (atPlayhead && (timeTicks < item.TimelineStartTicks || timeTicks >= item.TimelineEndTicks))
+                    if (atPlayhead && !item.Covers(timeTicks))
                         continue;
                     if (ContentPixelSize(project, item, timeTicks) is not { } size ||
                         !ItemPlacement.TryResolve(project, item, output.WidthPx, output.HeightPx, out var placed, timeTicks))

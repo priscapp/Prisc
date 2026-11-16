@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Prisc.VideoSDK.Audio;
 using Prisc.VideoSDK.Model;
+using Prisc.VideoSDK.Playback;
 using Xunit;
 
 namespace Prisc.VideoSDK.Tests
@@ -356,6 +357,77 @@ namespace Prisc.VideoSDK.Tests
                 framesRead = frames;
                 return true;
             }
+        }
+
+        /// <summary>Every read, by lane: a source that keeps a position per lane.</summary>
+        private sealed class LaneRecordingSource : IAudioSource
+        {
+            public readonly List<(int Lane, long Pos)> Reads = new List<(int, long)>();
+
+            public bool ReadSamples(Guid sourceId, int streamIndex, long sourcePosFrames,
+                float[] dst, int frames, out int framesRead)
+                => throw new InvalidOperationException("the mixer must always say which lane it reads");
+
+            public bool ReadSamples(Guid sourceId, int streamIndex, int lane, long sourcePosFrames,
+                float[] dst, int frames, out int framesRead)
+            {
+                Reads.Add((lane, sourcePosFrames));
+                Array.Clear(dst, 0, frames * AudioMixer.Channels);
+                framesRead = frames;
+                return true;
+            }
+        }
+
+        [Theory]
+        [InlineData(1.0)]
+        [InlineData(2.0)] // the resampled path has its own read
+        public void Overlapping_items_of_a_stream_read_lanes_of_their_own(double speed)
+        {
+            var source = Guid.NewGuid();
+            var project = NewProject();
+            var first = AddAudioItem(project, source, 0, Second);
+            var second = AddAudioItem(project, source, 0, Second);
+            ((MediaContent)second.Content).SourceInTicks = 5 * Second;
+            ((MediaContent)first.Content).Speed = speed;
+            ((MediaContent)second.Content).Speed = speed;
+
+            var reads = new LaneRecordingSource();
+            Mix(new AudioMixer(project, reads), 0, 100);
+
+            int lane0 = StreamLanes.LaneOf(StreamLanes.Assign(project), first.Id);
+            int lane1 = StreamLanes.LaneOf(StreamLanes.Assign(project), second.Id);
+            Assert.NotEqual(lane0, lane1);
+            Assert.Contains(reads.Reads, r => r.Lane == lane0 && r.Pos == 0);
+            Assert.Contains(reads.Reads, r => r.Lane == lane1 && r.Pos == 5 * Rate);
+        }
+
+        [Fact]
+        public void Items_mixed_on_the_output_clock_read_their_lanes_too()
+        {
+            var source = Guid.NewGuid();
+            var project = NewProject();
+            var first = AddAudioItem(project, source, 0, Second);
+            var second = AddAudioItem(project, source, 0, Second);
+            ((MediaContent)first.Content).SpeedWarpExempt = true;
+            ((MediaContent)second.Content).SpeedWarpExempt = true;
+            ((MediaContent)second.Content).SourceInTicks = 5 * Second;
+            var speedRow = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Effect, Order = project.Tracks.Count, Name = "Speed" };
+            project.Tracks.Add(speedRow);
+            project.Items.Add(new Item
+            {
+                Id = Guid.NewGuid(),
+                TrackId = speedRow.Id,
+                DurationTicks = Second,
+                Content = new SpeedContent { Factor = 2.0, PitchCorrect = false },
+            });
+
+            var reads = new LaneRecordingSource();
+            var mixer = new AudioMixer(project, reads, TimeWarp.Build(project));
+            Assert.Equal(2, mixer.OutputItemCount);
+            mixer.MixOutputChunk(0, 100, new float[100 * AudioMixer.Channels]);
+
+            Assert.Contains((0, 0L), reads.Reads);
+            Assert.Contains((1, 5L * Rate), reads.Reads);
         }
 
         [Fact]

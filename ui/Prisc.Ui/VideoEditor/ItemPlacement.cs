@@ -319,7 +319,7 @@ namespace Prisc.UI.VideoEditor
                 {
                     if (item.TrackId != track.Id)
                         continue;
-                    if (timeTicks < item.TimelineStartTicks || timeTicks >= item.TimelineEndTicks)
+                    if (!item.Covers(timeTicks))
                         continue;
                     if (!TryResolve(project, item, canvasWidth, canvasHeight, out var placed, timeTicks))
                         continue;
@@ -398,12 +398,6 @@ namespace Prisc.UI.VideoEditor
         }
     }
 
-    /// <summary>
-    /// The gizmo's pointer math, free of Avalonia types so it can be tested without a UI thread.
-    /// All pixel arguments are in the preview control's own coordinate space (the space pointer
-    /// positions are read in, so the gizmo moving under the pointer mid-drag cannot corrupt a
-    /// delta); the canvas rectangle is the letterboxed video rect in that same space.
-    /// </summary>
     /// <summary>How the gizmo's corner handles size an item; see <see cref="GizmoMath.CornerMode"/>.</summary>
     internal enum CornerResizeMode
     {
@@ -415,6 +409,12 @@ namespace Prisc.UI.VideoEditor
         Free,
     }
 
+    /// <summary>
+    /// The gizmo's pointer math, free of Avalonia types so it can be tested without a UI thread.
+    /// All pixel arguments are in the preview control's own coordinate space (the space pointer
+    /// positions are read in, so the gizmo moving under the pointer mid-drag cannot corrupt a
+    /// delta); the canvas rectangle is the letterboxed video rect in that same space.
+    /// </summary>
     internal static class GizmoMath
     {
         /// <summary>

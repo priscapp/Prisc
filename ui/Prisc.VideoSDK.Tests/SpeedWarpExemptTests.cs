@@ -292,7 +292,7 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(Ms(4_000), Live(session, clip).DurationTicks);
             Assert.Empty(session.Project.Validate());
 
-            session.DeleteItem(speed.Id);
+            session.DeleteItems(new[] { speed.Id });
             Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
 
             // the snapshots restore the same states in reverse
@@ -394,10 +394,10 @@ namespace Prisc.VideoSDK.Tests
             {
                 // 2x over [0, 5s): the clip's start is output 1s, and its 2s of real time reach
                 // output 3s, half a second past the span's output end of 2.5s (= project 5s)
-                session.MoveItem(speed.Id, -Ms(5_000));
+                session.MoveLinked(speed.Id, -Ms(5_000));
                 Assert.Equal(Ms(3_500), Live(session, clip).DurationTicks);
 
-                session.MoveItem(speed.Id, Ms(5_000));
+                session.MoveLinked(speed.Id, Ms(5_000));
                 Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
                 gesture.Commit();
             }
@@ -416,21 +416,21 @@ namespace Prisc.VideoSDK.Tests
             session.AddSpeedEffect(0, Ms(5_000));
             Assert.Equal(Ms(3_500), Live(session, clip).DurationTicks);
 
-            Assert.Equal(Ms(4_000), session.MoveItem(clip.Id, Ms(4_000)));
+            Assert.Equal(Ms(4_000), session.MoveLinked(clip.Id, Ms(4_000)));
             Assert.Equal(Ms(6_000), Live(session, clip).TimelineStartTicks);
             Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
             Assert.Empty(session.Project.Validate());
 
-            Assert.Equal(-Ms(4_000), session.MoveItem(clip.Id, -Ms(4_000)));
+            Assert.Equal(-Ms(4_000), session.MoveLinked(clip.Id, -Ms(4_000)));
             Assert.Equal(Ms(2_000), Live(session, clip).TimelineStartTicks);
             Assert.Equal(Ms(3_500), Live(session, clip).DurationTicks);
 
             // the same inside a drag, step by step
             using (var gesture = session.BeginGesture("Move"))
             {
-                session.MoveItem(clip.Id, Ms(2_000)); // start 4s: output 2s + 2s = 4s = project 6.5s
+                session.MoveLinked(clip.Id, Ms(2_000)); // start 4s: output 2s + 2s = 4s = project 6.5s
                 Assert.Equal(Ms(2_500), Live(session, clip).DurationTicks);
-                session.MoveItem(clip.Id, Ms(2_000));
+                session.MoveLinked(clip.Id, Ms(2_000));
                 Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
                 gesture.Commit();
             }
@@ -440,7 +440,7 @@ namespace Prisc.VideoSDK.Tests
             // a plain clip's project span is untouched by the same move
             session.SetSpeedWarpExempt(clip.Id, false);
             Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
-            session.MoveItem(clip.Id, -Ms(4_000));
+            session.MoveLinked(clip.Id, -Ms(4_000));
             Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
         }
 
@@ -462,10 +462,458 @@ namespace Prisc.VideoSDK.Tests
 
             // moved to 1s its 2s of real time reach output 2.5s = project 4s, over the
             // neighbour at 3.5s: it is end-trimmed to 2.5s of project instead
-            Assert.Equal(-Ms(5_000), session.MoveItem(clip.Id, -Ms(5_000)));
+            Assert.Equal(-Ms(5_000), session.MoveLinked(clip.Id, -Ms(5_000)));
             Assert.Equal(Ms(1_000), Live(session, clip).TimelineStartTicks);
             Assert.Equal(Ms(2_500), Live(session, clip).DurationTicks);
             Assert.Empty(session.Project.Validate());
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void A_drag_out_past_a_neighbour_and_back_keeps_the_original_length(bool exempt)
+        {
+            // 2x over [5s, 10s), neighbour at 6s. At 4s an exempt clip's 2s of real time reach
+            // project 7s, so it is end-trimmed at the neighbour to [4s, 6s), which is only 1.5s of
+            // real time. The trim is that step's, not the clip's: coming back, the 2s the drag
+            // began with are measured again and the gesture has changed nothing.
+            var session = NewSessionWithNeighbour(Ms(1_000), exempt, Ms(6_000), speedSpan: 0, out var clip);
+            session.AddSpeedEffect(Ms(5_000), Ms(5_000));
+            var before = session.Project.ToJson();
+
+            using (var gesture = session.BeginGesture("Move"))
+            {
+                Assert.Equal(Ms(3_000), session.MoveLinked(clip.Id, Ms(3_000)));
+                Assert.Equal(Ms(4_000), Live(session, clip).TimelineStartTicks);
+                Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
+
+                // part of the way back there is room again, so the clip is whole straight away
+                Assert.Equal(-Ms(2_000), session.MoveLinked(clip.Id, -Ms(2_000)));
+                Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
+
+                // and a second approach is trimmed the same as the first
+                Assert.Equal(Ms(2_000), session.MoveLinked(clip.Id, Ms(2_000)));
+                Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
+
+                Assert.Equal(-Ms(3_000), session.MoveLinked(clip.Id, -Ms(3_000)));
+                Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
+                gesture.Commit();
+            }
+
+            Assert.Equal(before, session.Project.ToJson());
+        }
+
+        [Fact]
+        public void A_drag_that_ends_against_a_neighbour_keeps_the_end_trim()
+        {
+            // the same drag let go at the neighbour: this is where the clip stopped, so the trim
+            // is real, and a later drag starts from what is left of it
+            var session = NewSessionWithNeighbour(Ms(1_000), exempt: true, Ms(6_000), speedSpan: 0, out var clip);
+            session.AddSpeedEffect(Ms(5_000), Ms(5_000));
+
+            using (var gesture = session.BeginGesture("Move"))
+            {
+                session.MoveLinked(clip.Id, Ms(3_000));
+                gesture.Commit();
+            }
+            Assert.Equal(Ms(4_000), Live(session, clip).TimelineStartTicks);
+            Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
+
+            using (var gesture = session.BeginGesture("Move"))
+            {
+                session.MoveLinked(clip.Id, -Ms(3_000));
+                gesture.Commit();
+            }
+            Assert.Equal(Ms(1_000), Live(session, clip).TimelineStartTicks);
+            Assert.Equal(Ms(1_500), Live(session, clip).DurationTicks);
+
+            session.Undo();
+            session.Undo();
+            Assert.Equal(Ms(1_000), Live(session, clip).TimelineStartTicks);
+            Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
+        }
+
+        /// <summary>A session whose audio row holds the clip and one more item, with the speed
+        /// item (if any) added over both.</summary>
+        private static EditorSession NewSessionWithNeighbour(long clipStart, bool exempt, long neighbourStart,
+            long speedSpan, out Item clip)
+        {
+            var seed = NewSession(clipStart, Ms(2_000), exempt, out clip, out var audioTrack);
+            var project = seed.Project;
+            project.Items.Add(new Item
+            {
+                Id = Guid.NewGuid(),
+                TrackId = audioTrack.Id,
+                TimelineStartTicks = neighbourStart,
+                DurationTicks = Ms(1_000),
+                Content = new MediaContent { SourceId = project.Sources[0].Id, StreamIndex = 0 },
+            });
+            var session = new EditorSession(project, null, save => save());
+            if (speedSpan > 0)
+                session.AddSpeedEffect(0, speedSpan);
+            return session;
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void A_move_onto_the_next_clip_is_refused_with_no_speed_item_around(bool exempt)
+        {
+            // [3.5s, 5.5s) runs over the neighbour at 4s. Nothing re-fits under an identity warp,
+            // so this is a plain collision for either clock, not a reason to end-trim the clip.
+            var session = NewSessionWithNeighbour(Ms(1_000), exempt, Ms(4_000), speedSpan: 0, out var clip);
+            var before = session.Project.ToJson();
+
+            Assert.Equal(0, session.MoveLinked(clip.Id, Ms(2_500)));
+            Assert.Equal(before, session.Project.ToJson());
+        }
+
+        [Theory]
+        [InlineData(1)] // start rounds down on the output clock: the re-derived span is a tick short
+        [InlineData(3)] // start rounds up: the re-derived span is a tick long
+        public void A_collision_is_still_refused_when_rounding_nudges_the_exempt_clip(long oddTicks)
+        {
+            // 2x everywhere, so the clip at 6s spans 4s of project, and from an odd start the warp
+            // gives that back a tick off. That tick is rounding, not a re-fit, so it must not
+            // license end-trimming the clip to fit in front of the neighbour at 5s.
+            var session = NewSessionWithNeighbour(Ms(6_000), exempt: true, Ms(5_000), speedSpan: Ms(20_000), out var clip);
+            Assert.Equal(Ms(4_000), Live(session, clip).DurationTicks);
+            var before = session.Project.ToJson();
+
+            Assert.Equal(0, session.MoveLinked(clip.Id, -Ms(2_000) + oddTicks));
+            Assert.Equal(before, session.Project.ToJson());
+        }
+
+        [Fact]
+        public void A_tick_of_rounding_does_not_run_an_exempt_clip_into_a_neighbour_it_only_touches()
+        {
+            // the clip lands at 4s + 3 ticks, its 4s of project ending exactly on the neighbour.
+            // The warp gives the span back a tick long, and the row clamp takes that tick off.
+            var session = NewSessionWithNeighbour(Ms(2_000), exempt: true, Ms(8_000) + 3, speedSpan: Ms(20_000), out var clip);
+            Assert.Equal(Ms(4_000), Live(session, clip).DurationTicks);
+
+            Assert.Equal(Ms(2_000) + 3, session.MoveLinked(clip.Id, Ms(2_000) + 3));
+            Assert.Equal(Ms(4_000), Live(session, clip).DurationTicks);
+            Assert.Empty(session.Project.Validate());
+        }
+
+        // ----------------------------------------------------------------- the other time shifts
+
+        [Fact]
+        public void Close_gap_refits_an_exempt_clip_sliding_under_a_speed_item()
+        {
+            // 2x over [0, 3s); the clip at 6s is unwarped. Slid to 0 its 2s of real time reach
+            // output 2s, half a second past the span's output end of 1.5s (= project 3s), so it
+            // spans 3.5s of project. The mapping never changed: only the shift can see this.
+            var session = NewSession(Ms(6_000), Ms(2_000), exempt: true, out var clip, out var audioTrack);
+            session.AddSpeedEffect(0, Ms(3_000));
+            Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
+            var before = session.Project.ToJson();
+
+            var gap = session.FindGap(audioTrack.Id, Ms(1_000)).Value;
+            Assert.True(session.CanCloseGap(gap));
+            Assert.True(session.CloseGap(gap));
+
+            Assert.Equal(0, Live(session, clip).TimelineStartTicks);
+            Assert.Equal(Ms(3_500), Live(session, clip).DurationTicks);
+            Assert.Empty(session.Project.Validate());
+
+            session.Undo();
+            Assert.Equal(before, session.Project.ToJson());
+        }
+
+        [Fact]
+        public void Ripple_delete_refits_an_exempt_clip_sliding_under_a_speed_item()
+        {
+            // 2x over [0, 5s), which starts before the cut and so stays put. The clip slides from
+            // 6s to 4s: output 2s + 2s of real time = output 4s, 1.5s past the span's output end
+            // of 2.5s (= project 5s), so it spans 2.5s of project. The mapping never changed.
+            var session = NewSession(Ms(6_000), Ms(2_000), exempt: true, out var clip, out _);
+            session.AddSpeedEffect(0, Ms(5_000));
+            var card = session.AddText(Ms(4_000), Ms(2_000));
+            Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
+
+            session.RippleDeleteItem(card.Id);
+
+            Assert.Equal(Ms(4_000), Live(session, clip).TimelineStartTicks);
+            Assert.Equal(Ms(2_500), Live(session, clip).DurationTicks);
+            Assert.Empty(session.Project.Validate());
+        }
+
+        [Theory]
+        [InlineData(false, false)]
+        [InlineData(true, false)]
+        [InlineData(false, true)]
+        [InlineData(true, true)]
+        public void Ripple_delete_that_would_collide_is_refused_for_either_clock(bool exempt, bool speedItemLater)
+        {
+            // cutting the card's [4s, 6s) lands the clip on the cut's start, [4s, 6s), and pulls
+            // the neighbour from 7s back to 5s, inside it. Rolled back, not end-trimmed to fit. A
+            // speed item past the cut slides too, which changes the warp's mapping and so re-fits
+            // the clip a second time, in the session: that one must not end-trim it either.
+            var session = NewSessionWithNeighbour(Ms(5_000), exempt, Ms(7_000), speedSpan: 0, out var clip);
+            if (speedItemLater)
+                session.AddSpeedEffect(Ms(10_000), Ms(2_000));
+            var card = session.AddText(Ms(4_000), Ms(2_000));
+            var before = session.Project.ToJson();
+
+            Assert.False(session.CanRippleDeleteItem(card.Id));
+            session.RippleDeleteItem(card.Id);
+
+            Assert.Equal(before, session.Project.ToJson());
+            Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
+        }
+
+        /// <summary>A session with a clip at [3s, 6s) on the audio row, and a cut row
+        /// [0, 5s) + [8s, 14s) whose gap at [5s, 8s) runs through the end of that clip.</summary>
+        private static EditorSession NewSessionWithGapOverClip(bool exempt, out Item clip, out Track cutRow)
+        {
+            var seed = NewSession(Ms(3_000), Ms(3_000), exempt, out clip, out _);
+            var project = seed.Project;
+            cutRow = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Cut", Order = project.Tracks.Count };
+            project.Tracks.Add(cutRow);
+            AddSolid(project, cutRow, 0, Ms(5_000));
+            AddSolid(project, cutRow, Ms(8_000), Ms(6_000));
+            return new EditorSession(project, null, save => save());
+        }
+
+        private static Item AddSolid(Project project, Track track, long start, long duration)
+        {
+            var solid = new Item
+            {
+                Id = Guid.NewGuid(),
+                TrackId = track.Id,
+                TimelineStartTicks = start,
+                DurationTicks = duration,
+                Content = new SolidContent { Color = "#FF000000" },
+            };
+            project.Items.Add(solid);
+            return solid;
+        }
+
+        [Theory]
+        [InlineData(false, false)]
+        [InlineData(true, false)]
+        [InlineData(false, true)]
+        [InlineData(true, true)]
+        public void Ripple_close_gap_keeps_the_cut_on_a_clip_it_runs_through(bool exempt, bool speedItemLater)
+        {
+            // the gap takes the last second of the clip. A speed item past it slides too, which
+            // changes the warp's mapping: the clip must not get its cut second back from the
+            // re-fit, which would play it over the closed span.
+            var session = NewSessionWithGapOverClip(exempt, out var clip, out var cutRow);
+            var speed = speedItemLater ? session.AddSpeedEffect(Ms(10_000), Ms(2_000)) : null;
+            var before = session.Project.ToJson();
+
+            Assert.True(session.RippleCloseGap(session.FindGap(cutRow.Id, Ms(6_000)).Value));
+
+            Assert.Equal(Ms(3_000), Live(session, clip).TimelineStartTicks);
+            Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
+            if (speed != null)
+                Assert.Equal(Ms(7_000), Live(session, speed).TimelineStartTicks);
+            Assert.Empty(session.Project.Validate());
+
+            session.Undo();
+            Assert.Equal(before, session.Project.ToJson());
+        }
+
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void Ripple_delete_keeps_the_cut_on_a_grouped_clip_it_runs_through(bool exempt)
+        {
+            // the same cut through RippleDelete: the clip is grouped with the [5s, 8s) card, so it
+            // loses what it plays under the card, and a speed item past the cut slides
+            var session = NewSessionWithGapOverClip(exempt, out var clip, out var cutRow);
+            var project = session.Project;
+            var card = AddSolid(project, cutRow, Ms(5_000), Ms(3_000));
+            project.TrackOf(card).GroupId = project.TrackOf(Live(session, clip)).GroupId = Guid.NewGuid();
+            session = new EditorSession(project, null, save => save());
+            var speed = session.AddSpeedEffect(Ms(10_000), Ms(2_000));
+
+            session.RippleDeleteItem(card.Id);
+
+            Assert.Equal(Ms(3_000), Live(session, clip).TimelineStartTicks);
+            Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
+            Assert.Equal(Ms(7_000), Live(session, speed).TimelineStartTicks);
+            Assert.Empty(session.Project.Validate());
+        }
+
+        [Fact]
+        public void Ripple_close_gap_measures_a_cut_clip_in_the_time_it_kept()
+        {
+            // 2x over [4s, 9s) puts the clip at [3s, 8s), 3s of real time, and the gap cuts the
+            // speed item as well as the clip. What the clip keeps is [3s, 5s): 1s plain and 1s at
+            // 2x, so 1.5s of real time, and the speed item left over [4s, 6s) still gives that
+            // back as [3s, 5s).
+            var session = NewSessionWithGapOverClip(exempt: true, out var clip, out var cutRow);
+            var speed = session.AddSpeedEffect(Ms(4_000), Ms(5_000));
+            Assert.Equal(Ms(5_000), Live(session, clip).DurationTicks);
+
+            Assert.True(session.RippleCloseGap(session.FindGap(cutRow.Id, Ms(6_000)).Value));
+
+            Assert.Equal(Ms(3_000), Live(session, clip).TimelineStartTicks);
+            Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
+            var warp = session.CurrentWarp;
+            Assert.Equal(Ms(1_500), warp.ToOutput(Ms(5_000)) - warp.ToOutput(Ms(3_000)));
+            Assert.Equal(Ms(4_000), Live(session, speed).TimelineStartTicks);
+            Assert.Empty(session.Project.Validate());
+        }
+
+        [Fact]
+        public void A_clip_cut_in_two_by_a_ripple_keeps_both_parts_when_a_later_speed_item_slides()
+        {
+            // the gap runs through the middle of [3s, 10s): the left part ends at the cut, the right
+            // part closes up against it, and neither is stretched
+            var session = NewSessionWithGapOverClip(exempt: true, out var clip, out var cutRow);
+            var project = session.Project;
+            Live(session, clip).DurationTicks = Ms(7_000);
+            session = new EditorSession(project, null, save => save());
+            session.AddSpeedEffect(Ms(10_000), Ms(2_000));
+
+            Assert.True(session.RippleCloseGap(session.FindGap(cutRow.Id, Ms(6_000)).Value));
+
+            var parts = session.Project.Items.Where(i => i.Content is MediaContent).OrderBy(i => i.TimelineStartTicks).ToList();
+            Assert.Equal(2, parts.Count);
+            Assert.Equal((Ms(3_000), Ms(5_000)), (parts[0].TimelineStartTicks, parts[0].TimelineEndTicks));
+            Assert.Equal((Ms(5_000), Ms(7_000)), (parts[1].TimelineStartTicks, parts[1].TimelineEndTicks));
+            Assert.Empty(session.Project.Validate());
+        }
+
+        [Fact]
+        public void Rejoin_refits_a_later_exempt_clip_sliding_under_a_speed_item()
+        {
+            // the row holds a cut at [0, 2s) + [4s, 6s), source [0, 2s) + [2s, 4s), and the exempt
+            // clip at 8s, just past 2x over [0, 8s). Rejoined the cut ends at 4s, so the clip goes
+            // to 6s: output 3s, and its 2s of real time reach output 5s, 1s past the span's output
+            // end of 4s (= project 8s), so it spans 3s of project. The mapping never changed.
+            var seed = NewSession(Ms(8_000), Ms(2_000), exempt: true, out var clip, out var audioTrack);
+            var project = seed.Project;
+            var left = AddCutHalf(project, audioTrack, 0, Ms(2_000), sourceIn: 0);
+            AddCutHalf(project, audioTrack, Ms(4_000), Ms(2_000), sourceIn: Ms(2_000));
+            var session = new EditorSession(project, null, save => save());
+            session.AddSpeedEffect(0, Ms(8_000));
+            var before = session.Project.ToJson();
+
+            Assert.True(session.RejoinGap(session.FindGap(audioTrack.Id, Ms(3_000)).Value));
+
+            Assert.Equal(Ms(4_000), Live(session, left).DurationTicks);
+            Assert.Equal(Ms(6_000), Live(session, clip).TimelineStartTicks);
+            Assert.Equal(Ms(3_000), Live(session, clip).DurationTicks);
+            Assert.Empty(session.Project.Validate());
+
+            session.Undo();
+            Assert.Equal(before, session.Project.ToJson());
+        }
+
+        [Fact]
+        public void Rejoin_does_not_end_trim_a_later_exempt_clip_against_the_clip_it_absorbs()
+        {
+            // the row holds a cut at [0, 2s) + [5s, 6s), source [0, 2s) + [2s, 3s), and the exempt
+            // clip at 6s, past 2x over [0, 5s). Rejoined the cut ends at 3s, so the clip goes to
+            // 3s: output 1.5s, and its 1.5s of real time reach output 3s, 0.5s past the span's
+            // output end of 2.5s (= project 5s), so it spans 2.5s of project. The right half that
+            // used to start at 5s is gone by then, so nothing on the row stops it short.
+            var seed = NewSession(Ms(6_000), Ms(1_500), exempt: true, out var clip, out var audioTrack);
+            var project = seed.Project;
+            var left = AddCutHalf(project, audioTrack, 0, Ms(2_000), sourceIn: 0);
+            AddCutHalf(project, audioTrack, Ms(5_000), Ms(1_000), sourceIn: Ms(2_000));
+            var session = new EditorSession(project, null, save => save());
+            session.AddSpeedEffect(0, Ms(5_000));
+
+            Assert.True(session.RejoinGap(session.FindGap(audioTrack.Id, Ms(3_000)).Value));
+
+            Assert.Equal(Ms(3_000), Live(session, left).DurationTicks);
+            Assert.Equal(Ms(3_000), Live(session, clip).TimelineStartTicks);
+            Assert.Equal(Ms(2_500), Live(session, clip).DurationTicks);
+            Assert.Empty(session.Project.Validate());
+        }
+
+        private static Item AddCutHalf(Project project, Track track, long start, long duration, long sourceIn)
+        {
+            var half = new Item
+            {
+                Id = Guid.NewGuid(),
+                TrackId = track.Id,
+                TimelineStartTicks = start,
+                DurationTicks = duration,
+                Content = new MediaContent { SourceId = project.Sources[0].Id, StreamIndex = 0, SourceInTicks = sourceIn },
+            };
+            project.Items.Add(half);
+            return half;
+        }
+
+        [Fact]
+        public void Ripple_close_gap_keeps_an_exempt_clip_past_the_speed_item_at_its_span()
+        {
+            // a clip at [2s, 3s) puts the gap past the speed item, so the slide crosses no boundary:
+            // what the clip plays keeps its length, and the speed item ahead of the cut stays put
+            var seed = NewSession(Ms(8_000), Ms(2_000), exempt: true, out var clip, out var audioTrack);
+            var project = seed.Project;
+            project.Items.Add(new Item
+            {
+                Id = Guid.NewGuid(),
+                TrackId = audioTrack.Id,
+                TimelineStartTicks = Ms(2_000),
+                DurationTicks = Ms(1_000),
+                Content = new MediaContent { SourceId = project.Sources[0].Id, StreamIndex = 0 },
+            });
+            var session = new EditorSession(project, null, save => save());
+            var speed = session.AddSpeedEffect(0, Ms(2_000));
+            var gap = session.FindGap(audioTrack.Id, Ms(5_000)).Value;
+
+            Assert.True(session.RippleCloseGap(gap));
+
+            Assert.Equal(Ms(3_000), Live(session, clip).TimelineStartTicks);
+            Assert.Equal(Ms(2_000), Live(session, clip).DurationTicks);
+            Assert.Equal(0, Live(session, speed).TimelineStartTicks);
+            Assert.Equal(Ms(2_000), Live(session, speed).DurationTicks);
+            Assert.Empty(session.Project.Validate());
+        }
+
+        [Fact]
+        public void Shifting_a_speed_item_with_an_exempt_clip_fits_the_clip_to_the_moved_warp()
+        {
+            // 2x over [4s, 9s), clip at 5s: output 4.5s, and its 4s of project reach output 6.5s,
+            // so it is 2s of real time. Both slide 4s left: the speed item now covers [0, 5s) and
+            // the clip starts at output 0.5s, reaching output 2.5s = project 5s, still 4s of
+            // project. Fitted to the warp from before the move it would come out as 2s.
+            var project = NewProject();
+            var clip = AddAudioItem(project, Ms(5_000), Ms(4_000), exempt: true);
+            AddSpeedItem(project, Ms(4_000), Ms(5_000), 2.0);
+            var speed = project.Items.Single(i => i.Content is SpeedContent);
+
+            TimelineOps.ShiftItems(project, new[] { speed, clip }, _ => -Ms(4_000));
+
+            Assert.Equal(0, speed.TimelineStartTicks);
+            Assert.Equal(Ms(1_000), clip.TimelineStartTicks);
+            Assert.Equal(Ms(4_000), clip.DurationTicks);
+        }
+
+        [Fact]
+        public void Shifting_leaves_an_item_with_no_delta_alone()
+        {
+            // 2x over [0, 5s), so these exempt clips' 4s of project are 2s of real time. The speed
+            // item goes 10s right. The clip that stays is the mapping re-fit's to deal with
+            // (EditorSession.RefitExemptItems); fitted here it would shrink to 2s.
+            var project = NewProject();
+            var still = AddAudioItem(project, Ms(1_000), Ms(4_000), exempt: true);
+            var moved = AddAudioItem(project, Ms(1_000), Ms(4_000), exempt: true);
+            var plain = AddAudioItem(project, Ms(1_000), Ms(4_000), exempt: false);
+            AddSpeedItem(project, 0, Ms(5_000), 2.0);
+
+            TimelineOps.ShiftItems(project, project.Items,
+                i => i == still ? 0 : i == moved ? Ms(20_000) : Ms(10_000));
+
+            Assert.Equal(Ms(1_000), still.TimelineStartTicks);
+            Assert.Equal(Ms(4_000), still.DurationTicks);
+
+            // past the speed item, now at [10s, 15s), the moved clip's 2s of real time are 2s of
+            // project; the plain clip keeps its project span wherever it lands
+            Assert.Equal(Ms(21_000), moved.TimelineStartTicks);
+            Assert.Equal(Ms(2_000), moved.DurationTicks);
+            Assert.Equal(Ms(11_000), plain.TimelineStartTicks);
+            Assert.Equal(Ms(4_000), plain.DurationTicks);
         }
 
         [Fact]
