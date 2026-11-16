@@ -879,14 +879,35 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void Initial_tracks_are_never_pruned()
+        public void A_row_the_project_opened_with_goes_with_its_last_clip_too()
         {
             var session = NewSession(out _, out var webcam, out _, out _);
+            var before = session.Project.ToJson();
 
             session.DeleteItems(new[] { webcam.Id });
 
-            Assert.DoesNotContain(session.Project.Items, i => i.TrackId == webcam.TrackId);
-            Assert.Contains(session.Project.Tracks, t => t.Id == webcam.TrackId);
+            Assert.DoesNotContain(session.Project.Tracks, t => t.Id == webcam.TrackId);
+
+            session.Undo();
+            Assert.Equal(before, session.Project.ToJson());
+        }
+
+        /// <summary>Only rows the edit emptied go: a row that held nothing before it (a voice take's
+        /// row waiting for its first take, a row a file was saved with) is not the delete's.</summary>
+        [Fact]
+        public void A_delete_leaves_a_row_that_was_already_empty()
+        {
+            var session = NewSession(out var screen, out var webcam, out _, out _);
+            session.DeleteItems(new[] { webcam.Id });
+            var project = Project.FromJson(session.Project.ToJson());
+            var empty = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Empty", Order = 50 };
+            project.Tracks.Add(empty);
+            var reopened = new EditorSession(project, null, null);
+
+            reopened.DeleteItems(new[] { screen.Id });
+
+            Assert.Contains(reopened.Project.Tracks, t => t.Id == empty.Id);
+            Assert.DoesNotContain(reopened.Project.Tracks, t => t.Id == screen.TrackId);
         }
 
         // -------------------------------------------------------------------------- add / import

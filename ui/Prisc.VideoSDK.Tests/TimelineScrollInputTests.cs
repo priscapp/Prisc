@@ -53,11 +53,12 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(pan, Wheel(0, 1, Win, TimelineScrollModifiers.Shift | TimelineScrollModifiers.Alt));
         }
 
+        /// <summary>The rows never scroll vertically, so Alt means nothing to a wheel: it zooms as
+        /// a plain one does.</summary>
         [Fact]
-        public void Windows_alt_wheel_belongs_to_the_rows_scroller()
+        public void Windows_alt_wheel_zooms_like_a_plain_wheel()
         {
-            Assert.Equal(TimelineScrollAction.ScrollRows, Wheel(0, 1, Win, TimelineScrollModifiers.Alt).Action);
-            Assert.Equal(0, Wheel(0, 1, Win, TimelineScrollModifiers.Alt).PanPixels);
+            Assert.Equal(Wheel(0, 1, Win), Wheel(0, 1, Win, TimelineScrollModifiers.Alt));
         }
 
         [Fact]
@@ -164,9 +165,10 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void Mac_alt_scroll_still_hands_the_event_to_the_rows_scroller()
+        public void Mac_alt_scroll_means_what_the_plain_scroll_does()
         {
-            Assert.Equal(TimelineScrollAction.ScrollRows, Wheel(-0.4, 0, Mac, TimelineScrollModifiers.Alt).Action);
+            Assert.Equal(Wheel(-0.4, 0, Mac), Wheel(-0.4, 0, Mac, TimelineScrollModifiers.Alt));
+            Assert.Equal(Wheel(0, 0.3, Mac), Wheel(0, 0.3, Mac, TimelineScrollModifiers.Alt));
         }
 
         [Fact]
@@ -373,9 +375,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineScrollInput.DecideWheel(-0.4, 0, TimelineScrollModifiers.Shift, Mac,
                     TimelineScrollAxis.Vertical).Action);
 
-            Assert.Equal(TimelineScrollAction.ScrollRows,
-                TimelineScrollInput.DecideWheel(-0.4, 0, TimelineScrollModifiers.Alt, Mac,
-                    TimelineScrollAxis.Horizontal).Action);
 
             Assert.Equal(TimelineScrollAction.Zoom,
                 TimelineScrollInput.DecideWheel(1, 0, TimelineScrollModifiers.None, Win,

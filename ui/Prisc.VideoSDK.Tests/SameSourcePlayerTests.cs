@@ -650,6 +650,8 @@ namespace Prisc.VideoSDK.Tests
                 return at >= Ticks(1.5);
             }), $"pos={player.Position}");
 
+            // the hop is counted when its pipe runs it, which can trail the clock under load
+            Assert.True(WaitUntil(() => player.VideoSeekCount(other) > otherSeeks), "the seam never hopped its stream");
             Assert.Equal(primarySeeks, player.VideoSeekCount(primary));
             Assert.Equal(otherSeeks + 1, player.VideoSeekCount(other));
             Assert.True(WaitUntil(() => LanePts(player, cache, otherId, 0) is >= 30_000_000),

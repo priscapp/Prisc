@@ -65,6 +65,21 @@ namespace Prisc.UI.VideoEditor.Timeline
         /// index i of both is row i. The reorder drag works in this space (top to bottom, which for
         /// video rows is the reverse of the model's layer order).</summary>
         private IReadOnlyList<TimelineRow> _rows = Array.Empty<TimelineRow>();
+        private bool _compactRows;
+
+        /// <summary>Whether video rows are laid out at the audio row's height, as the surface's
+        /// are (<see cref="TimelineSurface.CompactRows"/>). A change rebuilds the rows.</summary>
+        public bool CompactRows
+        {
+            get => _compactRows;
+            set
+            {
+                if (_compactRows == value)
+                    return;
+                _compactRows = value;
+                Rebuild();
+            }
+        }
         private readonly List<Border> _rowVisuals = new List<Border>();
         private readonly RowReorderDrag _drag;
 
@@ -103,7 +118,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             if (project == null)
                 return;
 
-            _rows = TimelineRowLayout.Build(project);
+            _rows = TimelineRowLayout.Build(project, _compactRows);
 
             for (var i = 0; i < _rows.Count; i++)
             {

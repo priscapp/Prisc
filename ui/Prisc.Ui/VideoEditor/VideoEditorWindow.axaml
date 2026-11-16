@@ -1019,6 +1019,7 @@
         <!--  transport bar. Dark in both chromes for now (the modern chrome has only reached
               the two tool bars and the preview), so it pins the white ink it used to inherit.  -->
         <Border
+            x:Name="transportBar"
             Grid.Row="2"
             Background="#454545"
             BorderBrush="#666666"
@@ -1166,8 +1167,9 @@
             </DockPanel>
         </Border>
 
-        <!--  timeline: sized to its rows (ruler + one row per track + scrollbar), capped so a
-              project with many rows scrolls vertically instead of eating the preview. The
+        <!--  timeline: sized to its rows (ruler + one row per track + scrollbar), never
+              scrolled: every row is always in view. When the rows would crowd the preview the
+              video rows compact (TimelineControl.SharedHeight, set from code-behind). The
               transport bar's collapse button hides this whole border (the preview takes the
               space).  -->
         <Border
@@ -1183,7 +1185,6 @@
             <ThemeVariantScope RequestedThemeVariant="Dark">
                 <tl:TimelineControl
                     x:Name="timeline"
-                    MaxHeight="320"
                     Margin="0,2,0,0" />
             </ThemeVariantScope>
         </Border>

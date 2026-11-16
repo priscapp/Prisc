@@ -222,8 +222,8 @@ namespace Prisc.VideoSDK.Tests
 
             Assert.Equal(new[] { kept.Id }, session.Project.Items.Select(i => i.Id));
             Assert.Empty(session.SelectedItemIds);
-            // the row this session made goes with its last clip; the ones it opened with stay
-            Assert.Equal(3, session.Project.Tracks.Count);
+            // every row the delete emptied goes with its last clip, whatever made it
+            Assert.Equal(new[] { kept.TrackId }, session.Project.Tracks.Select(t => t.Id));
 
             session.Undo();
 
@@ -441,7 +441,7 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void An_emptied_row_keeps_no_group_alive_for_the_two_that_still_count()
+        public void An_empty_row_keeps_no_group_alive_for_the_two_that_still_count()
         {
             var project = NewProject();
             var group = Guid.NewGuid();
@@ -450,10 +450,7 @@ namespace Prisc.VideoSDK.Tests
             var c = Row(project, group);
             Clip(project, a);
             Clip(project, b);
-            var last = Clip(project, c);
-            var session = new EditorSession(project, null, null);
-
-            session.DeleteItems(new[] { last.Id });
+            var session = new EditorSession(project, null, null); // c holds nothing
 
             Assert.Equal(group, GroupOf(session, a));
             Assert.Equal(group, GroupOf(session, c));

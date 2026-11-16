@@ -198,13 +198,13 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(expected, TimelineViewMath.ClipCountLabel("Delete", selected));
 
         [Theory]
-        [InlineData(0, 0, "Paste", null)]
-        [InlineData(1, 1, "Paste", null)]
-        [InlineData(3, 1, "Paste", null)]
-        [InlineData(3, 2, "Paste 3 Clips at Gap Start", "Clips return to their own tracks, or new tracks if those are occupied.")]
-        public void The_gap_menu_says_when_a_paste_will_not_go_into_the_gap(int clips, int rows, string label, string tip)
+        [InlineData(0, 0, "Paste at Cursor", "Starts where you clicked, or earlier if it needs the room, and is trimmed if the gap is too short.")]
+        [InlineData(1, 1, "Paste at Cursor", "Starts where you clicked, or earlier if it needs the room, and is trimmed if the gap is too short.")]
+        [InlineData(3, 1, "Paste 3 Clips at Cursor", "Starts where you clicked, or earlier if it needs the room, and is trimmed if the gap is too short.")]
+        [InlineData(3, 2, "Paste 3 Clips at Cursor", "Starts where you clicked. Clips return to their own tracks, or new tracks if those are occupied.")]
+        public void The_gap_menu_says_where_a_paste_will_go(int clips, int rows, string label, string tip)
         {
-            Assert.Equal(label, TimelineViewMath.GapPasteLabel(clips, rows));
+            Assert.Equal(label, TimelineViewMath.PasteAtCursorLabel(clips));
             Assert.Equal(tip, TimelineViewMath.GapPasteTip(rows));
         }
 

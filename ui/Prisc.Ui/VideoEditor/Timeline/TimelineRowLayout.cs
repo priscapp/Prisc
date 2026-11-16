@@ -86,7 +86,33 @@ namespace Prisc.UI.VideoEditor.Timeline
         /// three read as three sections rather than one list with invisible walls.</summary>
         public const double BlockGap = 8;
 
-        public static double HeightOf(TimelineRowKind kind) => kind switch
+        /// <summary>
+        /// When the timeline gives its video rows the audio row's height
+        /// (<see cref="Build"/>'s <c>compact</c>): when the rows at full height would take more than
+        /// this share of the height the preview and the timeline split between them, so the preview
+        /// would end up the smaller of the two. Every row is still shown, at a height that still
+        /// holds a filmstrip, and nothing else changes size.
+        ///
+        /// <para>Why a share of the space and not the preview's zoom: the zoom depends on the
+        /// recording's resolution (a 4K screen is under 30% in any window on a 1080p display), the
+        /// share depends only on the window and the rows. At one half, a maximized 1080p editor
+        /// compacts at about ten rows of a typical recording and a 1280x720 window at about six or
+        /// seven.</para>
+        /// </summary>
+        public const double CompactShare = 0.5;
+
+        /// <summary>Whether the timeline compacts its video rows (see <see cref="CompactShare"/>):
+        /// <paramref name="fullHeight"/> is the timeline's height with every row at full height,
+        /// <paramref name="sharedHeight"/> the height the preview and the timeline split. Decided
+        /// from the full height, never from the current mode, so it cannot flip back and forth on
+        /// its own result. False when compacting would save nothing, and when there is no height to
+        /// judge by yet.</summary>
+        public static bool ShouldCompact(double fullHeight, double compactHeight, double sharedHeight) =>
+            sharedHeight > 0 && double.IsFinite(sharedHeight)
+            && compactHeight < fullHeight
+            && fullHeight > sharedHeight * CompactShare;
+
+        public static double HeightOf(TimelineRowKind kind, bool compact = false) => kind switch
         {
             TimelineRowKind.Audio => AudioRowHeight,
             TimelineRowKind.Text => TextRowHeight,
@@ -98,7 +124,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             TimelineRowKind.Zoom => EffectRowHeight,
             TimelineRowKind.Cursor => InputOverlayRowHeight,
             TimelineRowKind.Keyboard => InputOverlayRowHeight,
-            _ => VideoRowHeight,
+            _ => compact ? AudioRowHeight : VideoRowHeight,
         };
 
         /// <summary>Which of the three reorder blocks a row kind lays out in: the pinned speed
@@ -121,8 +147,8 @@ namespace Prisc.UI.VideoEditor.Timeline
         /// Order-independent — the earliest item wins
         /// however <paramref name="trackItems"/> arrives — and an empty track falls back to
         /// <see cref="TimelineRowKind.Video"/>, which is the row a media clip dropped onto it would
-        /// want anyway. An empty effect track (a zoom row a cut emptied, until the next delete
-        /// prunes it, or a hand-edited file) reads as zoom: the speed row is identified by its
+        /// want anyway. An empty effect track (only a hand-edited file has one, since a delete or
+        /// cut prunes an effect row it empties) reads as zoom: the speed row is identified by its
         /// items, so a row without any cannot be it.
         /// </summary>
         public static TimelineRowKind KindOf(Track track, IEnumerable<Item> trackItems)
@@ -165,7 +191,7 @@ namespace Prisc.UI.VideoEditor.Timeline
         /// it keeps its natural ascending order and stays pinned underneath; the speed row is
         /// global (no z of its own) and sits above everything.</para>
         /// </summary>
-        public static IReadOnlyList<TimelineRow> Build(Project project)
+        public static IReadOnlyList<TimelineRow> Build(Project project, bool compact = false)
         {
             if (project?.Tracks == null || project.Tracks.Count == 0)
                 return Array.Empty<TimelineRow>();
@@ -202,7 +228,7 @@ namespace Prisc.UI.VideoEditor.Timeline
                 if (rows.Count > 0 && BlockOf(rows[^1].Kind) != BlockOf(kind))
                     top += BlockGap;
 
-                var height = HeightOf(kind);
+                var height = HeightOf(kind, compact);
                 rows.Add(new TimelineRow(track.Id, kind, top, height));
                 top += height;
             }

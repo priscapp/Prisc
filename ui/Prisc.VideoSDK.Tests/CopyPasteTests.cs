@@ -640,7 +640,7 @@ namespace Prisc.VideoSDK.Tests
         // ------------------------------------------------------------------------------------- cut
 
         [Fact]
-        public void Cut_then_paste_returns_to_the_same_rows_and_undo_walks_back_through_both()
+        public void Cut_removes_the_rows_and_paste_returns_them_and_undo_walks_back_through_both()
         {
             var session = GroupedRecording(out _, out var screen, out _, out var cursor, out _, out _);
             var start = session.Project.ToJson();
@@ -648,7 +648,7 @@ namespace Prisc.VideoSDK.Tests
 
             Assert.True(session.CutItems(new[] { screen.Id, cursor.Id }));
             Assert.DoesNotContain(session.Project.Items, i => i.Id == screen.Id || i.Id == cursor.Id);
-            Assert.Equal(rows, session.Project.Tracks.Select(t => t.Id));
+            Assert.DoesNotContain(session.Project.Tracks, t => t.Id == screen.TrackId || t.Id == cursor.TrackId);
             var afterCut = session.Project.ToJson();
 
             var pasted = session.PasteAt(0);
@@ -665,31 +665,31 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void Cut_keeps_a_row_made_this_session_for_the_paste_and_the_next_delete_takes_it()
+        public void Cut_removes_the_row_it_empties_and_the_paste_puts_it_back_as_itself()
         {
             // a card over grouped rows gets a row of its own
             var source = Recording();
             var project = NewProject(source);
             var group = Guid.NewGuid();
-            var screen = Clip(project, Row(project, "Screen", group), 0, 10, Screen(source));
+            Clip(project, Row(project, "Screen", group), 0, 10, Screen(source));
             Clip(project, Row(project, "Cursor", group), 0, 10, Cursor(source));
             var session = SessionOf(project);
             var opened = session.Project.Tracks.Select(t => t.Id).ToList();
             var made = session.AddText(Sec(30), Sec(5));
             var row = made.TrackId;
-            Assert.DoesNotContain(row, opened);
+            var withCard = RowOrder(session);
 
             Assert.True(session.CutItems(new[] { made.Id }));
-            Assert.Contains(session.Project.Tracks, t => t.Id == row);
+            Assert.Equal(opened, session.Project.Tracks.Select(t => t.Id));
 
-            var pasted = Assert.Single(session.PasteAt(Sec(30)));
-            Assert.Equal(row, Find(session, pasted).TrackId);
+            var pasted = Find(session, Assert.Single(session.PasteAt(Sec(30))));
+            Assert.Equal(row, pasted.TrackId);
+            Assert.Equal(withCard, RowOrder(session));
 
-            session.Undo(); // the paste: the row is empty again, and still there
-            Assert.Contains(session.Project.Tracks, t => t.Id == row);
-
-            session.DeleteItems(new[] { screen.Id });
-            Assert.DoesNotContain(session.Project.Tracks, t => t.Id == row);
+            session.Undo(); // the paste, and the row it put back
+            Assert.Equal(opened, session.Project.Tracks.Select(t => t.Id));
+            session.Undo(); // the cut: the card is back on its own row
+            Assert.Equal(row, Find(session, made.Id).TrackId);
         }
 
         [Fact]
@@ -734,7 +734,9 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(new Guid?[] { group, group, null }, session.Project.Tracks.OrderBy(t => t.Order).Select(t => t.GroupId));
             Assert.Empty(statuses);
 
-            session.Undo();
+            session.Undo(); // the paste, and the rows it put back
+            Assert.Equal(new[] { "Card" }, RowOrder(session).Select(r => r.Name));
+            session.Undo(); // the cut
             Assert.Equal(rows, RowOrder(session));
             Assert.Empty(session.Project.Validate());
         }
@@ -764,24 +766,43 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void A_zoom_row_a_cut_emptied_goes_at_the_next_delete_and_a_paste_then_makes_a_new_one()
+        public void A_zoom_row_a_cut_empties_goes_at_once_and_a_paste_brings_it_back()
         {
-            var session = GroupedRecording(out _, out _, out _, out _, out var card, out _);
+            var session = GroupedRecording(out _, out _, out _, out _, out _, out _);
             var zoom = session.AddZoomEffect(Sec(1), Sec(2));
-            var row = zoom.TrackId;
+            var order = session.Project.TrackOf(zoom).Order;
 
             Assert.True(session.CutItems(new[] { zoom.Id }));
-            Assert.Contains(session.Project.Tracks, t => t.Id == row);
+            Assert.DoesNotContain(session.Project.Tracks, t => t.Id == zoom.TrackId);
             Assert.Empty(session.Project.Validate());
-
-            session.DeleteItems(new[] { card.Id });
-            Assert.DoesNotContain(session.Project.Tracks, t => t.Id == row);
 
             var pasted = Find(session, Assert.Single(session.PasteAt(Sec(4))));
-            Assert.NotEqual(row, pasted.TrackId);
-            Assert.Equal(TrackKind.Effect, session.Project.TrackOf(pasted).Kind);
+            var back = session.Project.TrackOf(pasted);
+            Assert.Equal(zoom.TrackId, back.Id);
+            Assert.Equal(order, back.Order);
+            Assert.Equal(TrackKind.Effect, back.Kind);
             Assert.IsType<ZoomContent>(pasted.Content);
             Assert.Empty(session.Project.Validate());
+        }
+
+        /// <summary>The row a cut removed is this project's: pasted into another one it means
+        /// nothing there, so the clip gets a new row as any paste from elsewhere does.</summary>
+        [Fact]
+        public void A_cut_row_comes_back_only_in_the_session_that_cut_it()
+        {
+            var source = Recording();
+            var theirs = NewProject(source);
+            var cut = Clip(theirs, Row(theirs, "Card"), 0, 5, Card());
+            var other = SessionOf(theirs);
+            Assert.True(other.CutItems(new[] { cut.Id }));
+
+            var mine = NewProject(source);
+            Clip(mine, Row(mine, "Screen"), 0, 10, Screen(source));
+            var session = SessionOf(mine);
+
+            var pasted = Find(session, Assert.Single(session.PasteAt(0)));
+            Assert.NotEqual(cut.TrackId, pasted.TrackId);
+            Assert.Equal("Card copy", session.Project.TrackOf(pasted).Name);
         }
 
         /// <summary>Only its items say a row is the speed row, so an empty one would read as a zoom
@@ -914,6 +935,55 @@ namespace Prisc.VideoSDK.Tests
             if (kept != null)
                 Assert.Equal((Sec(7), Sec(kept.Value)), (pasted[1].TimelineStartTicks, pasted[1].DurationTicks));
             Assert.Empty(session.Project.Validate());
+        }
+
+        /// <summary>Paste at Cursor into the gap [4s, 9s) with a 2 s card: it starts at the click
+        /// when it fits from there, and otherwise slides back just enough to end with the gap.</summary>
+        [Theory]
+        [InlineData(5.0, 5.0)]  // fits from the click
+        [InlineData(4.0, 4.0)]  // the gap's start
+        [InlineData(8.5, 7.0)]  // would run past the gap: ends with it instead
+        [InlineData(9.0, 7.0)]
+        public void Paste_at_cursor_starts_at_the_click_or_as_near_it_as_fits(double click, double start)
+        {
+            var session = TwoCardsAndAGap(2.0, 9.0, out var gapRow, out var first, out _);
+            Assert.True(session.CopyItems(new[] { first.Id }));
+            var gap = session.FindGap(gapRow.Id, Sec(5)).Value;
+
+            var pasted = Find(session, Assert.Single(session.PasteIntoGap(gap, Sec(click))));
+
+            Assert.Equal(gapRow.Id, pasted.TrackId);
+            Assert.Equal((Sec(start), Sec(2)), (pasted.TimelineStartTicks, pasted.DurationTicks));
+            Assert.Empty(session.Project.Validate());
+        }
+
+        [Fact]
+        public void Paste_at_cursor_of_a_clip_longer_than_the_gap_starts_at_the_gap_and_is_trimmed()
+        {
+            var session = TwoCardsAndAGap(10.0, 7.0, out var gapRow, out _, out var second);
+            Assert.True(session.CopyItems(new[] { second.Id }));
+            var gap = session.FindGap(gapRow.Id, Sec(5)).Value;
+
+            var pasted = Find(session, Assert.Single(session.PasteIntoGap(gap, Sec(6))));
+
+            Assert.Equal((Sec(4), Sec(3)), (pasted.TimelineStartTicks, pasted.DurationTicks));
+        }
+
+        [Fact]
+        public void Paste_at_cursor_of_several_rows_starts_at_the_click()
+        {
+            var session = GroupedRecording(out _, out var screen, out _, out var cursor, out _, out var sound);
+            var audioRow = sound.TrackId;
+            session.TrimItemEnd(sound.Id, -Sec(5));
+            Assert.True(session.CopyItems(new[] { sound.Id }));
+            session.PasteAt(Sec(8)); // the audio row: [0, 5) and [8, 13)
+            var gap = session.FindGap(audioRow, Sec(6)).Value;
+
+            Assert.True(session.CopyItems(new[] { screen.Id, cursor.Id }));
+            var pasted = session.PasteIntoGap(gap, Sec(6.5)).Select(id => Find(session, id)).ToList();
+
+            Assert.Equal(2, pasted.Count);
+            Assert.All(pasted, i => Assert.Equal(Sec(6.5), i.TimelineStartTicks));
         }
 
         [Fact]
