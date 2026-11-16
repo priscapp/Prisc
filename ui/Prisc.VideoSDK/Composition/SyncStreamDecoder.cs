@@ -181,7 +181,7 @@ namespace Prisc.VideoSDK.Composition
             bool tbValid = _timeBase.num > 0 && _timeBase.den > 0;
             long target = Math.Max(0, targetTicks);
             long ts = tbValid
-                ? TimeBase.TicksToStreamTime(target + _startTimeTicks, _timeBase.num, _timeBase.den)
+                ? TimeBase.TicksToStreamTimeFloor(target + _startTimeTicks, _timeBase.num, _timeBase.den)
                 : TimeBase.Rescale(target, 1, TimeBase.TicksPerSecond, 1, ffmpeg.AV_TIME_BASE);
 
             int seekStream = tbValid ? _streamIndex : -1;

@@ -53,7 +53,7 @@ namespace Prisc.UI.VideoEditor
     /// input-capture jsonl lives. Decoration over the probe, in the exact spirit of the audio
     /// labels — the probe still decides which streams exist, these only classify them — and null
     /// (or a null member) simply falls back to the loader's heuristics. Built from a
-    /// <see cref="SessionInfo"/> rather than passed as one so the dev harness and the tests, which
+    /// <see cref="SessionInfo"/> rather than passed as one so <c>--video-edit</c> and the tests, which
     /// have no session, can construct it (or skip it) directly.
     /// </summary>
     public sealed class RecordingTrackHints
@@ -116,6 +116,10 @@ namespace Prisc.UI.VideoEditor
         /// <summary>File name, stored beside session.json in the session directory.</summary>
         public const string FileName = "videoedit.json";
 
+        /// <summary>The file as it stood before the track-group upgrade rewrote its format, beside
+        /// it. Written once, the first time such a file is opened, and read by nothing.</summary>
+        public const string PreTrackGroupsFileName = "videoedit.pre-track-groups.json";
+
         private const long TicksPerMs = TimeSpan.TicksPerMillisecond;
 
         /// <summary>
@@ -140,7 +144,7 @@ namespace Prisc.UI.VideoEditor
         /// </list>
         /// </summary>
         /// <param name="editJsonPath">The <c>videoedit.json</c> beside the recording; may be null
-        /// (the dev harness opens a file with no session directory to save into).</param>
+        /// (<c>--video-edit</c> opens a file with no session directory to save into).</param>
         /// <param name="videoPath">The recording being edited.</param>
         /// <param name="probe">Its probe — the output canvas, the streams and the duration.</param>
         /// <param name="audioTrackNames">Optional row names for the recording's audio streams,
@@ -223,9 +227,7 @@ namespace Prisc.UI.VideoEditor
                 if (version?.Version != Project.CurrentVersion)
                     return null;
 
-                var project = Project.FromJson(Encoding.UTF8.GetString(bytes));
-                project?.Normalize();
-                return project;
+                return ReadProject(bytes, path);
             }
             catch (Exception ex)
             {
@@ -265,7 +267,7 @@ namespace Prisc.UI.VideoEditor
                 return version?.Version switch
                 {
                     VideoEditDocumentDto.CurrentVersion => MigrateLegacy(bytes, videoPath, probe, audioTrackNames, hints, findSilentAudioStreams),
-                    Project.CurrentVersion => LoadSaved(bytes, videoPath),
+                    Project.CurrentVersion => LoadSaved(bytes, path, videoPath),
                     _ => null,
                 };
             }
@@ -277,15 +279,49 @@ namespace Prisc.UI.VideoEditor
             }
         }
 
-        private static Project LoadSaved(byte[] bytes, string videoPath)
+        private static Project LoadSaved(byte[] bytes, string path, string videoPath)
         {
-            var project = Project.FromJson(Encoding.UTF8.GetString(bytes));
-            if (project == null)
-                return null;
-
-            project.Normalize();
-            ReconcilePrimaryPath(project, videoPath);
+            var project = ReadProject(bytes, path);
+            if (project != null)
+                ReconcilePrimaryPath(project, videoPath);
             return project;
+        }
+
+        /// <summary>A v2 file's project, normalized. The upgrade to track groups is one way, so a
+        /// file it touched keeps a copy of itself, and one the upgrade left invalid is reported:
+        /// every later edit of it would silently roll back.</summary>
+        private static Project ReadProject(byte[] bytes, string path)
+        {
+            var project = Project.FromJson(Encoding.UTF8.GetString(bytes), out var upgraded);
+            project?.Normalize();
+            if (!upgraded)
+                return project;
+
+            KeepPreUpgradeCopy(path);
+
+            var errors = project.Validate();
+            if (errors.Count > 0)
+            {
+                SentryConfig.CaptureHandled(new InvalidOperationException(
+                    "An upgraded project does not validate: " + errors[0]), "videoeditor.load-project");
+            }
+
+            return project;
+        }
+
+        /// <summary>Best effort: failing to keep the copy must not cost the user the edit.</summary>
+        private static void KeepPreUpgradeCopy(string path)
+        {
+            try
+            {
+                var copy = Path.Combine(Path.GetDirectoryName(path), PreTrackGroupsFileName);
+                if (!File.Exists(copy))
+                    File.Copy(path, copy);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                Debug.WriteLine("Failed to back up videoedit.json: " + ex.Message);
+            }
         }
 
         private static Project MigrateLegacy(byte[] bytes, string videoPath, MediaProbeResult probe,
@@ -322,7 +358,7 @@ namespace Prisc.UI.VideoEditor
 
             // the webcam by the session's reported index when it has one; the fallback is the old
             // "track 1" positional rule, which is all a session written before the report existed
-            // — or a dev-harness open with no session — has.
+            // — or a --video-edit open with no session — has.
             var cam = FindHintedStream(videoStreams, hints?.Webcam)
                       ?? FindPositionalWebcam(videoStreams);
             if (cam is not { Width: > 0, Height: > 0 })
@@ -510,8 +546,10 @@ namespace Prisc.UI.VideoEditor
 
         /// <summary>Points the recording's own source back at <paramref name="videoPath"/>, and
         /// re-derives its capture sidecars from the directory that file is now in. The primary
-        /// source is the one the lowest video row's items reference — every other source in the
-        /// project was imported and keeps its own path.
+        /// source is the one already stored with that path. Failing that (the session directory was
+        /// moved) it is the one the lowest video row's items reference. Every other source in the
+        /// project was imported or pasted and keeps its own path, wherever its clips were reordered
+        /// to.
         ///
         /// The sidecars are re-derived only to repair a break: a stored path that still resolves
         /// is left alone (it may deliberately point elsewhere), and one that does not is replaced
@@ -523,7 +561,8 @@ namespace Prisc.UI.VideoEditor
             if (String.IsNullOrEmpty(videoPath))
                 return;
 
-            var primary = PrimarySource(project);
+            var primary = project.Sources.FirstOrDefault(s => String.Equals(s.Path, videoPath, StringComparison.OrdinalIgnoreCase))
+                          ?? PrimarySource(project);
             if (primary == null)
                 return;
 

@@ -203,10 +203,10 @@ namespace Prisc.UI.VideoEditor.Timeline
             // regular labels can yield to it rather than overprint it.
             FormattedText endText = null;
             var endLabelLeft = 0.0;
-            if (endVisible && endX > 0 && ruler.StepTicks > 0)
+            if (TimelineViewMath.IsRulerEndInView(endX, Bounds.Width) && ruler.StepTicks > 0)
             {
                 endText = Label(typeface, palette, EndTicks(duration), ruler.StepTicks);
-                endLabelLeft = Math.Max(0, endX - endText.Width - EndLabelPadPx);
+                endLabelLeft = Math.Max(0, Math.Min(endX, Bounds.Width) - endText.Width - EndLabelPadPx);
             }
 
             if (ruler.StepTicks > 0)
@@ -243,7 +243,10 @@ namespace Prisc.UI.VideoEditor.Timeline
 
             if (endText != null)
             {
-                context.DrawLine(palette.ProjectEndPen, new Point(endX, 0), new Point(endX, RulerHeight));
+                // the rule goes with the surface's (and is off the edge in the Fit view); the total
+                // stays either way.
+                if (endVisible)
+                    context.DrawLine(palette.ProjectEndPen, new Point(endX, 0), new Point(endX, RulerHeight));
                 context.DrawText(endText, new Point(endLabelLeft, RulerHeight - endText.Height - 2));
             }
 

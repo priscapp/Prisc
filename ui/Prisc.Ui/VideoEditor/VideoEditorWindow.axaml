@@ -883,13 +883,13 @@
                     controls:DockAndWrapPanel.DockToEnd="True"
                     Command="{Binding CommandUndo}"
                     IconPath="{StaticResource IconUndo}"
-                    ToolTip.Tip="Undo (Ctrl+Z)" />
+                    ToolTip.Tip="{Binding UndoTip}" />
 
                 <controls:ToolButton
                     controls:DockAndWrapPanel.DockToEnd="True"
                     Command="{Binding CommandRedo}"
                     IconPath="{StaticResource IconRedo}"
-                    ToolTip.Tip="Redo (Ctrl+Y)" />
+                    ToolTip.Tip="{Binding RedoTip}" />
 
                 <controls:ToolButton
                     x:Name="btnCustomize"
@@ -1133,18 +1133,35 @@
                 </StackPanel>
 
                 <!--  the stretch between the transport (left) and the volume cluster (right):
-                      what the timeline is doing right now, when there is something to say. Only
-                      a group drag speaks here today ("Dragging N grouped clips"), in the group
-                      badge's orange so the text and the highlighted clips read as one cue.  -->
+                      what the timeline is doing right now, when there is something to say: a drag
+                      carrying several clips, a group edit, or an edit that was refused. In the
+                      orange the moving clips are washed in, so the text and those clips read as one
+                      cue.
+                      A message can be longer than the stretch (a paste that made a new row and left
+                      a cursor without a host is two sentences, about 700 px), so it wraps onto a
+                      second line rather than running under the volume cluster. LineHeight 14 keeps
+                      two lines plus the 2 px optical nudge inside the bar's fixed 30 px, so the bar
+                      never changes height and the timeline below never jumps. Only a window too
+                      narrow for two lines ellipsizes, and the tooltip (set with the text) still
+                      carries the whole message. A 14 px line is under Inter's natural height at
+                      this size, so the second line's descenders reach a pixel or two past the
+                      block: ClipToBounds off (TextBlock defaults it on) lets them draw into the
+                      bar's 4 px bottom margin instead of being cut ("recording" lost its g).  -->
                 <Panel>
                     <TextBlock
-                        x:Name="txtGroupDrag"
+                        x:Name="txtTimelineStatus"
                         Margin="12,2,12,0"
+                        ClipToBounds="False"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center"
                         FontWeight="SemiBold"
                         Foreground="#FF9F43"
-                        IsVisible="False" />
+                        IsVisible="False"
+                        LineHeight="14"
+                        MaxLines="2"
+                        TextAlignment="Center"
+                        TextTrimming="CharacterEllipsis"
+                        TextWrapping="Wrap" />
                 </Panel>
             </DockPanel>
         </Border>

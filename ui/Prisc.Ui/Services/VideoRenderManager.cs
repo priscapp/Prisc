@@ -493,17 +493,25 @@ namespace Prisc.UI.Services
             if (!String.IsNullOrEmpty(configured))
                 return configured;
 
-            if (!String.IsNullOrEmpty(source.VideoPath))
-                return GetOutputPath(source.VideoPath, container);
+            return GetOutputPathBeside(source.VideoPath, source.FilePath, container);
+        }
 
-            var dir = Path.GetDirectoryName(source.FilePath);
+        /// <summary>A render's place beside what it was rendered from: <paramref name="videoPath"/>,
+        /// or, for a project with no recording behind it, the directory of
+        /// <paramref name="sessionFilePath"/>. The fallback for when the configured output folder
+        /// cannot be written to, and what the dev harnesses, which are not Recents sessions and so
+        /// have no settings to follow, render to.</summary>
+        internal static string GetOutputPathBeside(string videoPath, string sessionFilePath, VideoContainer container)
+        {
+            if (!String.IsNullOrEmpty(videoPath))
+                return GetOutputPath(videoPath, container);
+
+            var dir = Path.GetDirectoryName(sessionFilePath);
             return GetOutputPath(Path.Combine(dir, "project.mp4"), container);
         }
 
         /// <summary>"<c>name</c>-edited.mp4" (or <c>.mkv</c>) beside the source, uniquified with a counter when that
-        /// is taken (an earlier render the user kept, or a file they made themselves). The fallback
-        /// for when the configured output folder cannot be written to, and what the dev harness —
-        /// which has a file but no session and so no settings to follow — renders to.</summary>
+        /// is taken (an earlier render the user kept, or a file they made themselves).</summary>
         internal static string GetOutputPath(string sourceVideoPath, VideoContainer container = VideoContainer.Mp4)
         {
             var extension = container.ToExtension();

@@ -18,23 +18,16 @@ namespace Prisc.UI.VideoEditor.Timeline
     /// <summary>
     /// The native column to the left of the drawing surface: one header per row (heights from
     /// <see cref="TimelineRowLayout"/>, so the two columns stay pixel-aligned) with the drag grip
-    /// and the track's kind icon on the left, and on the right — reading left to right — the link
-    /// badge (on rows whose items are grouped), a duplicate button, the enable button (eye →
+    /// and the track's kind icon on the left, and on the right — reading left to right — the pin
+    /// badge (on placement-locked rows), the link badge (on rows in a group), a
+    /// duplicate button, the enable button (eye →
     /// <c>Track.Hidden</c> for picture rows, speaker → <c>Track.Muted</c> for audio rows) and a
     /// delete button. Rebuilt wholesale on Structural project changes — under ten rows, so there
     /// is nothing to diff.
     ///
-    /// <para>A screen row and the cursor/keyboard rows glued above it are built as one combined
-    /// track: one bordered block, no separator between its rows, and one grip spanning all of
-    /// them — the grip is the screen row's, because that is the row the session moves (its
-    /// overlays travel with it, see <see cref="TimelineReorder.UnitRange"/>). The kind icon is
-    /// the block's too — one video icon centered down the block, next to the grip; the overlay
-    /// rows do not repeat theirs, their items on the surface already carry it. Each row inside
-    /// keeps its own buttons.</para>
-    ///
-    /// <para>The badge is a label, not a button: ungrouping is a rare, consequential edit, so it
-    /// lives in the inspector ("Ungroup from recording") where it can carry an explanation, rather
-    /// than being one stray click away in every row.</para>
+    /// <para>The badges are labels, not buttons: the link's tint says which group, and the commands
+    /// that change a group act on the selection, from the keyboard, the clip menu and the inspector's
+    /// TRACK section, which is also the only place the pin changes.</para>
     ///
     /// <para>The rows live in a <see cref="StackPanel"/> inside this panel rather than being its own
     /// children, so the drop indicator of a reorder drag can be a sibling laid <i>over</i> them —
@@ -42,16 +35,6 @@ namespace Prisc.UI.VideoEditor.Timeline
     /// </summary>
     internal sealed class TrackHeaderPanel : Panel, IRowReorderDragHost
     {
-        private const string GroupedTip =
-            "Grouped — moves and splits with the other tracks from this recording. Ungroup from the properties panel.";
-
-        /// <summary>The cursor/keyboard rows' badge tip: their sync is not a toggle. The overlay
-        /// reads the recording's input capture at the recording's own times, so an ungrouped one
-        /// would draw the wrong moment — the session refuses to ungroup it (see
-        /// <c>EditorSession.UngroupTrack</c>) and the properties panel offers nothing to click.</summary>
-        private const string PinnedGroupTip =
-            "Always grouped — this overlay follows the recording it was captured with.";
-
         /// <summary>Breathing room either side of the grip: it is the first thing in the row, so
         /// without it the dots crowd both the panel edge and the kind icon.</summary>
         private const double GripMarginX = 5;
@@ -72,18 +55,17 @@ namespace Prisc.UI.VideoEditor.Timeline
 
         private EditorSession _session;
 
-        /// <summary>The group badge of every built row, so <see cref="RefreshGroupBadges"/> can
-        /// re-read group state after a Mapping change (ungroup/relink raise no rebuild, and come from
-        /// the inspector rather than from this panel).</summary>
-        private readonly List<(Guid TrackId, Control Badge)> _groupBadges =
-            new List<(Guid, Control)>();
+        /// <summary>The badges of every built row, so <see cref="RefreshRowBadges"/> can re-read them
+        /// after a Mapping change (a group or lock edit raises no rebuild, and does not come from this
+        /// panel).</summary>
+        private readonly List<(Guid TrackId, Border Group, Border Placement)> _rowBadges =
+            new List<(Guid, Border, Border)>();
 
-        /// <summary>The laid-out rows of the current build, and the combined-track visual each
-        /// belongs to, in display order — index i of both is row i (the rows of one unit share one
-        /// visual, so lifting any of them lifts the whole block). The reorder drag works in this
-        /// space (top to bottom, which for video rows is the reverse of the model's layer order).</summary>
+        /// <summary>The laid-out rows of the current build and their visuals, in display order —
+        /// index i of both is row i. The reorder drag works in this space (top to bottom, which for
+        /// video rows is the reverse of the model's layer order).</summary>
         private IReadOnlyList<TimelineRow> _rows = Array.Empty<TimelineRow>();
-        private readonly List<Border> _rowUnits = new List<Border>();
+        private readonly List<Border> _rowVisuals = new List<Border>();
         private readonly RowReorderDrag _drag;
 
         public TrackHeaderPanel()
@@ -109,8 +91,8 @@ namespace Prisc.UI.VideoEditor.Timeline
             _drag.Cancel();
 
             _stack.Children.Clear();
-            _rowUnits.Clear();
-            _groupBadges.Clear();
+            _rowVisuals.Clear();
+            _rowBadges.Clear();
             _rows = Array.Empty<TimelineRow>();
 
             var palette = TimelinePalette.ForVariant(ActualThemeVariant);
@@ -123,12 +105,8 @@ namespace Prisc.UI.VideoEditor.Timeline
 
             _rows = TimelineRowLayout.Build(project);
 
-            // top down, one combined track at a time: a unit is entered at its first row (an
-            // overlay, or the screen row itself when it has none) and skipped past as a whole
-            for (var i = 0; i < _rows.Count;)
+            for (var i = 0; i < _rows.Count; i++)
             {
-                var (unitStart, unitEnd) = TimelineReorder.UnitRange(_rows, i);
-
                 // the gutter between two blocks (TimelineRowLayout.BlockGap): the same bare strip
                 // the surface leaves, so the two columns break in one line
                 if (i > 0 && _rows[i - 1].Bottom < _rows[i].Top)
@@ -142,119 +120,105 @@ namespace Prisc.UI.VideoEditor.Timeline
                     });
                 }
 
-                var unit = BuildUnit(palette, project, unitStart, unitEnd);
-                for (var k = unitStart; k <= unitEnd; k++)
-                    _rowUnits.Add(unit);
-                _stack.Children.Add(unit);
-                i = unitEnd + 1;
+                var visual = BuildRow(palette, project, i);
+                _rowVisuals.Add(visual);
+                _stack.Children.Add(visual);
             }
+
+            RefreshRowBadges();
         }
 
-        /// <summary>Re-reads every row's group state from the live project — the parent calls this
-        /// on Mapping changes, because ungroup/relink are Mapping (no rebuild follows) and are
-        /// issued from the inspector, not from here.</summary>
-        public void RefreshGroupBadges()
+        /// <summary>Re-reads every row's group and lock state from the live project — the parent calls
+        /// this on Mapping changes, because both edits are Mapping (no rebuild follows) and neither is
+        /// issued from here.</summary>
+        public void RefreshRowBadges()
         {
             var project = _session?.Project;
             if (project == null)
                 return;
 
-            foreach (var (trackId, badge) in _groupBadges)
-                badge.IsVisible = project.Items.Any(i => i.TrackId == trackId && i.GroupId != null);
+            var palette = TimelinePalette.ForVariant(ActualThemeVariant);
+            var numbers = TimelineViewMath.GroupNumbers(project);
+            foreach (var (trackId, badge, placement) in _rowBadges)
+            {
+                var track = project.Tracks.FirstOrDefault(t => t.Id == trackId);
+                placement.IsVisible = track is { PlacementLocked: true };
+                badge.IsVisible = TimelineViewMath.ShowsGroupBadge(project, track);
+                if (!badge.IsVisible)
+                    continue;
+
+                badge.Child = TimelineIcons.NewIcon(TimelineIcons.GroupGeometry, badge.Width * 0.6,
+                    palette.GroupBrush(numbers[track.GroupId.Value]));
+                ToolTip.SetTip(badge, TimelineViewMath.GroupBadgeTip(TimelineOps.OccupiedGroupRows(project, trackId) - 1,
+                    OperatingSystem.IsMacOS()));
+            }
         }
 
-        /// <summary>One combined-track block: the rows <paramref name="unitStart"/> to
-        /// <paramref name="unitEnd"/> (a lone row, or a screen row under its glued overlays)
-        /// stacked inside one border, with the unit's single grip in a column of its own down the
-        /// left so it spans every row. The block's height is the rows' total, so the column stays
-        /// pixel-aligned with the surface; the bottom border is drawn inside the last row, exactly
-        /// as the surface draws its separator inside the row.</summary>
-        private Border BuildUnit(TimelinePalette palette, Project project, int unitStart, int unitEnd)
+        /// <summary>One row's header. Its height is the row's, so the column stays pixel-aligned with
+        /// the surface; the bottom border is drawn inside the row, exactly as the surface draws its
+        /// separator inside the row.</summary>
+        private Border BuildRow(TimelinePalette palette, Project project, int index)
         {
-            // the rule under the block, as the surface draws it: between two units of one block
-            // only — none under the last unit of a block (the gutter or the end of the rows
-            // follows), so the block is not framed below and open above
-            var lastInBlock = unitEnd + 1 == _rows.Count || _rows[unitEnd + 1].Top > _rows[unitEnd].Bottom;
-            var borderBottom = lastInBlock ? 0 : 1;
+            var row = _rows[index];
+            var track = project.Tracks.FirstOrDefault(t => t.Id == row.TrackId);
 
-            // the grip is the screen row's (the last row of the unit — what the session moves);
-            // its cell is reserved on every unit, and the dots (and the drag) are only there when
-            // the row has somewhere to go — a locked row is one the context menu's Move Up/Down
-            // refuse too, a lone row of its kind cannot reorder against anything, and the speed
-            // row is pinned by meaning (see TimelineReorder.CanDrag).
-            var screen = _rows[unitEnd];
-            var screenTrack = project.Tracks.FirstOrDefault(t => t.Id == screen.TrackId);
-            var draggable = screenTrack is { Locked: false } && TimelineReorder.CanDrag(_rows, unitEnd);
-            // a grip spanning a taller block gets more dots, not bigger ones — six more per
-            // overlay row (the dot pitch against the row heights): four over a lone row, ten over
-            // a screen row and one overlay, sixteen over both. The ordinary four would float in
-            // the middle of a block three rows tall.
-            var dotRows = RowReorderDrag.DefaultGripDotRows + 6 * (unitEnd - unitStart);
-            var grip = _drag.BuildGrip(unitEnd, draggable, palette.GripBrush, palette.GripHoverBrush,
-                new Thickness(GripMarginX, 2, GripMarginX, 2), dotRows);
+            // the rule under the row, as the surface draws it: between two rows of one block only —
+            // none under the last row of a block (the gutter or the end of the rows follows), so
+            // the block is not framed below and open above
+            var lastInBlock = index + 1 == _rows.Count || _rows[index + 1].Top > row.Bottom;
 
-            var cells = new StackPanel();
-            double height = 0;
-            for (var i = unitStart; i <= unitEnd; i++)
-            {
-                var row = _rows[i];
-                var track = project.Tracks.FirstOrDefault(t => t.Id == row.TrackId);
-                var cell = new Border
-                {
-                    // the last row gives up the pixel the border takes, as every row did alone
-                    Height = row.Height - (i == unitEnd ? borderBottom : 0),
-                    Child = track == null ? null : BuildRowContent(palette, project, track, row),
-                };
-                cells.Children.Add(cell);
-                height += row.Height;
-            }
+            // the grip's cell is reserved on every row, and the dots (and the drag) are only there
+            // when the row has somewhere to go — a lone row of its kind cannot reorder against
+            // anything, and the speed row is pinned by meaning (see TimelineReorder.CanDrag).
+            var grip = _drag.BuildGrip(index, TimelineReorder.CanDrag(_rows, index), palette.GripBrush,
+                palette.GripHoverBrush, new Thickness(GripMarginX, 2, GripMarginX, 2));
 
-            // ------- kind icon: the screen row's (the block's only left-side label), centered
-            // down the whole block like the grip
-            var icon = TimelineIcons.NewIcon(KindIconGeometry(screen.Kind), 13, palette.LabelBrush);
+            var icon = TimelineIcons.NewIcon(KindIconGeometry(row.Kind), 13, palette.LabelBrush);
             icon.VerticalAlignment = VerticalAlignment.Center;
             icon.Margin = new Thickness(0, 0, 6, 0);
             Grid.SetColumn(icon, 1);
 
             var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,*") };
-            Grid.SetColumn(cells, 2);
             grid.Children.Add(grip);
             grid.Children.Add(icon);
-            grid.Children.Add(cells);
+            if (track != null)
+            {
+                var content = BuildRowContent(palette, track, row);
+                Grid.SetColumn(content, 2);
+                grid.Children.Add(content);
+            }
 
             return new Border
             {
-                Height = height,
+                Height = row.Height,
                 Padding = new Thickness(2, 0, 2, 0),
-                BorderThickness = new Thickness(0, 0, 1, borderBottom),
+                BorderThickness = new Thickness(0, 0, 1, lastInBlock ? 0 : 1),
                 BorderBrush = palette.RowSeparatorPen.Brush,
                 Child = grid,
             };
         }
 
-        /// <summary>One row's content, grip and kind icon excluded (they are the block's): the
-        /// button cluster on the right.</summary>
-        private DockPanel BuildRowContent(TimelinePalette palette, Project project, Track track, TimelineRow row)
+        /// <summary>One row's content, grip and kind icon excluded: the button cluster on the
+        /// right.</summary>
+        private DockPanel BuildRowContent(TimelinePalette palette, Track track, TimelineRow row)
         {
             var trackId = track.Id;
             var isAudio = row.Kind == TimelineRowKind.Audio;
-            var isInputOverlay = TimelineRowLayout.IsInputOverlay(row.Kind);
             var buttonSize = Math.Min(20, row.Height - 4);
 
             // no fill child: the row is the button cluster on the right and empty space (the
-            // track name labels said nothing the block's kind icon does not).
+            // track name labels said nothing the kind icon does not).
             var dock = new DockPanel { LastChildFill = false };
 
             // ------- the right-side cluster, docked right so the FIRST added is the RIGHTMOST.
-            // Reading order on screen is group badge → duplicate → enable (eye/speaker) → delete.
+            // Reading order on screen is pin → group badge → duplicate → enable (eye/speaker) → delete.
             // Delete/duplicate/enable all raise Structural changes, which rebuild this whole
             // panel — nothing here updates its own icon.
             // the same brush the corner buttons above these rows use (RulerLabelBrush), so the
             // two clusters carry one weight — plain white read brighter than the ruler row.
             var buttonBrush = palette.RulerLabelBrush;
             var delete = RowIconButton.Build(TimelineIcons.Find("IconDelete"), buttonBrush,
-                track.Locked ? "Row is locked" : "Delete this row and everything on it", buttonSize);
-            delete.IsEnabled = !track.Locked;
+                "Delete this row and everything on it", buttonSize);
             delete.Click += (_, _) => _session?.DeleteTrack(trackId, this);
             DockPanel.SetDock(delete, Dock.Right);
             dock.Children.Add(delete);
@@ -291,10 +255,9 @@ namespace Prisc.UI.VideoEditor.Timeline
             dock.Children.Add(enable);
 
             // no duplicate on the speed row: playback speed is a single global timeline, and the
-            // session refuses a second one anyway (see EditorSession.DuplicateTrack). Nor on a
-            // cursor/keyboard row: the copy could not be pinned or hard-synced, and the session
-            // refuses it for the same reason.
-            if (row.Kind != TimelineRowKind.Speed && !isInputOverlay)
+            // session refuses a second one anyway (see EditorSession.DuplicateTrack). On an empty
+            // row the button does nothing: there are no clips to copy.
+            if (row.Kind != TimelineRowKind.Speed)
             {
                 var duplicate = RowIconButton.Build(TimelineIcons.Find("IconCopy"), buttonBrush,
                     "Duplicate this row and its clips", buttonSize);
@@ -303,24 +266,31 @@ namespace Prisc.UI.VideoEditor.Timeline
                 dock.Children.Add(duplicate);
             }
 
-            // ------- group badge: a label saying the row's items move with the recording, not a
-            // control. Built on every row and collapsed when ungrouped, so RefreshGroupBadges can
-            // flip it either way without a rebuild (ungroup/relink are Mapping changes).
-            var badge = new Border
-            {
-                Width = buttonSize,
-                VerticalAlignment = VerticalAlignment.Center,
-                IsVisible = project.Items.Any(i => i.TrackId == trackId && i.GroupId != null),
-                Child = TimelineIcons.NewIcon(TimelineIcons.GroupGeometry, buttonSize * 0.6, palette.GroupBadgeBrush),
-                Background = Brushes.Transparent, // a null background is not hit-testable — no tooltip
-            };
-            ToolTip.SetTip(badge, isInputOverlay ? PinnedGroupTip : GroupedTip);
+            // ------- group badge: a label saying the row's clips move with the rest of its group,
+            // not a control. Built on every row and collapsed when ungrouped, so RefreshRowBadges
+            // can flip it either way without a rebuild (a group edit is a Mapping change).
+            var badge = NewBadge(buttonSize);
             DockPanel.SetDock(badge, Dock.Right);
             dock.Children.Add(badge);
-            _groupBadges.Add((trackId, badge));
+
+            // ------- the placement pin, the same kind of label on the same terms.
+            var placement = NewBadge(buttonSize);
+            placement.Child = TimelineIcons.NewIcon("IconPinned", buttonSize * 0.6, palette.LabelBrush);
+            ToolTip.SetTip(placement, TimelineViewMath.PlacementBadgeTip);
+            DockPanel.SetDock(placement, Dock.Right);
+            dock.Children.Add(placement);
+
+            _rowBadges.Add((trackId, badge, placement));
 
             return dock;
         }
+
+        private static Border NewBadge(double size) => new Border
+        {
+            Width = size,
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = Brushes.Transparent, // a null background is not hit-testable — no tooltip
+        };
 
         // --------------------------------------------------- reorder drag (RowReorderDrag host)
 
@@ -332,24 +302,14 @@ namespace Prisc.UI.VideoEditor.Timeline
         (int Start, int End) IRowReorderDragHost.SlotGroup(int row) =>
             TimelineReorder.GroupRange(_rows, row);
 
-        /// <summary>Keeps the indicator off the boundaries between a screen row and the
-        /// cursor/keyboard rows pinned above it — the layout would put a row dropped there
-        /// somewhere else entirely, and an indicator that lies is worse than one that will not
-        /// follow the pointer. (The dragged unit's own run included: a pointer over it asks for
-        /// the unit's top edge, which is the drag coming home.)</summary>
-        int IRowReorderDragHost.CoerceSlot(int row, int slot) =>
-            TimelineReorder.CoerceDropIndex(_rows, row, slot);
-
         /// <summary>A press while another control's drag owns the session would land its drop as
         /// a mid-gesture Preview and be rolled back with it.</summary>
         bool IRowReorderDragHost.CanBeginDrag => _session is { IsGestureActive: false };
 
-        /// <summary>Dims the whole combined track the row belongs to — the screen row's overlays
-        /// travel with it, so they lift with it.</summary>
         void IRowReorderDragHost.SetRowLifted(int row, bool lifted)
         {
-            if (row < _rowUnits.Count)
-                _rowUnits[row].Opacity = lifted ? 0.45 : 1;
+            if (row < _rowVisuals.Count)
+                _rowVisuals[row].Opacity = lifted ? 0.45 : 1;
         }
 
         void IRowReorderDragHost.Drop(int fromRow, int dropSlot)
@@ -394,7 +354,7 @@ namespace Prisc.UI.VideoEditor.Timeline
 
     /// <summary>Icon geometry access for the timeline's code-drawn/code-built visuals: resource
     /// lookup into <c>Assets/VectorIcons.axaml</c>, plus the glyphs that file does not carry
-    /// (a zoom-to-fit glyph and a chain link for the sync toggle; the header rows' drag grip
+    /// (a zoom-to-fit glyph and a chain link for the group badge; the header rows' drag grip
     /// lives with <see cref="RowReorderDrag"/>).</summary>
     internal static class TimelineIcons
     {

@@ -497,6 +497,11 @@ namespace Prisc
             }
         }
 
+        /// <summary>Whether the editor has nothing to open: an edit of a recording is only as good as
+        /// the file behind it, while a project owns its composition and nothing else.</summary>
+        [JsonIgnore]
+        public bool IsRecordingMissing => !IsVideoProject && (String.IsNullOrEmpty(VideoPath) || !File.Exists(VideoPath));
+
         /// <summary>
         /// Whether this entry is a video <b>project</b> rather than a finished video: a blank edit
         /// started from the Video button, or a recording captured with composition on. The latter's

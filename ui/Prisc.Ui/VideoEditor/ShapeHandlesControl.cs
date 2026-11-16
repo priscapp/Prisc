@@ -27,7 +27,7 @@ namespace Prisc.UI.VideoEditor
     /// The control owns no geometry: the line is read from the model at draw time
     /// (<see cref="ShapeLineLayout.TryResolve"/>, never a cached <see cref="Item"/>), and a drag
     /// follows the gizmo's gesture discipline verbatim (<see cref="ShapeHandleDrag"/> computes
-    /// every move from the press-time snapshot, one coalesced <see cref="EditorSession.EditItem"/>
+    /// every move from the press-time snapshot, one coalesced <see cref="EditorSession.EditPlacement"/>
     /// per move inside an <see cref="EditGesture"/>, Esc or a lost capture cancels). The commit
     /// raises <see cref="EditorSession.ProjectChanged"/> with this control as its origin, so the
     /// inspector re-reads the re-fitted box.
@@ -35,7 +35,9 @@ namespace Prisc.UI.VideoEditor
     /// Only the handles and the line's ink are hit-testable (<see cref="ICustomHitTest"/> over
     /// <see cref="ShapeHandleMath.ResolvePress"/>, the very test a press is resolved by), so a
     /// press anywhere else, or on the ink where another item is composed on top, falls through to
-    /// the preview's click-to-select as if this full-size overlay were not there.
+    /// the preview's click-to-select as if this full-size overlay were not there. On a
+    /// placement-locked row that test takes nothing, so the spine is drawn with no handles and every
+    /// press selects.
     /// </summary>
     public sealed class ShapeHandlesControl : Control, ICustomHitTest
     {
@@ -43,6 +45,7 @@ namespace Prisc.UI.VideoEditor
 
         private EditorSession _session;
         private Guid _itemId;
+        private bool _readOnly;
 
         // drag state (pointer positions are read in the parent preview's coordinates, so a layout
         // pass under the pointer mid-drag cannot corrupt them)
@@ -86,14 +89,16 @@ namespace Prisc.UI.VideoEditor
 
         /// <summary>Points the handles at the line the preview just resolved.
         /// <see cref="Guid.Empty"/> means "nothing to show": the preview then arranges this control
-        /// to an empty rect. Ignored for the item identity while a drag is in flight (a drag owns
-        /// its target until it ends); always re-draws, because an edit moves the line without
-        /// moving this control.</summary>
-        internal void SetTarget(Guid itemId)
+        /// to an empty rect. <paramref name="readOnly"/> is a placement-locked row: the spine with no
+        /// handles. Ignored for the item identity while a drag is in flight (a drag owns its target
+        /// until it ends); always re-draws, because an edit moves the line without moving this
+        /// control.</summary>
+        internal void SetTarget(Guid itemId, bool readOnly = false)
         {
             if (_drag == null || itemId == _itemId)
                 _itemId = itemId;
 
+            _readOnly = readOnly;
             InvalidateVisual();
         }
 
@@ -182,8 +187,7 @@ namespace Prisc.UI.VideoEditor
             var pointer = ToCanvas(e.GetPosition(ParentVisual));
             var snap = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
 
-            _session.EditItem(item.Id, i => drag.Apply(i, pointer, snap),
-                $"handles:shape:{item.Id}", structural: false, origin: this);
+            _session.EditPlacement(item.Id, i => drag.Apply(i, pointer, snap), "handles:shape", this);
 
             e.Handled = true;
         }
@@ -279,6 +283,9 @@ namespace Prisc.UI.VideoEditor
             {
                 context.DrawLine(spine, Local(line.Start), Local(line.End));
             }
+
+            if (_readOnly)
+                return;
 
             // the bend handle last, on top: it is the one an exact tie grabs
             PreviewHandles.Draw(context, Local(line.Start), accent);

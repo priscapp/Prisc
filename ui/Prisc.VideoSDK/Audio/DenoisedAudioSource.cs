@@ -11,7 +11,8 @@ namespace Prisc.VideoSDK.Audio
     /// <see cref="DenoiseGenerator"/>) instead of the raw recording, at the same sample positions
     /// — the sidecar shares the source stream's timeline and duration, so no mapping is involved.
     /// A <see cref="Track.DenoiseStrength"/> below 1 reads BOTH signals and lerps per sample
-    /// (<c>raw·(1−s) + denoised·s</c>); a missing or stale sidecar (or no cache directory — the
+    /// (<c>raw·(1−s) + denoised·s</c>), each in the caller's lane, since one lane's reads are what
+    /// run forward; a missing or stale sidecar (or no cache directory — the
     /// dev harness) passes the raw stream through untouched, so the toggle can never silence a
     /// row. Both construction sites wrap through here: the preview's
     /// <see cref="SeekableAudioSource"/> inside <c>AudioMixWorker</c>, and the render's
@@ -63,6 +64,18 @@ namespace Prisc.VideoSDK.Audio
             _strength = CollectDenoisedStreams(project);
         }
 
+        /// <summary>Container seeks performed reading the sidecars so far (test/diagnostic).</summary>
+        internal int SidecarRepositionCount
+        {
+            get
+            {
+                int seeks = 0;
+                foreach (var sidecar in _routes.Values)
+                    seeks += sidecar?.RepositionCount ?? 0;
+                return seeks;
+            }
+        }
+
         /// <summary>Whether the project asks for any denoising at all — the render path's gate
         /// for constructing this decorator.</summary>
         public static bool HasDenoise(Project project)
@@ -109,25 +122,29 @@ namespace Prisc.VideoSDK.Audio
 
         public bool ReadSamples(Guid sourceId, int streamIndex, long sourcePosFrames, float[] dst,
             int frames, out int framesRead)
+            => ReadSamples(sourceId, streamIndex, 0, sourcePosFrames, dst, frames, out framesRead);
+
+        public bool ReadSamples(Guid sourceId, int streamIndex, int lane, long sourcePosFrames, float[] dst,
+            int frames, out int framesRead)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
 
             var key = (sourceId, streamIndex);
             if (!_strength.TryGetValue(key, out double strength) || !(strength > 0))
-                return _inner.ReadSamples(sourceId, streamIndex, sourcePosFrames, dst, frames, out framesRead);
+                return _inner.ReadSamples(sourceId, streamIndex, lane, sourcePosFrames, dst, frames, out framesRead);
 
             var sidecar = ResolveRoute(key);
             if (sidecar == null)
-                return _inner.ReadSamples(sourceId, streamIndex, sourcePosFrames, dst, frames, out framesRead);
+                return _inner.ReadSamples(sourceId, streamIndex, lane, sourcePosFrames, dst, frames, out framesRead);
 
             // the shadow project's one source keeps the original id; the wav is its stream 0.
             if (strength >= 1)
-                return sidecar.ReadSamples(sourceId, 0, sourcePosFrames, dst, frames, out framesRead);
+                return sidecar.ReadSamples(sourceId, 0, lane, sourcePosFrames, dst, frames, out framesRead);
 
             if (_blend.Length < frames * Channels)
                 _blend = new float[frames * Channels];
-            bool denOk = sidecar.ReadSamples(sourceId, 0, sourcePosFrames, _blend, frames, out int denRead);
-            bool rawOk = _inner.ReadSamples(sourceId, streamIndex, sourcePosFrames, dst, frames, out int rawRead);
+            bool denOk = sidecar.ReadSamples(sourceId, 0, lane, sourcePosFrames, _blend, frames, out int denRead);
+            bool rawOk = _inner.ReadSamples(sourceId, streamIndex, lane, sourcePosFrames, dst, frames, out int rawRead);
             if (!denOk)
             {
                 // a sidecar that yields nothing at all leaves the raw read standing

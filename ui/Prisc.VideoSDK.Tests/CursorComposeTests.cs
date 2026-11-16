@@ -33,7 +33,7 @@ namespace Prisc.VideoSDK.Tests
         }
 
         private static Item AddItem(Project p, Track track, ItemContent content,
-            long start = 0, long duration = 10 * Sec, Guid? linkGroup = null)
+            long start = 0, long duration = 10 * Sec)
         {
             var item = new Item
             {
@@ -42,7 +42,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = start,
                 DurationTicks = duration,
                 Content = content,
-                GroupId = linkGroup,
             };
             p.Items.Add(item);
             return item;
@@ -523,8 +522,7 @@ namespace Prisc.VideoSDK.Tests
             var cursorTrack = AddVideoTrack(p, order: 1);
             cursorTrack.Hidden = true;
             var cursorItem = AddItem(p, cursorTrack,
-                new CursorContent { SourceId = source.Id, Style = "native" },
-                linkGroup: Guid.NewGuid());
+                new CursorContent { SourceId = source.Id, Style = "native" });
 
             using var frames = new MultiStreamSource().Set(0, Blue, 64);
             AssertColor(Px(Render(p, 5 * Sec, frames), 34, 34), 255, 0, 0);
@@ -548,11 +546,10 @@ namespace Prisc.VideoSDK.Tests
             var p = NewProject();
             string capture = WriteCapture(Header, Frame(0, 32, 32));
             var source = AddCaptureSource(p, capture);
-            var group = Guid.NewGuid();
             AddItem(p, AddVideoTrack(p, order: 0),
-                new MediaContent { SourceId = source.Id, StreamIndex = 0 }, linkGroup: group);
+                new MediaContent { SourceId = source.Id, StreamIndex = 0 });
             AddItem(p, AddVideoTrack(p, order: 1),
-                new CursorContent { SourceId = source.Id, Style = "native" }, linkGroup: group);
+                new CursorContent { SourceId = source.Id, Style = "native" });
 
             using var frames = new MultiStreamSource().Set(0, Blue, 64);
             var px = Render(p, 5 * Sec, frames);
@@ -627,12 +624,10 @@ namespace Prisc.VideoSDK.Tests
         {
             var p = NewProject();
             var source = AddCaptureSource(p, capture);
-            var group = Guid.NewGuid();
             AddItem(p, AddVideoTrack(p, order: 0),
-                new MediaContent { SourceId = source.Id, StreamIndex = 0 }, linkGroup: group);
+                new MediaContent { SourceId = source.Id, StreamIndex = 0 });
             var cursor = AddItem(p, AddVideoTrack(p, order: 1),
-                new CursorContent { SourceId = source.Id, Style = style },
-                linkGroup: group);
+                new CursorContent { SourceId = source.Id, Style = style });
             return (p, source, cursor);
         }
 
@@ -795,17 +790,15 @@ namespace Prisc.VideoSDK.Tests
                 Frame(0, 16, 16, ci: 1));
             var p = NewProject();
             var source = AddCaptureSource(p, capture);
-            var group = Guid.NewGuid();
             AddItem(p, AddVideoTrack(p, order: 0),
-                new MediaContent { SourceId = source.Id, StreamIndex = 0 }, linkGroup: group);
+                new MediaContent { SourceId = source.Id, StreamIndex = 0 });
 
             var zoomTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Effect, Order = 1 };
             p.Tracks.Add(zoomTrack);
             AddItem(p, zoomTrack, new ZoomContent { Zoom = 2.0, FocusX = 0.5, FocusY = 0.5 });
 
             AddItem(p, AddVideoTrack(p, order: 2),
-                new CursorContent { SourceId = source.Id, Style = "native" },
-                linkGroup: group);
+                new CursorContent { SourceId = source.Id, Style = "native" });
 
             using var frames = new MultiStreamSource().Set(0, Blue, 64);
             var px = Render(p, 5 * Sec, frames);
@@ -825,8 +818,7 @@ namespace Prisc.VideoSDK.Tests
             var p = NewProject();
             var source = AddCaptureSource(p, capture);
             AddItem(p, AddVideoTrack(p),
-                new CursorContent { SourceId = source.Id, Style = "vision" },
-                linkGroup: Guid.NewGuid());
+                new CursorContent { SourceId = source.Id, Style = "vision" });
 
             using var frames = new MultiStreamSource();
             var px = Render(p, 5 * Sec, frames); // must not throw; black canvas
@@ -835,6 +827,345 @@ namespace Prisc.VideoSDK.Tests
                 for (int x = 0; x < W; x += 8)
                     AssertColor(Px(px, x, y), 0, 0, 0);
             }
+        }
+
+        // ------------------------------------------------------------------------- the cursor's host
+
+        /// <summary>A pointer standing still at (32,32) as an 8 px red sprite, and a project with
+        /// the capture but no clips: frames from nowhere, so a pixel on the black canvas can only be
+        /// the pointer.</summary>
+        private static (Project Project, Source Source, Track Screen, Track Cursor) HostProject()
+        {
+            string capture = WriteCapture(Header, CursorImage(1, 8, SpritePng(8, Red)), Frame(0, 32, 32, ci: 1));
+            var p = NewProject();
+            var source = AddCaptureSource(p, capture);
+            var screen = AddVideoTrack(p, order: 0);
+            var cursor = AddVideoTrack(p, order: 2);
+            return (p, source, screen, cursor);
+        }
+
+        private static CursorContent NativeCursor(Source source, long sourceIn = 0) =>
+            new CursorContent { SourceId = source.Id, Style = "native", SourceInTicks = sourceIn };
+
+        private static bool AnyRed(byte[] px)
+        {
+            for (int y = 0; y < H; y++)
+            {
+                for (int x = 0; x < W; x++)
+                {
+                    if (Px(px, x, y).R > 200)
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        [Fact]
+        public void A_cursor_draws_only_while_a_screen_clip_of_its_recording_is_active()
+        {
+            var (p, source, screen, cursorRow) = HostProject();
+            AddItem(p, screen, new MediaContent { SourceId = source.Id, StreamIndex = 0 }, duration: 2 * Sec);
+            AddItem(p, cursorRow, NativeCursor(source));
+
+            Assert.True(AnyRed(Render(p, 1 * Sec, null)));
+            Assert.False(AnyRed(Render(p, 5 * Sec, null)));
+        }
+
+        [Fact]
+        public void A_webcam_clip_or_another_recording_does_not_host_a_cursor()
+        {
+            var (p, source, screen, cursorRow) = HostProject();
+            source.Streams.Add(new SourceStream { Index = 1, Kind = StreamKind.Video, Width = W, Height = H });
+            var other = new Source { Id = Guid.NewGuid(), Path = "other.mp4" };
+            other.Streams.Add(new SourceStream { Index = 0, Kind = StreamKind.Video, Width = W, Height = H });
+            p.Sources.Add(other);
+            AddItem(p, screen, new MediaContent { SourceId = source.Id, StreamIndex = 1 });
+            AddItem(p, AddVideoTrack(p, order: 1), new MediaContent { SourceId = other.Id, StreamIndex = 0 });
+            var audio = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Order = 3 };
+            p.Tracks.Add(audio);
+            AddItem(p, audio, new MediaContent { SourceId = source.Id, StreamIndex = 0 });
+            AddItem(p, cursorRow, NativeCursor(source));
+
+            Assert.False(AnyRed(Render(p, 1 * Sec, null)));
+        }
+
+        [Fact]
+        public void A_hidden_row_still_hosts_the_cursor()
+        {
+            var (p, source, screen, cursorRow) = HostProject();
+            screen.Hidden = true;
+            AddItem(p, screen, new MediaContent { SourceId = source.Id, StreamIndex = 0 });
+            AddItem(p, cursorRow, NativeCursor(source));
+
+            using var frames = new MultiStreamSource().Set(0, Blue, 64);
+            var px = Render(p, 1 * Sec, frames);
+
+            // the pointer on an empty canvas: isolated from the picture it still maps through
+            AssertColor(Px(px, 34, 34), 0, 0, 255);
+            AssertColor(Px(px, 8, 8), 0, 0, 0);
+        }
+
+        [Fact]
+        public void The_clip_showing_the_cursors_moment_hosts_it_rather_than_the_backmost()
+        {
+            // the backmost clip fills the canvas at 0 s of source; the clip in front is a 32 px inset
+            // at 20 s, centred on (16,16), so capture (32,32) lands on (16,16) through it
+            var (p, source, screen, cursorRow) = HostProject();
+            AddItem(p, screen, new MediaContent { SourceId = source.Id, StreamIndex = 0 });
+            var inset = AddItem(p, AddVideoTrack(p, order: 1),
+                new MediaContent { SourceId = source.Id, StreamIndex = 0, SourceInTicks = 20 * Sec });
+            inset.Transform = new Transform { X = 0.25, Y = 0.25, Scale = 0.5 };
+            AddItem(p, cursorRow, NativeCursor(source, sourceIn: 20 * Sec));
+
+            var px = Render(p, 1 * Sec, null);
+
+            AssertColor(Px(px, 17, 17), 0, 0, 255);
+            AssertColor(Px(px, 34, 34), 0, 0, 0);
+        }
+
+        [Fact]
+        public void The_cursors_moment_can_match_a_clip_within_a_millisecond()
+        {
+            var (p, source, screen, cursorRow) = HostProject();
+            AddItem(p, screen, new MediaContent { SourceId = source.Id, StreamIndex = 0 });
+            var inset = AddItem(p, AddVideoTrack(p, order: 1),
+                new MediaContent { SourceId = source.Id, StreamIndex = 0, SourceInTicks = 20 * Sec });
+            inset.Transform = new Transform { X = 0.25, Y = 0.25, Scale = 0.5 };
+            var cursor = AddItem(p, cursorRow, NativeCursor(source, sourceIn: 20 * Sec + TimeSpan.TicksPerMillisecond));
+
+            Assert.Same(inset, FrameComposer.ResolveCursorHost(p, source, cursor, 1 * Sec));
+
+            ((CursorContent)cursor.Content).SourceInTicks = 20 * Sec + TimeSpan.TicksPerMillisecond + 1;
+            Assert.NotSame(inset, FrameComposer.ResolveCursorHost(p, source, cursor, 1 * Sec));
+        }
+
+        [Fact]
+        public void A_cursor_matching_no_clip_falls_back_to_the_backmost()
+        {
+            var (p, source, screen, cursorRow) = HostProject();
+            AddItem(p, screen, new MediaContent { SourceId = source.Id, StreamIndex = 0 });
+            var inset = AddItem(p, AddVideoTrack(p, order: 1),
+                new MediaContent { SourceId = source.Id, StreamIndex = 0, SourceInTicks = 20 * Sec });
+            inset.Transform = new Transform { X = 0.25, Y = 0.25, Scale = 0.5 };
+            AddItem(p, cursorRow, NativeCursor(source, sourceIn: 50 * Sec));
+
+            var px = Render(p, 1 * Sec, null);
+
+            AssertColor(Px(px, 34, 34), 0, 0, 255);
+            AssertColor(Px(px, 17, 17), 0, 0, 0);
+        }
+
+        [Fact]
+        public void A_group_does_not_change_which_clip_hosts_the_cursor()
+        {
+            // a row of the cursor's group gets no preference: the backmost still wins, and clearing
+            // every group leaves the same pixels
+            var (p, source, screen, cursorRow) = HostProject();
+            AddItem(p, screen, new MediaContent { SourceId = source.Id, StreamIndex = 0 });
+            var insetRow = AddVideoTrack(p, order: 1);
+            var inset = AddItem(p, insetRow, new MediaContent { SourceId = source.Id, StreamIndex = 0, SourceInTicks = 20 * Sec });
+            inset.Transform = new Transform { X = 0.25, Y = 0.25, Scale = 0.5 };
+            AddItem(p, cursorRow, NativeCursor(source, sourceIn: 50 * Sec));
+            var ungrouped = Render(p, 1 * Sec, null);
+
+            insetRow.GroupId = cursorRow.GroupId = Guid.NewGuid();
+
+            Assert.Equal(ungrouped, Render(p, 1 * Sec, null));
+        }
+
+        [Fact]
+        public void A_cursor_reads_the_capture_from_its_own_clock_and_lands_on_its_hosts_picture()
+        {
+            string capture = WriteCapture(Header, CursorImage(1, 8, SpritePng(8, Red)),
+                Frame(0, 8, 8, ci: 1), Frame(5000, 40, 40, ci: 1));
+            var p = NewProject();
+            var source = AddCaptureSource(p, capture);
+            AddItem(p, AddVideoTrack(p, order: 0), new MediaContent { SourceId = source.Id, StreamIndex = 0 });
+            AddItem(p, AddVideoTrack(p, order: 1), NativeCursor(source, sourceIn: 5 * Sec));
+
+            // the screen shows 1 s of source, when the pointer stood at (8,8); the cursor shows 6 s
+            var px = Render(p, 1 * Sec, null);
+
+            AssertColor(Px(px, 42, 42), 0, 0, 255);
+            AssertColor(Px(px, 10, 10), 0, 0, 0);
+        }
+
+        /// <summary>A screen and cursor pasted over themselves go to a stack above the originals, so
+        /// at any overlapping instant the pasted picture covers the original pointer. On rows placed
+        /// above their own origins the original cursor would compose over the pasted picture as a
+        /// second pointer.</summary>
+        [Fact]
+        public void A_screen_and_cursor_pasted_over_themselves_compose_a_single_pointer()
+        {
+            string capture = WriteCapture(Header, CursorImage(1, 8, SpritePng(8, Red)),
+                Frame(0, 8, 8, ci: 1), Frame(5000, 40, 40, ci: 1));
+            var p = NewProject();
+            var source = AddCaptureSource(p, capture);
+            var group = Guid.NewGuid();
+            var screenRow = AddVideoTrack(p, order: 0);
+            var cursorRow = AddVideoTrack(p, order: 1);
+            screenRow.GroupId = cursorRow.GroupId = group;
+            var screen = AddItem(p, screenRow, new MediaContent { SourceId = source.Id, StreamIndex = 0 });
+            var cursor = AddItem(p, cursorRow, NativeCursor(source));
+
+            var result = TimelineOps.Paste(p, TimelineOps.Lift(p, new[] { screen.Id, cursor.Id }), 3 * Sec);
+            Assert.Equal(2, result.NewRows);
+            Assert.Empty(p.Validate());
+
+            // at 6 s the originals show 6 s of source, pointer at (40,40), and the copies 3 s, at (8,8)
+            using var frames = new MultiStreamSource().Set(0, Blue, 64);
+            var px = Render(p, 6 * Sec, frames);
+
+            AssertColor(Px(px, 10, 10), 0, 0, 255);
+            AssertColor(Px(px, 42, 42), 255, 0, 0);
+        }
+
+        [Fact]
+        public void A_window_crop_follows_the_hosts_moment_not_the_cursors()
+        {
+            // the window fills the top left quarter until 2 s of source, then the bottom right.
+            // Capture (16,16) is the middle of the first, and the crop blows it up to fill the canvas.
+            string sidecar = Path.Combine(Path.GetTempPath(), $"prisc-cursor-host-{Guid.NewGuid():N}.jsonl");
+            File.WriteAllLines(sidecar, new[]
+            {
+                """{"type":"header","version":1,"region":[0,0,64,64],"fps_num":30,"fps_den":1,"platform":"windows"}""",
+                """{"type":"window_info","id":7,"title":"t","app":"a","pid":1}""",
+                """{"type":"window","t":0,"id":7,"x":0,"y":0,"w":32,"h":32,"z":0}""",
+                """{"type":"window","t":2000,"id":7,"x":32,"y":32,"w":32,"h":32,"z":0}""",
+            });
+
+            string capture = WriteCapture(Header, CursorImage(1, 8, SpritePng(8, Red)), Frame(0, 16, 16, ci: 1));
+            var p = NewProject();
+            var source = AddCaptureSource(p, capture);
+            source.WindowCapturePath = sidecar;
+            var screen = AddItem(p, AddVideoTrack(p, order: 0), new MediaContent { SourceId = source.Id, StreamIndex = 0 });
+            screen.Transform = new Transform { CropWindow = new WindowCrop { WindowId = 7, Title = "t", App = "a", Pid = 1 } };
+            AddItem(p, AddVideoTrack(p, order: 1), NativeCursor(source, sourceIn: 5 * Sec));
+
+            try
+            {
+                // host at 1 s, the first window; by the cursor's 6 s the pointer would be outside it
+                AssertColor(Px(Render(p, 1 * Sec, null), 36, 36), 0, 0, 255);
+            }
+            finally
+            {
+                File.Delete(sidecar);
+            }
+        }
+
+        [Fact]
+        public void Click_animations_run_at_the_cursors_own_speed()
+        {
+            // mu at 2000 ms of capture. A 2x cursor reaches 2400 ms at project 1.2 s, 200 ms of
+            // project time after the release: halfway through the ripple. The screen under it plays
+            // at 1x, by which the same 400 ms of capture would have finished the ripple.
+            string capture = WriteCapture(Header, Frame(0, 32, 32), MouseEvent("mu", 2000, 20, 20));
+            var (p, _, cursor) = CursorProject(capture, "vision");
+            var content = (CursorContent)cursor.Content;
+            content.ClickAnimation = "ripple";
+            content.Speed = 2.0;
+
+            using var frames = new MultiStreamSource().Set(0, Blue, 64);
+            var inside = Px(Render(p, (long)(1.2 * Sec), frames), 30, 20);
+
+            Assert.True(inside.R > 60, $"expected red tint inside the ripple, got R={inside.R}");
+        }
+
+        /// <summary>Every frame request, by stream and source time.</summary>
+        private sealed class CountingFrames : IFrameSource, IDisposable
+        {
+            private readonly MultiStreamSource _inner = new MultiStreamSource().SetSplit(0, 64, splitX: 40);
+
+            public List<long> Requests { get; } = new List<long>();
+
+            public bool TryGetFrame(Guid sourceId, int streamIndex, long sourceTimeTicks, out FrameRef frame)
+            {
+                Requests.Add(sourceTimeTicks);
+                return _inner.TryGetFrame(sourceId, streamIndex, sourceTimeTicks, out frame);
+            }
+
+            public void Dispose() => _inner.Dispose();
+        }
+
+        /// <summary>Every frame request, with its lane.</summary>
+        private sealed class LaneFrames : IFrameSource, IDisposable
+        {
+            private readonly MultiStreamSource _inner = new MultiStreamSource().SetSplit(0, 64, splitX: 40);
+
+            public List<(int Lane, long Ticks)> Requests { get; } = new List<(int, long)>();
+
+            public bool TryGetFrame(Guid sourceId, int streamIndex, long sourceTimeTicks, out FrameRef frame)
+                => throw new InvalidOperationException("the composer must always say which lane it wants");
+
+            public bool TryGetFrame(Guid sourceId, int streamIndex, long sourceTimeTicks, int lane, out FrameRef frame)
+            {
+                Requests.Add((lane, sourceTimeTicks));
+                return _inner.TryGetFrame(sourceId, streamIndex, sourceTimeTicks, out frame);
+            }
+
+            public void Dispose() => _inner.Dispose();
+        }
+
+        [Fact]
+        public void The_press_warp_asks_the_lane_of_its_host()
+        {
+            // a pasted screen and cursor pair over its original: the cursor reads source 6 s at t=1,
+            // which is the paste, so the warp must bend the paste's frame and not the original's
+            string capture = WriteCapture(Header, Frame(0, 24, 32, buttons: 1), MouseEvent("md", 0, 24, 32));
+            var p = NewProject();
+            var source = AddCaptureSource(p, capture);
+            AddItem(p, AddVideoTrack(p, order: 0), new MediaContent { SourceId = source.Id, StreamIndex = 0 });
+            AddItem(p, AddVideoTrack(p, order: 1), new MediaContent { SourceId = source.Id, StreamIndex = 0, SourceInTicks = 5 * Sec });
+            AddItem(p, AddVideoTrack(p, order: 2), new CursorContent
+            {
+                SourceId = source.Id, Style = "none", ClickAnimation = "pressure", SourceInTicks = 5 * Sec,
+            });
+            using var frames = new LaneFrames();
+
+            Render(p, 1 * Sec, frames);
+
+            Assert.Equal(new[] { (0, 1 * Sec), (1, 6 * Sec), (1, 6 * Sec) }, frames.Requests);
+        }
+
+        /// <summary>A held press, on a cursor 5 s ahead of the screen clip it draws through.</summary>
+        private static (Project Project, Track ScreenRow) MisalignedPress()
+        {
+            string capture = WriteCapture(Header, Frame(0, 24, 32, buttons: 1), MouseEvent("md", 0, 24, 32));
+            var p = NewProject();
+            var source = AddCaptureSource(p, capture);
+            var screenRow = AddVideoTrack(p, order: 0);
+            AddItem(p, screenRow, new MediaContent { SourceId = source.Id, StreamIndex = 0 });
+            AddItem(p, AddVideoTrack(p, order: 1), new CursorContent
+            {
+                SourceId = source.Id, Style = "none", ClickAnimation = "pressure", SourceInTicks = 5 * Sec,
+            });
+            return (p, screenRow);
+        }
+
+        [Fact]
+        public void The_press_warp_asks_only_for_the_frame_its_host_just_composed()
+        {
+            // the cursor's own 6 s would make a sequential decoder seek back and forth on every frame
+            var (p, _) = MisalignedPress();
+            using var frames = new CountingFrames();
+
+            var held = Render(p, 1 * Sec, frames);
+
+            Assert.Equal(new[] { 1 * Sec, 1 * Sec }, frames.Requests);
+            Assert.True(Px(held, 39, 32).R > 100, "the held press did not pull the split inward");
+        }
+
+        [Fact]
+        public void The_press_warp_is_skipped_on_a_hidden_host()
+        {
+            var (p, screenRow) = MisalignedPress();
+            screenRow.Hidden = true;
+            using var frames = new CountingFrames();
+
+            var px = Render(p, 1 * Sec, frames);
+
+            Assert.Empty(frames.Requests);
+            AssertColor(Px(px, 39, 32), 0, 0, 0);
         }
 
         // ----------------------------------------------------------------------- click highlight

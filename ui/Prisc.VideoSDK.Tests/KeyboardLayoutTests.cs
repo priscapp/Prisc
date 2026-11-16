@@ -827,7 +827,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = start,
                 DurationTicks = duration,
                 Content = content,
-                GroupId = Guid.NewGuid(),
             };
             p.Items.Add(item);
             return item;
@@ -967,10 +966,10 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void Keyboard_time_rides_the_linked_screen_item()
+        public void Keyboard_time_runs_on_its_own_clock_whatever_the_screen_clip_shows()
         {
-            // screen item trimmed: SourceIn = 2s, so at project t=0.2s the capture clock reads
-            // 2.2s — keys at 2.0/2.1s are visible, keys at 0ms long faded
+            // SourceIn = 2s, so at project t=0.2s the capture clock reads 2.2s — keys at 2.0/2.1s
+            // are visible, keys at 0ms long faded
             string capture = WriteCapture(
                 "{\"type\":\"event\",\"t\":2000,\"kind\":\"kd\",\"vk\":72,\"ch\":\"H\"}",
                 "{\"type\":\"event\",\"t\":2100,\"kind\":\"kd\",\"vk\":73,\"ch\":\"i\"}");
@@ -981,18 +980,53 @@ namespace Prisc.VideoSDK.Tests
             p.Sources.Add(source);
 
             var group = Guid.NewGuid();
-            var screen = AddItem(p, AddTrack(p, TrackKind.Video, 0),
-                new MediaContent { SourceId = source.Id, StreamIndex = 0, SourceInTicks = 2 * Sec });
-            screen.GroupId = group;
+            var screenTrack = AddTrack(p, TrackKind.Video, 0);
+            screenTrack.GroupId = group;
+            var screen = (MediaContent)AddItem(p, screenTrack,
+                new MediaContent { SourceId = source.Id, StreamIndex = 0, SourceInTicks = 2 * Sec }).Content;
 
-            var keys = AddItem(p, AddTrack(p, TrackKind.Video, 1),
-                new KeyboardContent { SourceId = source.Id, FontSize = 10 });
-            keys.GroupId = group;
+            var keysTrack = AddTrack(p, TrackKind.Video, 1);
+            keysTrack.GroupId = group;
+            var keys = AddItem(p, keysTrack,
+                new KeyboardContent { SourceId = source.Id, FontSize = 10, SourceInTicks = 2 * Sec });
             keys.Transform = new Transform { X = 0.5, Y = 0.9, Scale = 1.0 };
 
-            // without the screen item's clock this instant would show nothing (item-relative
-            // time is 200ms, far before the 2000ms keys)
-            Assert.True(AnyInk(Render(p, (long)(0.2 * Sec)), 30, 58));
+            var instant = (long)(0.2 * Sec);
+            Assert.True(AnyInk(Render(p, instant), 30, 58));
+
+            // the screen clip pointing somewhere else changes nothing
+            screen.SourceInTicks = 0;
+            screen.Speed = 3.0;
+            Assert.True(AnyInk(Render(p, instant), 30, 58));
+
+            // and neither does there being no screen clip at all: keys need no picture
+            p.Items.RemoveAll(i => i.Content is MediaContent);
+            Assert.True(AnyInk(Render(p, instant), 30, 58));
+
+            // without its own clock this instant would show nothing (200ms, far before the keys)
+            ((KeyboardContent)keys.Content).SourceInTicks = 0;
+            Assert.False(AnyInk(Render(p, instant), 30, 58));
+        }
+
+        [Fact]
+        public void Keyboard_lingers_by_project_time_on_a_sped_clip()
+        {
+            // the key goes down at 1 s of capture. At 4x, one second of linger is 4 s of capture, so
+            // a project instant 1 s later still shows it, and only the clip's own speed can say so
+            string capture = WriteCapture("{\"type\":\"event\",\"t\":1000,\"kind\":\"kd\",\"vk\":72,\"ch\":\"H\"}");
+
+            var p = NewProject();
+            var source = new Source { Id = Guid.NewGuid(), Path = "recording.mp4", InputCapturePath = capture };
+            p.Sources.Add(source);
+            var keys = AddItem(p, AddTrack(p, TrackKind.Video, 0),
+                new KeyboardContent { SourceId = source.Id, FontSize = 10, LingerMs = 1000, Speed = 4.0 });
+            keys.Transform = new Transform { X = 0.5, Y = 0.9, Scale = 1.0 };
+
+            var pressedAt = Sec / 4;
+            Assert.True(AnyInk(Render(p, pressedAt + Sec / 2), 30, 58));
+
+            ((KeyboardContent)keys.Content).Speed = 1.0;
+            Assert.False(AnyInk(Render(p, pressedAt + Sec / 2), 30, 58));
         }
 
         // --------------------------------------------------------------- keycaps and pill livery

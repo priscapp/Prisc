@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Prisc.VideoSDK.Model;
+using Prisc.VideoSDK.Playback;
 using SkiaSharp;
 
 namespace Prisc.VideoSDK.Composition
@@ -31,9 +32,21 @@ namespace Prisc.VideoSDK.Composition
         /// </summary>
         public static void Compose(Project project, long timeTicks, IFrameSource frames,
             SKCanvas target, int canvasWidth, int canvasHeight)
+            => Compose(project, timeTicks, frames, target, canvasWidth, canvasHeight, StreamLanes.Assign(project));
+
+        /// <summary>
+        /// The same, reading each clip's frame from the lane <paramref name="lanes"/> gives it (an
+        /// <see cref="StreamLanes.Assign"/> result). Lanes say which decoder holds a clip's frame, so
+        /// they belong to the project the decoders were opened for, which is not always the project
+        /// being drawn: the preview's crop draw composes a copy with the other rows hidden, and its
+        /// clip keeps the lane it plays on.
+        /// </summary>
+        public static void Compose(Project project, long timeTicks, IFrameSource frames,
+            SKCanvas target, int canvasWidth, int canvasHeight, IReadOnlyDictionary<Guid, int> lanes)
         {
             ArgumentNullException.ThrowIfNull(project);
             ArgumentNullException.ThrowIfNull(target);
+            ArgumentNullException.ThrowIfNull(lanes);
             ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(canvasWidth, 0);
             ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(canvasHeight, 0);
 
@@ -78,10 +91,10 @@ namespace Prisc.VideoSDK.Composition
                 {
                     if (item.TrackId != track.Id)
                         continue;
-                    if (timeTicks < item.TimelineStartTicks || timeTicks >= item.TimelineEndTicks)
+                    if (!item.Covers(timeTicks))
                         continue;
 
-                    // a cursor item borrows all of its geometry from the linked screen item
+                    // a cursor item borrows all of its geometry from the screen clip hosting it
                     // (DrawCursorItem maps through the screen's PictureMapping), so it must
                     // borrow the screen row's zoom too — a zoom row reordered to sit between
                     // the screen row and the cursor row would otherwise zoom the pixels and
@@ -97,7 +110,7 @@ namespace Prisc.VideoSDK.Composition
                         // ride outside the zoom.
                         if (!itemZoom.IsIdentity && item.Content is not KeyboardContent)
                             target.Concat(in itemZoom);
-                        ComposeItem(project, item, timeTicks, frames, target, canvasWidth, canvasHeight,
+                        ComposeItem(project, item, timeTicks, frames, lanes, target, canvasWidth, canvasHeight,
                             textScale, frameMatrix);
                     }
                     finally
@@ -109,18 +122,17 @@ namespace Prisc.VideoSDK.Composition
         }
 
         /// <summary>
-        /// The zoom matrix a cursor item composes under: evaluated at its linked <b>screen</b>
+        /// The zoom matrix a cursor item composes under: evaluated at its host <b>screen</b>
         /// track's <see cref="Track.Order"/>, not the cursor row's own — the cursor's placement is
         /// only correct when both receive the identical matrix, and an effect row whose order
         /// falls between the two rows would otherwise split them. Falls back to the cursor row's
-        /// own matrix when the screen item is gone (the item draws nothing then anyway).
+        /// own matrix when there is no host (the item draws nothing then anyway).
         /// </summary>
         private static SKMatrix CursorItemZoom(Project project, Item item, CursorContent cursor,
             long timeTicks, SKMatrix fallback, int canvasWidth, int canvasHeight)
         {
             var source = FindSource(project, cursor.SourceId);
-            var screen = source == null ? null
-                : FindScreenMediaItem(project, source, item.GroupId, timeTicks);
+            var screen = ResolveCursorHost(project, source, item, timeTicks);
             if (screen == null)
                 return fallback;
 
@@ -144,7 +156,8 @@ namespace Prisc.VideoSDK.Composition
         public static double PixelScale(Project project, double canvasHeight) => TextScaleOf(project, canvasHeight);
 
         private static void ComposeItem(Project project, Item item, long timeTicks, IFrameSource frames,
-            SKCanvas target, int canvasWidth, int canvasHeight, double textScale, SKMatrix frameMatrix)
+            IReadOnlyDictionary<Guid, int> lanes, SKCanvas target, int canvasWidth, int canvasHeight,
+            double textScale, SKMatrix frameMatrix)
         {
             var transform = item.Transform ?? new Transform();
             // a keystroke overlay spends its Entry/Exit on its rows, one clock each, inside
@@ -167,7 +180,8 @@ namespace Prisc.VideoSDK.Composition
                         return;
                     // elapsed timeline time consumes source time at the item's playback speed
                     long sourceTicks = SourceTimeTicks(media, item, timeTicks);
-                    if (!frames.TryGetFrame(media.SourceId, media.StreamIndex, sourceTicks, out var frame)
+                    if (!frames.TryGetFrame(media.SourceId, media.StreamIndex, sourceTicks,
+                            StreamLanes.LaneOf(lanes, item.Id), out var frame)
                         || frame.Image == null)
                         return;
                     // an item's crop can follow a recorded window, which makes it the one piece of
@@ -220,7 +234,7 @@ namespace Prisc.VideoSDK.Composition
                     break;
 
                 case CursorContent cursor:
-                    DrawCursorItem(project, item, cursor, timeTicks, frames, target, opacity,
+                    DrawCursorItem(project, item, cursor, timeTicks, frames, lanes, target, opacity,
                         canvasWidth, canvasHeight);
                     break;
 
@@ -231,16 +245,14 @@ namespace Prisc.VideoSDK.Composition
             }
         }
 
-        /// <summary>Source time for a media item at output time <paramref name="timeTicks"/> —
+        /// <summary>Source time for a clip at output time <paramref name="timeTicks"/> —
         /// exact for realtime so speed-1 projects keep integer-perfect math.</summary>
-        public static long SourceTimeTicks(MediaContent media, Item item, long timeTicks)
+        public static long SourceTimeTicks(SourceClockContent clock, Item item, long timeTicks)
         {
-            if (media.Freeze)
-                return media.SourceInTicks;
+            if (clock.Freeze)
+                return clock.SourceInTicks;
 
-            long elapsed = timeTicks - item.TimelineStartTicks;
-            double speed = TimelineOps.SpeedOf(media);
-            return media.SourceInTicks + (speed == 1.0 ? elapsed : (long)Math.Round(elapsed * speed));
+            return clock.SourceInTicks + TimelineOps.ToSourceTicks(timeTicks - item.TimelineStartTicks, TimelineOps.SpeedOf(clock));
         }
 
         // ------------------------------------------------------------------------------- media
@@ -511,7 +523,7 @@ namespace Prisc.VideoSDK.Composition
 
         /// <summary>
         /// A cursor-track item: position and shape are data-driven (the capture file), placement
-        /// rides the linked screen item's mapping — the cursor lands on the same canvas point the
+        /// rides its host screen clip's mapping — the cursor lands on the same canvas point the
         /// recorded pixel would, crop/aspect/mask included. <c>none</c> draws no cursor at all
         /// (the click highlight, its own setting, still does); <c>native</c> draws the frame's
         /// recorded sprite (<see cref="InputFrame.SpriteId"/>) at its captured pixel size times
@@ -523,12 +535,18 @@ namespace Prisc.VideoSDK.Composition
         /// rasterizes (routing the sprite through <see cref="CursorCompose.DrawGlyph"/>'s
         /// decoration layer is the easy follow-up if one is wanted). The click highlight draws
         /// beneath. A hidden cursor (debounced through the capture's inactivity latch unless the
-        /// item's <c>Debounce</c> is off), a position outside the region, or a missing screen item
-        /// draws nothing.
+        /// item's <c>Debounce</c> is off), a position outside the region, or no host
+        /// (<see cref="ResolveCursorHost"/>) draws nothing.
+        ///
+        /// <para>Two clocks meet here, and they disagree on a cursor the user took out of step. The
+        /// cursor's own says which capture row and click animations to show. The host's says what
+        /// the picture is doing: its window crop, and the frame the press warp bends, which must be
+        /// the one the host just composed or a misaligned cursor would make the decoder seek back
+        /// and forth.</para>
         /// </summary>
         private static void DrawCursorItem(Project project, Item item, CursorContent cursor,
-            long timeTicks, IFrameSource frames, SKCanvas target, double opacity,
-            int canvasWidth, int canvasHeight)
+            long timeTicks, IFrameSource frames, IReadOnlyDictionary<Guid, int> lanes, SKCanvas target,
+            double opacity, int canvasWidth, int canvasHeight)
         {
             var source = FindSource(project, cursor.SourceId);
             if (source == null || string.IsNullOrEmpty(source.InputCapturePath))
@@ -537,17 +555,17 @@ namespace Prisc.VideoSDK.Composition
             if (capture.Frames.Count == 0)
                 return;
 
-            // the linked screen item defines both the time mapping and the placement math —
-            // hard sync means the cursor has no clock or geometry of its own.
-            var screen = FindScreenMediaItem(project, source, item.GroupId, timeTicks);
+            // the cursor has no geometry of its own: capture pixels land on the host's picture
+            var screen = ResolveCursorHost(project, source, item, timeTicks);
             if (screen?.Content is not MediaContent media)
                 return;
-            long sourceTicks = SourceTimeTicks(media, screen, timeTicks);
-            double sourceMs = sourceTicks / (double)TimeSpan.TicksPerMillisecond;
+            long hostTicks = SourceTimeTicks(media, screen, timeTicks);
+            double sourceMs = SourceTimeTicks(cursor, item, timeTicks) / (double)TimeSpan.TicksPerMillisecond;
+            double speed = TimelineOps.SpeedOf(cursor);
 
             var (imgW, imgH) = CaptureDims(capture.Header, source, media.StreamIndex);
             var screenTransform = WindowCropMath.Effective(project, media,
-                screen.Transform ?? new Transform(), sourceTicks);
+                screen.Transform ?? new Transform(), hostTicks);
             var screenFx = TransitionMath.Evaluate(screen, timeTicks);
             if (!PictureMapping.TryMap(screenTransform, screenFx, imgW, imgH,
                     canvasWidth, canvasHeight, out var map))
@@ -578,18 +596,22 @@ namespace Prisc.VideoSDK.Composition
 
                 // the press warp redraws (a stretched copy of) the screen frame itself, so it
                 // needs the frame the screen item just composed; items between the two rows are
-                // not re-warped — the cursor row normally sits directly above its screen row.
+                // not re-warped — the cursor row normally sits directly above its screen row. A
+                // hidden host composed nothing to bend: the preview has no pipeline for its row and
+                // the render would paint its pixels around each click, so neither draws it.
                 if (ClickHighlight.ModeOf(cursor.ClickAnimation) == HighlightMode.Press
                     && frames != null
-                    && frames.TryGetFrame(media.SourceId, media.StreamIndex, sourceTicks, out var screenFrame)
+                    && project.TrackOf(screen) is { Hidden: false }
+                    && frames.TryGetFrame(media.SourceId, media.StreamIndex, hostTicks,
+                        StreamLanes.LaneOf(lanes, screen.Id), out var screenFrame)
                     && screenFrame.Image != null)
                 {
                     CursorCompose.DrawPressWarp(target, capture, map, imgW, imgH, row, sourceMs,
-                        TimelineOps.SpeedOf(media), cursor, highlightScale, opacity, screenFrame.Image);
+                        speed, cursor, highlightScale, opacity, screenFrame.Image);
                 }
 
                 CursorCompose.DrawClickAnimations(target, capture, map, row, sourceMs,
-                    TimelineOps.SpeedOf(media), cursor, highlightScale, opacity);
+                    speed, cursor, highlightScale, opacity);
 
                 if (string.Equals(cursor.Style, CursorAssets.NoneStyle, StringComparison.OrdinalIgnoreCase))
                 {
@@ -656,9 +678,6 @@ namespace Prisc.VideoSDK.Composition
             return null;
         }
 
-        /// <summary>Whether the stream is the source's screen recording: its lowest-index probed
-        /// video stream (the webcam always probes after the screen). With no probed video streams,
-        /// stream 0 — the container convention.</summary>
         /// <summary>The pixel aspect ratio of the stream a media item plays
         /// (<see cref="SourceStream.PixelAspect"/>); 1 when the source or stream is unknown, which
         /// is also what every recording carries.</summary>
@@ -675,6 +694,9 @@ namespace Prisc.VideoSDK.Composition
             return 1.0;
         }
 
+        /// <summary>Whether the stream is the source's screen recording: its lowest-index probed
+        /// video stream (the webcam always probes after the screen). With no probed video streams,
+        /// stream 0 — the container convention.</summary>
         public static bool IsScreenStream(Source source, int streamIndex)
         {
             int best = -1;
@@ -682,7 +704,7 @@ namespace Prisc.VideoSDK.Composition
             {
                 foreach (var stream in source.Streams)
                 {
-                    if (stream.Kind != StreamKind.Video)
+                    if (stream == null || stream.Kind != StreamKind.Video)
                         continue;
                     if (best < 0 || stream.Index < best)
                         best = stream.Index;
@@ -691,44 +713,47 @@ namespace Prisc.VideoSDK.Composition
             return best < 0 ? streamIndex == 0 : streamIndex == best;
         }
 
+        /// <summary>Whether the clip plays this recording's screen stream: what the cursor resolver,
+        /// a rebase, the add commands and migration all mean by a screen clip.</summary>
+        public static bool PlaysScreen(Source source, Item item) =>
+            item.Content is MediaContent media && media.SourceId == source.Id && IsScreenStream(source, media.StreamIndex);
+
         /// <summary>
-        /// The screen media item an overlay item follows: an active-at-<paramref name="timeTicks"/>
-        /// screen-stream item of the source on a video track, preferring the overlay's own link
-        /// group (the hard-sync partner) when several qualify. Null when the screen row is gone —
-        /// overlays then draw nothing (cursor) or fall back to item-relative time (keyboard).
+        /// The screen clip a cursor clip draws through at <paramref name="timeTicks"/>: among the
+        /// active screen-stream clips of the source on video rows, hidden ones included, the first
+        /// whose source time is the cursor's (a pasted screen and cursor pair overlaps its original,
+        /// and must not map through the original's placement and crop), otherwise simply the first,
+        /// which is the backmost. Null when none is active, and the cursor then draws nothing. Reads
+        /// no group: one resolver for the preview and the render, and clearing every group changes
+        /// no pixel.
         /// </summary>
-        internal static Item FindScreenMediaItem(Project project, Source source,
-            Guid? linkGroupId, long timeTicks)
+        internal static Item ResolveCursorHost(Project project, Source source, Item cursorItem, long timeTicks)
         {
-            if (project?.Items == null || project.Tracks == null || source == null)
+            if (project?.Items == null || project.Tracks == null || source == null
+                || cursorItem?.Content is not SourceClockContent clock)
                 return null;
 
-            var videoTracks = new HashSet<Guid>();
-            foreach (var track in project.Tracks)
-            {
-                if (track.Kind == TrackKind.Video)
-                    videoTracks.Add(track.Id);
-            }
-
-            Item best = null;
+            var cursorTicks = SourceTimeTicks(clock, cursorItem, timeTicks);
+            Item first = null;
             foreach (var item in project.Items)
             {
-                if (item.Content is not MediaContent media || media.SourceId != source.Id)
+                if (!item.Covers(timeTicks) || !IsCursorHost(project, source, item))
                     continue;
-                if (timeTicks < item.TimelineStartTicks || timeTicks >= item.TimelineEndTicks)
-                    continue;
-                if (!videoTracks.Contains(item.TrackId) || !IsScreenStream(source, media.StreamIndex))
-                    continue;
-                if (linkGroupId != null && item.GroupId == linkGroupId)
+
+                if (OverlayClock.SameInstant(SourceTimeTicks((MediaContent)item.Content, item, timeTicks), cursorTicks))
                     return item;
-                best ??= item;
+                first ??= item;
             }
-            return best;
+            return first;
         }
 
-        /// <summary>The screen stream's pixel dimensions: the probe's numbers (what
-        /// <see cref="DrawPicture"/>'s frames decode to), else the caller's fallback — a sidecar
-        /// header's capture region — enough to map even when the probe is missing.</summary>
+        /// <summary>Whether a cursor of <paramref name="source"/> can draw through the clip: it plays
+        /// that recording's screen stream on a video row, hidden or not.
+        /// <see cref="ResolveCursorHost"/> picks among these and <c>TimelineOps.CursorHostSpans</c>
+        /// says where there are any, so the bar and the picture cannot disagree.</summary>
+        internal static bool IsCursorHost(Project project, Source source, Item item) =>
+            PlaysScreen(source, item) && project.TrackOf(item)?.Kind == TrackKind.Video;
+
         /// <summary>
         /// The space an input-capture row's coordinates live in: the recorder's canvas, which is
         /// the header's region (<c>w</c>/<c>h</c> = the region's physical pixel size). That is
@@ -749,6 +774,9 @@ namespace Prisc.VideoSDK.Composition
             return ScreenDims(source, streamIndex, 0, 0);
         }
 
+        /// <summary>The screen stream's pixel dimensions: the probe's numbers (what
+        /// <see cref="DrawPicture"/>'s frames decode to), else the caller's fallback — a sidecar
+        /// header's capture region — enough to map even when the probe is missing.</summary>
         internal static (double Width, double Height) ScreenDims(Source source, int streamIndex,
             double fallbackWidth, double fallbackHeight)
         {
@@ -827,19 +855,9 @@ namespace Prisc.VideoSDK.Composition
             if (runs.Count == 0)
                 return;
 
-            // time rides the linked screen item like the cursor's; with the screen row gone the
-            // item's own span stands in (SourceIn 0, realtime) so the overlay degrades, not dies.
-            double speed = 1.0;
-            long sourceTicks = timeTicks - item.TimelineStartTicks;
-            var screen = FindScreenMediaItem(project, source, item.GroupId, timeTicks);
-            if (screen?.Content is MediaContent media)
-            {
-                speed = TimelineOps.SpeedOf(media);
-                sourceTicks = SourceTimeTicks(media, screen, timeTicks);
-            }
-            double sourceMs = sourceTicks / (double)TimeSpan.TicksPerMillisecond;
+            double sourceMs = SourceTimeTicks(keyboard, item, timeTicks) / (double)TimeSpan.TicksPerMillisecond;
 
-            var rows = KeyboardLayout.VisibleRowsAt(runs, sourceMs, speed, Math.Max(0, keyboard.LingerMs),
+            var rows = KeyboardLayout.VisibleRowsAt(runs, sourceMs, TimelineOps.SpeedOf(keyboard), Math.Max(0, keyboard.LingerMs),
                 KeystrokeRenderer.RowMs(item.Entry), KeystrokeRenderer.RowMs(item.Exit));
             if (rows.Count == 0)
                 return;

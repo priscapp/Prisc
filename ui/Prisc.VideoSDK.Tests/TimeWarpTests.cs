@@ -41,6 +41,22 @@ namespace Prisc.VideoSDK.Tests
             };
         }
 
+        /// <summary>The two spellings of "this long on the output clock", on and off a speed item.</summary>
+        [Fact]
+        public void OutputSpan_and_ProjectEndOf_measure_on_the_output_clock()
+        {
+            var project = ProjectWithClip(10 * Sec);
+            AddSpeedItem(project, 2 * Sec, 4 * Sec, 2.0);
+            var warp = TimeWarp.Build(project);
+
+            Assert.Equal(Sec, warp.OutputSpan(0, Sec));
+            Assert.Equal(2 * Sec, warp.OutputSpan(2 * Sec, 6 * Sec));
+            Assert.Equal(4 * Sec, warp.OutputSpan(Sec, 6 * Sec) + Sec);
+
+            Assert.Equal(6 * Sec, warp.ProjectEndOf(2 * Sec, 2 * Sec));
+            Assert.Equal(7 * Sec, warp.ProjectEndOf(2 * Sec, 3 * Sec));
+        }
+
         private static Item AddSpeedItem(Project project, long start, long duration, double factor,
             Transition entry = null, Transition exit = null)
         {

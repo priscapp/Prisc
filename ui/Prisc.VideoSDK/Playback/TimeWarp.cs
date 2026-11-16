@@ -256,6 +256,14 @@ namespace Prisc.VideoSDK.Playback
             return seg.PStart + (long)Math.Round((lo + frac) * span / RampSamples);
         }
 
+        /// <summary>How much output time the project span <c>[startTicks, endTicks)</c> plays
+        /// for.</summary>
+        public long OutputSpan(long startTicks, long endTicks) => ToOutput(endTicks) - ToOutput(startTicks);
+
+        /// <summary>The project instant <paramref name="outputSpan"/> output ticks after
+        /// <paramref name="startTicks"/>: where something that plays for that long ends.</summary>
+        public long ProjectEndOf(long startTicks, long outputSpan) => ToProject(ToOutput(startTicks) + outputSpan);
+
         /// <summary>True when the two warps describe the same project ↔ output mapping. Only the
         /// bent spans participate: speed-1 segments (including the trailing one a longer project
         /// appends) never move an anchor relative to their neighbors, so timelines differing

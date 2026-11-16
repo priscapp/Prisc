@@ -111,6 +111,20 @@ namespace Prisc.UI.Controls
         static ThemedSpinner()
         {
             ControlThemes.EnsureRegistered();
+
+            // A field nobody is typing in must not scroll its host. Ursa re-seats the caret at the
+            // end of the text every time a value is pushed in from outside (NumericUpDownBase's
+            // SyncTextAndValue), and Avalonia's TextPresenter answers every caret move with a
+            // BringIntoView, focused or not. So a selection change that only re-binds the numbers
+            // dragged the inspector down to whichever spinner below the fold changed last (a
+            // webcam's surround Softness after a cursor's), and the offset stuck for the next
+            // selection. Only requests from inside, and only while focus is elsewhere: tabbing in
+            // or typing still keeps the caret on screen.
+            RequestBringIntoViewEvent.AddClassHandler<ThemedSpinner>((spinner, e) =>
+            {
+                if (!spinner.IsKeyboardFocusWithin && !ReferenceEquals(e.TargetObject, spinner))
+                    e.Handled = true;
+            });
         }
 
         protected override void OnApplyTemplate(TemplateAppliedEventArgs e)

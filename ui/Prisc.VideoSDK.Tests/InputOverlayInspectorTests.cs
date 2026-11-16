@@ -18,18 +18,17 @@ namespace Prisc.VideoSDK.Tests
     /// </summary>
     public class InputOverlayInspectorTests
     {
-        private const string CapturePath = @"C:\rec\input-capture.jsonl";
-
         private static long Ms(long ms) => ms * TimeSpan.TicksPerMillisecond;
 
-        /// <summary>A recording cut into two keep-segments (one link group each) over a source that
+        /// <summary>A recording cut into two keep-segments, its rows grouped, over a source that
         /// carries input capture — so every overlay row the factories build has two items, which is
         /// what the fan-out tests are about.</summary>
         private static (EditorSession Session, SelectedItemViewModel Vm) NewInspector(out Item screen)
         {
             var sourceId = Guid.NewGuid();
-            var screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0 };
-            var audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 1 };
+            var group = Guid.NewGuid();
+            var screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0, GroupId = group };
+            var audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 1, GroupId = group };
 
             var project = new Project
             {
@@ -40,7 +39,7 @@ namespace Prisc.VideoSDK.Tests
                     {
                         Id = sourceId,
                         Path = @"C:\rec\input.mp4",
-                        InputCapturePath = CapturePath,
+                        InputCapturePath = TestPath.ExistingCapture,
                         Streams =
                         {
                             new SourceStream { Index = 0, Kind = StreamKind.Video, Width = 1920, Height = 1080, AvgFrameRateNum = 30, AvgFrameRateDen = 1, DurationTicks = Ms(60_000) },
@@ -61,7 +60,6 @@ namespace Prisc.VideoSDK.Tests
         private static Item AddSegment(Project project, Track screen, Track audio, Guid sourceId,
             long startTicks, long durationTicks)
         {
-            var group = Guid.NewGuid();
             var item = new Item
             {
                 Id = Guid.NewGuid(),
@@ -69,7 +67,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = startTicks,
                 DurationTicks = durationTicks,
                 Content = new MediaContent { SourceId = sourceId, StreamIndex = 0, SourceInTicks = startTicks },
-                GroupId = group,
             };
             project.Items.Add(item);
             project.Items.Add(new Item
@@ -79,7 +76,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = startTicks,
                 DurationTicks = durationTicks,
                 Content = new MediaContent { SourceId = sourceId, StreamIndex = 1, SourceInTicks = startTicks },
-                GroupId = group,
             });
             return item;
         }
@@ -104,7 +100,7 @@ namespace Prisc.VideoSDK.Tests
 
             Assert.True(vm.HasSelection);
             Assert.True(vm.ShowCursorTrack);
-            // position, size, aspect, crop and shape all come from the screen row it is synced to
+            // position, size, aspect, crop and shape all come from the screen clip it draws through
             Assert.False(vm.ShowTransform);
             Assert.False(vm.ShowScale);
             Assert.False(vm.ShowMask);
@@ -112,7 +108,7 @@ namespace Prisc.VideoSDK.Tests
             Assert.False(vm.ShowKeyboardTrack);
             Assert.False(vm.ShowText);
             Assert.False(vm.ShowAudio);
-            Assert.False(vm.ShowSpeed);
+            Assert.True(vm.ShowSpeed);
             Assert.False(vm.ShowSpeedEffect);
             Assert.False(vm.ShowZoomEffect);
             Assert.False(vm.ShowRamp);
@@ -143,7 +139,7 @@ namespace Prisc.VideoSDK.Tests
             Assert.False(vm.ShowMask);
             Assert.False(vm.ShowCrop);
             Assert.False(vm.ShowCursorTrack);
-            Assert.False(vm.ShowSpeed);
+            Assert.True(vm.ShowSpeed);
             Assert.False(vm.ShowRamp);
             Assert.Equal("Keys", vm.SubjectKind);
         }
@@ -233,29 +229,94 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void OverlayRows_AreGroupedButOfferNoUngroup()
+        public void OverlayRows_UngroupLikeAnyOtherRow()
         {
-            // the overlays read the recording's input capture at the recording's own times, so
-            // their sync is not a toggle: the banner shows, the Desync button does not
-            var (session, vm) = NewInspector(out var screen);
+            var (session, vm) = NewInspector(out _);
             var cursor = session.AddCursorTrack();
             var keys = session.AddKeyboardTrack();
 
+            foreach (var overlay in new[] { cursor, keys })
+            {
+                session.Select(overlay.Id);
+                Assert.True(vm.IsGrouped);
+                Assert.True(((System.Windows.Input.ICommand)vm.CommandUngroup).CanExecute(null));
+
+                ((System.Windows.Input.ICommand)vm.CommandUngroup).Execute(null);
+
+                Assert.False(vm.IsGrouped);
+                Assert.False(((System.Windows.Input.ICommand)vm.CommandUngroup).CanExecute(null));
+                Assert.Null(session.Project.TrackOf(Live(session, overlay.Id)).GroupId);
+            }
+        }
+
+        /// <summary>The caption says a clip's speed stops at the clip, which only needs saying while
+        /// the row is grouped, and the write proves it: nothing else on the rows changes.</summary>
+        [Fact]
+        public void OverlaySpeed_RetimesThisClipAloneAndSaysSoOnAGroupedRow()
+        {
+            var (session, vm) = NewInspector(out var screen);
+            var cursor = session.AddCursorTrack();
+            var keys = session.AddKeyboardTrack();
             session.Select(cursor.Id);
-            Assert.True(vm.IsGrouped);
-            Assert.False(vm.CanUngroup);
-            Assert.False(((System.Windows.Input.ICommand)vm.CommandUngroup).CanExecute(null));
+            Assert.True(vm.ShowSpeedGroupCaption);
+            Assert.Equal(1.0, vm.SpeedChoice.Value);
 
-            session.Select(keys.Id);
-            Assert.True(vm.IsGrouped);
-            Assert.False(vm.CanUngroup);
-            Assert.False(((System.Windows.Input.ICommand)vm.CommandUngroup).CanExecute(null));
+            var others = session.Project.Items.Where(i => i.Id != cursor.Id)
+                .Select(i => (i.Id, i.TimelineStartTicks, i.DurationTicks, (i.Content as SourceClockContent)?.Speed)).ToList();
 
-            // an ordinary linked media row keeps the way out
+            vm.SpeedChoice = SelectedItemViewModel.SpeedOptions.First(o => o.Value == 2.0);
+
+            Assert.Equal(2.0, ((CursorContent)Live(session, cursor.Id).Content).Speed);
+            Assert.Equal(Ms(4_000), Live(session, cursor.Id).DurationTicks);
+            Assert.Equal(others, session.Project.Items.Where(i => i.Id != cursor.Id)
+                .Select(i => (i.Id, i.TimelineStartTicks, i.DurationTicks, (i.Content as SourceClockContent)?.Speed)).ToList());
+
+            // the row reads the clip's own speed when it comes back to it
             session.Select(screen.Id);
-            Assert.True(vm.IsGrouped);
-            Assert.True(vm.CanUngroup);
-            Assert.True(((System.Windows.Input.ICommand)vm.CommandUngroup).CanExecute(null));
+            Assert.Equal(1.0, vm.SpeedChoice.Value);
+            session.Select(cursor.Id);
+            Assert.Equal(2.0, vm.SpeedChoice.Value);
+
+            session.UngroupTracks(new[] { session.Project.TrackOf(Live(session, keys.Id)).Id });
+            session.Select(keys.Id);
+            Assert.True(vm.ShowSpeed);
+            Assert.False(vm.ShowSpeedGroupCaption);
+
+            session.Select(screen.Id);
+            Assert.True(vm.ShowSpeed);
+            Assert.True(vm.ShowSpeedGroupCaption);
+        }
+
+        /// <summary>Ungrouping changes the caption and not the Speed row beside it, so the panel has
+        /// to be told about the caption by name.</summary>
+        [Fact]
+        public void OverlaySpeed_CaptionLeavesThePanelWhenTheRowIsUngrouped()
+        {
+            var (session, vm) = NewInspector(out _);
+            var cursor = session.AddCursorTrack();
+            session.Select(cursor.Id);
+            Assert.True(vm.ShowSpeedGroupCaption);
+
+            var raised = new System.Collections.Generic.List<string>();
+            vm.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+
+            ((System.Windows.Input.ICommand)vm.CommandUngroup).Execute(null);
+
+            Assert.True(vm.ShowSpeed);
+            Assert.False(vm.ShowSpeedGroupCaption);
+            Assert.Contains(nameof(vm.ShowSpeedGroupCaption), raised);
+        }
+
+        [Fact]
+        public void OverlaySpeed_IsNotOfferedOnAHeldFrame()
+        {
+            var (session, vm) = NewInspector(out _);
+            var cursor = session.AddCursorTrack();
+            session.EditItem(cursor.Id, i => ((CursorContent)i.Content).Freeze = true);
+            session.Select(cursor.Id);
+
+            Assert.False(vm.ShowSpeed);
+            Assert.False(vm.ShowSpeedGroupCaption);
         }
 
         [Fact]

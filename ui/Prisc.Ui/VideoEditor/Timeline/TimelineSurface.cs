@@ -92,10 +92,29 @@ namespace Prisc.UI.VideoEditor.Timeline
         private DragMode _dragMode;
         private EditGesture _gesture;
         private Guid _dragItemId;
-        /// <summary>Every member of the dragged item's group while a move drag is on and the group
-        /// has more than one member — the set the surface paints in the group color, and the
-        /// count <see cref="GroupDragChanged"/> reports. Null outside such a drag.</summary>
-        private HashSet<Guid> _dragGroupIds;
+        /// <summary>What a move drag moves: the selection plus what is time-linked to it, or the
+        /// selection alone with Alt at the press. Frozen at the press, because recomputing it on each
+        /// step would let a dragged clip absorb whatever it passes over. With more than one clip in
+        /// it, the surface paints the set as moving. Null outside a move drag.</summary>
+        private HashSet<Guid> _dragMoveIds;
+
+        /// <summary>What the status line says once <see cref="_dragMoveIds"/> starts moving.</summary>
+        private string _dragMoveStatus;
+
+        /// <summary>Whether the pointer has done anything with the press yet
+        /// (<see cref="TimelinePress.Engages"/>). Until then a move has moved nothing and said
+        /// nothing, so a plain click stays a plain click.</summary>
+        private bool _dragEngaged;
+
+        private double _pressX;
+
+        /// <summary>What the press that started this drag decided.</summary>
+        private TimelinePressDecision _press;
+
+        /// <summary>See <see cref="TimelinePress.BypassesSnap"/>.</summary>
+        private bool _keepSnapUntilAltUp;
+
+        private readonly TimelineLinkedOutlines _linkedOutlines = new TimelineLinkedOutlines();
         private long _grabOffsetTicks;   // pointer ticks minus the dragged start/edge at press time
         private IPointer _dragPointer;
         private long? _snapGuideTicks;
@@ -122,6 +141,7 @@ namespace Prisc.UI.VideoEditor.Timeline
         private Guid _contextItemId; // the item the pending right-click landed on
         private long _contextTicks;  // …and where along the timeline it landed
         private TimelineGap? _contextGap; // the gap the pending menu acts on, when it is a gap menu
+        private bool _contextEmptySpace;  // the pending right-click landed on neither a clip nor a gap
 
         /// <summary>The gap on a video/audio row under the pointer, drawn as the
         /// <c>&lt;--(...)--&gt;</c> overlay, and whether the pointer is on its button.</summary>
@@ -134,10 +154,9 @@ namespace Prisc.UI.VideoEditor.Timeline
 
         public event EventHandler<long> ScrubCompleted;
 
-        /// <summary>Raised with the member count when a move drag takes a whole group along
-        /// (more than one clip), and with 0 when that drag ends — the window shows "Dragging N
-        /// grouped clips" for the duration.</summary>
-        public event EventHandler<int> GroupDragChanged;
+        /// <summary>Raised with a sentence when a move drag starts, and with null when that drag ends.
+        /// The window shows it for the duration.</summary>
+        public event EventHandler<string> StatusChanged;
 
         public TimelineSurface(TimelineViewport viewport)
         {
@@ -154,7 +173,7 @@ namespace Prisc.UI.VideoEditor.Timeline
         }
 
         /// <summary>Runs the parent control's <c>DeleteSelection</c> — the context menu must not
-        /// carry a second copy of the selection/lock rules the Delete key follows.</summary>
+        /// carry a second copy of what the Delete key does.</summary>
         public Func<bool> DeleteSelection { get; set; }
 
         /// <summary>Runs the parent control's <c>RippleDeleteSelection</c> — the cross-track cut
@@ -182,6 +201,7 @@ namespace Prisc.UI.VideoEditor.Timeline
                 if (_session != null)
                     _session.VoiceTakeGhostChanged += Session_VoiceTakeGhostChanged;
                 _hoverItemId = Guid.Empty;
+                _linkedOutlines.Invalidate();
                 ClearPreviewCaches();
                 RebuildRows();
             }
@@ -355,8 +375,12 @@ namespace Prisc.UI.VideoEditor.Timeline
 
             var pos = e.GetPosition(this);
 
+            // the chevrons and the gap button are chrome over the clips and the empty space, so a
+            // press that is adding to the selection goes through them to what is underneath
+            var toggling = TimelinePress.IsToggleModifier(e.KeyModifiers, OperatingSystem.IsMacOS());
+
             // the edge-jump chevrons sit over item bodies, so they claim the press first.
-            if (HitJump(pos) is { } jump)
+            if (!toggling && HitJump(pos) is { } jump)
             {
                 var jumpItem = FindItem(jump.ItemId);
                 if (jumpItem != null)
@@ -367,7 +391,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             var hit = HitTestAt(pos);
 
             // the gap overlay's button opens the gap menu; the rest of the gap scrubs as before.
-            if (hit.Kind == TimelineHitKind.Empty && GapAt(pos) is { } gap && GapPillRect(gap)?.Contains(pos) == true)
+            if (!toggling && hit.Kind == TimelineHitKind.Empty && GapAt(pos) is { } gap && GapPillRect(gap)?.Contains(pos) == true)
             {
                 _contextItemId = Guid.Empty;
                 _contextGap = gap;
@@ -377,12 +401,35 @@ namespace Prisc.UI.VideoEditor.Timeline
                 return;
             }
 
-            switch (hit.Kind)
+            var target = hit.Kind switch
             {
-                case TimelineHitKind.Empty:
-                case TimelineHitKind.Ruler: // unreachable (the ruler is a sibling), kept for the shared hit enum
-                    _session.ClearSelection();
+                TimelineHitKind.ItemBody => TimelinePressTarget.ClipBody,
+                TimelineHitKind.ItemStart or TimelineHitKind.ItemEnd => TimelinePressTarget.ClipEdge,
+                _ => TimelinePressTarget.Empty,
+            };
+            var item = target == TimelinePressTarget.Empty ? null : FindItem(hit.ItemId);
+            if (target != TimelinePressTarget.Empty && item == null)
+                return;
 
+            var press = TimelinePress.Decide(target, item != null && _session.IsSelected(item.Id),
+                _session.SelectedItemIds.Count, e.KeyModifiers, OperatingSystem.IsMacOS());
+
+            switch (press.Selection)
+            {
+                case TimelinePressSelection.Clear:
+                    _session.ClearSelection();
+                    break;
+                case TimelinePressSelection.Replace:
+                    _session.Select(item.Id);
+                    break;
+                case TimelinePressSelection.Toggle:
+                    _session.ToggleSelected(item.Id);
+                    break;
+            }
+
+            switch (press.Drag)
+            {
+                case TimelinePressDrag.Scrub:
                     _dragMode = DragMode.Scrub;
                     _dragPointer = e.Pointer;
                     e.Pointer.Capture(this);
@@ -390,52 +437,25 @@ namespace Prisc.UI.VideoEditor.Timeline
                     Scrubbed?.Invoke(this, _viewport.XToTicksClamped(pos.X));
                     break;
 
-                case TimelineHitKind.ItemBody:
-                {
-                    var item = FindItem(hit.ItemId);
-                    if (item == null)
-                        return;
-
-                    _session.Select(item.Id);
-
-                    // a locked row's body gets selection only. Anything else drags — a grouped
-                    // clip takes its whole group along (TimelineOps.Move is group-scoped), so a
-                    // recording's rows, an import's streams and the cursor/keyboard overlays over
-                    // a screen segment all keep their alignment by moving together; the group is
-                    // painted in its color and counted in the status text while the drag is on.
-                    var track = FindTrack(item.TrackId);
-                    if (track is not { Locked: false })
-                        return;
-
-                    BeginDrag(DragMode.MoveItem, e, item.Id,
-                        _viewport.XToTicks(pos.X) - item.TimelineStartTicks, "Move");
+                case TimelinePressDrag.Move:
+                    BeginDrag(DragMode.MoveItem, e, item.Id, _viewport.XToTicks(pos.X) - item.TimelineStartTicks, "Move", press);
                     break;
-                }
 
-                case TimelineHitKind.ItemStart:
-                case TimelineHitKind.ItemEnd:
+                case TimelinePressDrag.Trim:
                 {
-                    var item = FindItem(hit.ItemId);
-                    if (item == null)
-                        return;
-
-                    _session.Select(item.Id);
-
-                    // per-item trim is sync-safe, so synced items allow it; locked tracks do not.
-                    var track = FindTrack(item.TrackId);
-                    if (track is not { Locked: false })
-                        return;
-
+                    // a trim moves this clip's edge alone, on every kind of row, whatever else is
+                    // selected (growing over grouped overlays re-derives their clocks on release).
                     var isStart = hit.Kind == TimelineHitKind.ItemStart;
                     var edge = isStart ? item.TimelineStartTicks : item.TimelineEndTicks;
                     BeginDrag(isStart ? DragMode.TrimStart : DragMode.TrimEnd, e, item.Id,
-                        _viewport.XToTicks(pos.X) - edge, "Trim");
+                        _viewport.XToTicks(pos.X) - edge, "Trim", press);
                     break;
                 }
             }
         }
 
-        private void BeginDrag(DragMode mode, PointerPressedEventArgs e, Guid itemId, long grabOffsetTicks, string label)
+        private void BeginDrag(DragMode mode, PointerPressedEventArgs e, Guid itemId, long grabOffsetTicks, string label,
+            TimelinePressDecision press)
         {
             // a second pointer (touch/pen) can land here while another control's drag (the
             // preview gizmo) owns the session; gestures do not nest, so this press stays
@@ -446,27 +466,24 @@ namespace Prisc.UI.VideoEditor.Timeline
             // a tip standing over the clip the drag is about to move would follow nothing.
             ShowAiTip(false);
 
-            _gesture = _session.BeginGesture(label, this);
+            _gesture = _linkedOutlines.BeginGesture(_session, label, this);
             _dragMode = mode;
             _dragItemId = itemId;
             _grabOffsetTicks = grabOffsetTicks;
             _dragPointer = e.Pointer;
+            _pressX = e.GetPosition(this).X;
+            _dragEngaged = false;
+            _press = press;
+            _keepSnapUntilAltUp = press.KeepSnapUntilAltUp;
             e.Pointer.Capture(this);
 
             if (mode == DragMode.MoveItem)
             {
                 Cursor = DragCursors.Grabbing;
 
-                var item = FindItem(itemId);
-                if (item?.GroupId is Guid group)
-                {
-                    var members = _session.Project.Items.Where(i => i.GroupId == group).Select(i => i.Id).ToHashSet();
-                    if (members.Count > 1)
-                    {
-                        _dragGroupIds = members;
-                        GroupDragChanged?.Invoke(this, members.Count);
-                    }
-                }
+                var selection = _session.SelectedItemIds;
+                _dragMoveIds = TimelinePress.MoveSet(_session.Project, selection, press.MoveSelectionOnly);
+                _dragMoveStatus = TimelineViewMath.MoveStatus(_dragMoveIds.Count, selection.Count, press.MoveSelectionOnly);
             }
         }
 
@@ -481,19 +498,28 @@ namespace Prisc.UI.VideoEditor.Timeline
                 return;
             }
 
-            switch (_dragMode)
+            if (_dragMode == DragMode.Scrub)
             {
-                case DragMode.Scrub:
-                    Scrubbed?.Invoke(this, _viewport.XToTicksClamped(pos.X));
-                    break;
-                case DragMode.MoveItem:
-                    ApplyMove(pos.X, e.KeyModifiers);
-                    break;
-                case DragMode.TrimStart:
-                case DragMode.TrimEnd:
-                    ApplyTrim(pos.X, e.KeyModifiers);
-                    break;
+                Scrubbed?.Invoke(this, _viewport.XToTicksClamped(pos.X));
+                return;
             }
+
+            var bypassSnap = TimelinePress.BypassesSnap(e.KeyModifiers.HasFlag(KeyModifiers.Alt), ref _keepSnapUntilAltUp);
+            var isMove = _dragMode == DragMode.MoveItem;
+            if (!_dragEngaged)
+            {
+                if (!TimelinePress.Engages(_press.Drag, pos.X - _pressX))
+                    return;
+
+                _dragEngaged = true;
+                if (isMove)
+                    StatusChanged?.Invoke(this, _dragMoveStatus);
+            }
+
+            if (isMove)
+                ApplyMove(pos.X, bypassSnap);
+            else
+                ApplyTrim(pos.X, bypassSnap);
         }
 
         protected override void OnPointerReleased(PointerReleasedEventArgs e)
@@ -506,8 +532,11 @@ namespace Prisc.UI.VideoEditor.Timeline
             var mode = _dragMode;
             var pos = e.GetPosition(this);
             var ticks = _viewport.XToTicksClamped(pos.X);
+            var collapseTo = TimelinePress.CollapsesOnRelease(_press, _dragEngaged) ? _dragItemId : (Guid?)null;
             FinishDrag(commit: true); // before Capture(null): it re-enters OnPointerCaptureLost
             e.Pointer.Capture(null);
+            if (collapseTo != null)
+                _session.Select(collapseTo);
             UpdateHover(pos); // restore the grab/resize cursor for whatever is under the release
 
             if (mode == DragMode.Scrub)
@@ -557,6 +586,15 @@ namespace Prisc.UI.VideoEditor.Timeline
             }
         }
 
+        protected override void OnKeyUp(KeyEventArgs e)
+        {
+            base.OnKeyUp(e);
+
+            // Alt can go up and down again between pointer moves, and that still counts as released
+            if (_dragMode != DragMode.None)
+                TimelinePress.BypassesSnap(e.KeyModifiers.HasFlag(KeyModifiers.Alt), ref _keepSnapUntilAltUp);
+        }
+
         /// <summary>Ends the drag. Commit pushes one undo entry for the whole gesture (none when
         /// nothing net-changed — a no-op drag costs nothing); cancel restores the pre-drag
         /// project.</summary>
@@ -574,11 +612,16 @@ namespace Prisc.UI.VideoEditor.Timeline
             if (mode == DragMode.MoveItem)
                 Cursor = null;
 
-            if (_dragGroupIds != null)
+            if (_dragMoveIds != null)
             {
-                _dragGroupIds = null;
-                GroupDragChanged?.Invoke(this, 0);
+                _dragMoveIds = null;
+                if (_dragEngaged)
+                    StatusChanged?.Invoke(this, null);
             }
+
+            _dragEngaged = false;
+            _press = default;
+            _keepSnapUntilAltUp = false;
 
             if (gesture != null)
             {
@@ -601,7 +644,7 @@ namespace Prisc.UI.VideoEditor.Timeline
                 _viewport.SetDuration(reach);
             }
 
-            InvalidateVisual();
+            InvalidateLinkedClips();
         }
 
         private void CancelDrag()
@@ -611,7 +654,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             pointer?.Capture(null);
         }
 
-        private void ApplyMove(double x, KeyModifiers modifiers)
+        private void ApplyMove(double x, bool bypassSnap)
         {
             var item = FindItem(_dragItemId);
             if (item == null)
@@ -623,10 +666,10 @@ namespace Prisc.UI.VideoEditor.Timeline
             var desired = Math.Max(0, _viewport.XToTicks(x) - _grabOffsetTicks);
             long? guide = null;
 
-            if (SnapEnabled && !modifiers.HasFlag(KeyModifiers.Alt))
+            if (SnapEnabled && !bypassSnap)
             {
                 // both edges of the dragged item reach for targets; the nearer snap wins.
-                var targets = BuildSnapTargets(item.Id);
+                var targets = BuildSnapTargets(_dragMoveIds);
                 var tolerance = _viewport.ToleranceTicks;
                 var snapStart = TimelineViewMath.Snap(desired, targets, tolerance);
                 var snapEnd = TimelineViewMath.Snap(desired + item.DurationTicks, targets, tolerance);
@@ -648,7 +691,7 @@ namespace Prisc.UI.VideoEditor.Timeline
 
             var delta = desired - item.TimelineStartTicks;
             if (delta != 0)
-                _session.MoveItem(item.Id, delta, this);
+                _session.MoveItems(_dragMoveIds, delta, this);
 
             // the move may have been clamped or rolled back (an occupied span) — only show the
             // guide when an edge actually landed on it.
@@ -659,7 +702,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             SetSnapGuide(guide);
         }
 
-        private void ApplyTrim(double x, KeyModifiers modifiers)
+        private void ApplyTrim(double x, bool bypassSnap)
         {
             var item = FindItem(_dragItemId);
             if (item == null)
@@ -671,9 +714,9 @@ namespace Prisc.UI.VideoEditor.Timeline
             var desired = _viewport.XToTicks(x) - _grabOffsetTicks;
             long? guide = null;
 
-            if (SnapEnabled && !modifiers.HasFlag(KeyModifiers.Alt))
+            if (SnapEnabled && !bypassSnap)
             {
-                var snapped = TimelineViewMath.Snap(desired, BuildSnapTargets(item.Id), _viewport.ToleranceTicks);
+                var snapped = TimelineViewMath.Snap(desired, BuildSnapTargets(new[] { item.Id }), _viewport.ToleranceTicks);
                 if (snapped != null)
                 {
                     desired = snapped.Value;
@@ -700,33 +743,9 @@ namespace Prisc.UI.VideoEditor.Timeline
             SetSnapGuide(guide != null && edge == guide ? guide : null);
         }
 
-        /// <summary>Snap targets in tie-break order: the origin, the playhead, then every other
-        /// item's edges (see <see cref="TimelineViewMath.Snap"/> — ties go to the earlier entry).</summary>
-        private List<long> BuildSnapTargets(Guid excludeItemId)
-        {
-            var targets = new List<long>
-            {
-                0,
-                Math.Clamp(_positionTicks, 0, Math.Max(0, _viewport.DurationTicks)),
-            };
-
-            var project = _session?.Project;
-            if (project != null)
-            {
-                foreach (var other in project.Items)
-                {
-                    // the dragged item's own edges are no target, and neither are those of the
-                    // group moving with it — they travel, so snapping to them would chase itself.
-                    if (other.Id == excludeItemId || _dragGroupIds?.Contains(other.Id) == true)
-                        continue;
-
-                    targets.Add(other.TimelineStartTicks);
-                    targets.Add(other.TimelineEndTicks);
-                }
-            }
-
-            return targets;
-        }
+        private List<long> BuildSnapTargets(IEnumerable<Guid> moving) =>
+            TimelineViewMath.SnapTargets(_session?.Project,
+                Math.Clamp(_positionTicks, 0, Math.Max(0, _viewport.DurationTicks)), moving);
 
         private void SetSnapGuide(long? ticks)
         {
@@ -780,25 +799,14 @@ namespace Prisc.UI.VideoEditor.Timeline
             {
                 case TimelineHitKind.ItemStart:
                 case TimelineHitKind.ItemEnd:
-                {
-                    var track = TrackOfItem(hit.ItemId);
-                    Cursor = track is { Locked: false }
-                        ? (_cursorResize ??= new Cursor(StandardCursorType.SizeWestEast))
-                        : null;
+                    Cursor = _cursorResize ??= new Cursor(StandardCursorType.SizeWestEast);
                     break;
-                }
 
                 case TimelineHitKind.ItemBody:
-                {
-                    var item = FindItem(hit.ItemId);
-                    var track = item == null ? null : FindTrack(item.TrackId);
-                    var movable = item != null && track is { Locked: false };
-                    // Arrow (not the grab hand) on a locked body: no move affordance IS the cue.
-                    // Grouped bodies keep it — the group moves as one. Grab (not the pointing
-                    // Hand — that one belongs to the edge-jump chevrons) says "this drags".
-                    Cursor = movable ? DragCursors.Grab : null;
+                    // Grab (not the pointing Hand, which belongs to the edge-jump chevrons) says
+                    // "this drags"; the outline on linked clips says what comes along.
+                    Cursor = DragCursors.Grab;
                     break;
-                }
 
                 default:
                     Cursor = null;
@@ -808,8 +816,9 @@ namespace Prisc.UI.VideoEditor.Timeline
 
         // ------------------------------------------------------------------------- context menu
 
-        /// <summary>Right-press: selects the item under the pointer (the menu acts on the
-        /// selection, so what it will do has to be visible before it opens) and remembers it for
+        /// <summary>Right-press: an unselected item under the pointer becomes the selection, while a
+        /// selected one keeps the set (the menu acts on the selection, so what it will do has to be
+        /// visible before it opens), and remembers it for
         /// <see cref="ContextMenu_Opening"/>, which builds the entries from it. The instant the
         /// pointer was over is remembered too — <c>Opening</c> is handed a bare
         /// <see cref="CancelEventArgs"/> with no pointer in it, and this is the only place the
@@ -820,6 +829,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             _contextItemId = Guid.Empty;
             _contextTicks = 0;
             _contextGap = null;
+            _contextEmptySpace = false;
             if (_session == null || _dragMode != DragMode.None || _session.IsGestureActive)
                 return;
 
@@ -828,6 +838,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             {
                 // a right-click anywhere in a gap opens the same menu its button does
                 _contextGap = GapAt(pos);
+                _contextEmptySpace = _contextGap == null;
                 return;
             }
 
@@ -840,19 +851,21 @@ namespace Prisc.UI.VideoEditor.Timeline
 
             _contextItemId = item.Id;
             _contextTicks = _viewport.XToTicksClamped(pos.X);
-            _session.Select(item.Id);
+            if (!_session.IsSelected(item.Id))
+                _session.Select(item.Id);
         }
 
         private void ContextMenu_Opening(object sender, CancelEventArgs e)
         {
-            // empty rows and the ruler gutter have nothing to offer — no menu at all beats an
+            // nothing on offer, like empty space with nothing copied: no menu at all beats an
             // all-disabled one.
             if (!PopulateMenu((ContextMenu)sender))
                 e.Cancel = true;
         }
 
-        /// <summary>Fills the menu for what the pending press landed on — a clip, or a gap on a
-        /// video/audio row. Returns false when it landed on neither. Called from
+        /// <summary>Fills the menu for what the pending press landed on — a clip, a gap on a
+        /// video/audio row, or empty space when there is something to paste there. Returns false
+        /// when it has nothing to offer. Called from
         /// <see cref="ContextMenu_Opening"/> and directly before the gap button opens the menu by
         /// hand, so both ways in build the same entries.</summary>
         private bool PopulateMenu(ContextMenu menu)
@@ -863,68 +876,96 @@ namespace Prisc.UI.VideoEditor.Timeline
             if (_contextGap is { } gap)
                 return PopulateGapMenu(menu, gap);
 
+            if (_contextEmptySpace)
+            {
+                if (!_session.CanPaste)
+                    return false;
+
+                menu.Items.Clear();
+                menu.Items.Add(NewPasteAtPlayheadItem());
+                return true;
+            }
+
             var item = _contextItemId == Guid.Empty ? null : FindItem(_contextItemId);
-            var track = item == null ? null : FindTrack(item.TrackId);
-            if (item == null || track == null)
+            var track = _session.Project.TrackOf(item);
+            if (track == null)
                 return false;
 
             menu.Items.Clear();
 
+            var isMacOS = OperatingSystem.IsMacOS();
+
             // Both cuts act on THIS clip alone — not its recording, not the rows beside it. The
             // pointer picked one clip out; cutting its neighbors too would be an edit nobody
-            // asked for. The toolbar's "Split every track at playhead" is the other gesture.
-            // Splitting is only meaningful strictly inside the span: on an edge it would make a
-            // zero-length half, which TimelineOps refuses anyway.
+            // asked for. Splitting is only meaningful strictly inside the span: on an edge it would
+            // make a zero-length half, which TimelineOps refuses anyway.
+            var splitTip = TimelineViewMath.SplitClipTip(isMacOS);
             var itemId = item.Id;
-            var playhead = Math.Clamp(_positionTicks, 0, Math.Max(0, _viewport.DurationTicks));
+            var playhead = PlayheadTicks;
             menu.Items.Add(NewMenuItem("Split at Playhead",
-                !track.Locked && playhead > item.TimelineStartTicks && playhead < item.TimelineEndTicks,
-                () => _session.SplitItemAt(itemId, playhead, this)));
+                playhead > item.TimelineStartTicks && playhead < item.TimelineEndTicks,
+                () => _session.SplitItemAt(itemId, playhead, this), tip: splitTip));
 
             // …and the same cut where the user actually right-clicked, which is usually the frame
             // they were looking at.
             var cursorTicks = _contextTicks;
             menu.Items.Add(NewMenuItem("Split at Cursor",
-                !track.Locked && cursorTicks > item.TimelineStartTicks && cursorTicks < item.TimelineEndTicks,
-                () => _session.SplitItemAt(itemId, cursorTicks, this)));
+                cursorTicks > item.TimelineStartTicks && cursorTicks < item.TimelineEndTicks,
+                () => _session.SplitItemAt(itemId, cursorTicks, this), tip: splitTip));
 
-            menu.Items.Add(NewMenuItem("Copy", _session.CanCopyItem(itemId), () => _session.CopyItem(itemId)));
+            // from here to the row commands, the entries act on the selection, not the clicked clip
+            var selectionCount = _session.SelectedItemIds.Count;
+            var soleSelected = _session.SoleSelectedItem;
 
-            menu.Items.Add(NewMenuItem("Delete", !track.Locked, () => DeleteSelection?.Invoke()));
+            menu.Items.Add(new Separator());
+            menu.Items.Add(NewMenuItem(TimelineViewMath.ClipCountLabel("Cut", selectionCount), _session.CanCut,
+                () => _session.CutItems(_session.SelectedItemIds, this), gesture: CutGesture));
+            menu.Items.Add(NewMenuItem(TimelineViewMath.ClipCountLabel("Copy", selectionCount), true,
+                () => _session.CopyItems(_session.SelectedItemIds), gesture: CopyGesture));
+            menu.Items.Add(NewPasteAtPlayheadItem());
+
+            menu.Items.Add(NewMenuItem(TimelineViewMath.ClipCountLabel("Delete", selectionCount), true,
+                () => DeleteSelection?.Invoke(), gesture: new SimpleKeyGesture(Key.Delete)));
 
             // the cross-track cut: this clip's span removed from its whole recording and the gap
             // closed on every row. Named for what it does to the rest of the timeline, because
             // that is exactly what plain Delete no longer touches.
-            menu.Items.Add(NewMenuItem("Ripple Delete", !track.Locked,
-                () => RippleDeleteSelection?.Invoke()));
+            menu.Items.Add(NewMenuItem("Ripple Delete", soleSelected != null && _session.CanRippleDeleteItem(soleSelected.Id),
+                () => RippleDeleteSelection?.Invoke(),
+                soleSelected == null
+                    ? "Ripple Delete works on one clip at a time."
+                    : "Closing this time would run a clip on another track into its neighbour."));
+
+            menu.Items.Add(NewMenuItem("Select Linked Clips", _session.HasLinkedClips, _session.SelectLinkedClips));
 
             var trackId = track.Id;
 
-            // Z order. Row-level like Ungroup below — the whole row moves, because stacking is a
-            // property of the row and not of one clip on it. The timeline draws video rows highest
-            // layer first, so moving up the panel and moving towards the viewer are the same
-            // direction (see TimelineRowLayout.Build).
+            // Z order. Row-level like the group commands below — the whole row moves, because
+            // stacking is a property of the row and not of one clip on it. The timeline draws video
+            // rows highest layer first, so moving up the panel and moving towards the viewer are the
+            // same direction (see TimelineRowLayout.Build).
             if (track.Kind != TrackKind.Audio)
             {
                 menu.Items.Add(new Separator());
                 menu.Items.Add(NewMenuItem("Move Up",
-                    !track.Locked && _session.CanMoveTrackLayer(trackId, towardsFront: true),
+                    _session.CanMoveTrackLayer(trackId, towardsFront: true),
                     () => _session.MoveTrackLayer(trackId, towardsFront: true, this)));
                 menu.Items.Add(NewMenuItem("Move Down",
-                    !track.Locked && _session.CanMoveTrackLayer(trackId, towardsFront: false),
+                    _session.CanMoveTrackLayer(trackId, towardsFront: false),
                     () => _session.MoveTrackLayer(trackId, towardsFront: false, this)));
             }
 
-            // ungrouping is a row-level action (it is the header's group toggle), offered here
-            // because that toggle is easy to miss and this is where the sync is felt: a synced
-            // item has no move affordance. Never offered on a cursor/keyboard row: those read the
-            // recording's input capture at the recording's own times, so their sync is not a
-            // toggle and the session refuses to take it off (EditorSession.UngroupTrack).
-            if (!IsInputOverlayRow(trackId) &&
-                _session.Project.Items.Any(i => i.TrackId == trackId && i.GroupId != null))
+            menu.Items.Add(new Separator());
+            var rows = _session.SelectedTrackIds;
+            menu.Items.Add(NewMenuItem("Group Tracks", _session.CanGroupTracks(rows),
+                () => _session.GroupTracks(rows, this), gesture: GroupGesture));
+
+            if (_session.CanUngroupTracks(rows))
             {
-                menu.Items.Add(new Separator());
-                menu.Items.Add(NewMenuItem("Ungroup Row", true, () => _session.UngroupTrack(trackId, this)));
+                var grouped = rows.Count(id => FindTrack(id)?.GroupId != null);
+                menu.Items.Add(NewMenuItem(TimelineViewMath.UngroupLabel(grouped), true,
+                    () => _session.UngroupTracks(rows, this), gesture: UngroupGesture));
+                menu.Items.Add(NewMenuItem("Ungroup All", true, () => _session.UngroupAll(rows, this)));
             }
 
             return true;
@@ -933,9 +974,9 @@ namespace Prisc.UI.VideoEditor.Timeline
         /// <summary>
         /// The gap menu: close the gap on this row, or across the whole timeline; fill it from a
         /// neighbor (a held frame on a video row, or the neighbor's own trimmed-off material); or
-        /// paste the copied clip into it. The closes are always listed — Close Gap greyed out
-        /// when the shift would collide — while a fill is listed only when its neighbor can
-        /// supply it, so the menu never offers a fill that cannot happen.
+        /// paste what was copied. The closes are always listed — Close Gap greyed out, with the
+        /// reason, when another row of the group has a clip in the gap — while a fill is listed only
+        /// when its neighbor can supply it, so the menu never offers a fill that cannot happen.
         /// </summary>
         private bool PopulateGapMenu(ContextMenu menu, TimelineGap gap)
         {
@@ -944,7 +985,8 @@ namespace Prisc.UI.VideoEditor.Timeline
                 return false;
 
             menu.Items.Clear();
-            menu.Items.Add(NewMenuItem("Close Gap", _session.CanCloseGap(gap), () => _session.CloseGap(gap, this)));
+            menu.Items.Add(NewMenuItem("Close Gap", _session.CanCloseGap(gap), () => _session.CloseGap(gap, this),
+                "Another track in this group has a clip in this gap. Ripple Close Gap removes this time from every track."));
             menu.Items.Add(NewMenuItem("Ripple Close Gap (All Tracks)", true,
                 () => _session.RippleCloseGap(gap, this)));
 
@@ -968,12 +1010,24 @@ namespace Prisc.UI.VideoEditor.Timeline
                     menu.Items.Add(fill);
             }
 
+            var clipboard = _session.ClipboardSize;
             menu.Items.Add(new Separator());
-            menu.Items.Add(NewMenuItem("Paste", _session.CanPasteIntoGap(gap), () => _session.PasteIntoGap(gap, this)));
+            menu.Items.Add(NewMenuItem(TimelineViewMath.GapPasteLabel(clipboard.Clips, clipboard.Rows),
+                _session.CanPasteIntoGap(gap), () => _session.PasteIntoGap(gap, this),
+                tip: TimelineViewMath.GapPasteTip(clipboard.Rows)));
             return true;
         }
 
-        /// <summary>The gap under the pointer on an unlocked video or audio row, or null. Other
+        private long PlayheadTicks => Math.Clamp(_positionTicks, 0, Math.Max(0, _viewport.DurationTicks));
+
+        private MenuItem NewPasteAtPlayheadItem()
+        {
+            var playhead = PlayheadTicks;
+            return NewMenuItem("Paste at Playhead", _session.CanPaste, () => _session.PasteAt(playhead, this),
+                gesture: PasteGesture);
+        }
+
+        /// <summary>The gap under the pointer on a video or audio row, or null. Other
         /// rows are left alone: on text, effect and input-overlay rows the space between items is
         /// the normal state, and an overlay there would be clutter.</summary>
         private TimelineGap? GapAt(Point pos)
@@ -983,8 +1037,6 @@ namespace Prisc.UI.VideoEditor.Timeline
 
             var row = _rows.FirstOrDefault(r => pos.Y >= r.Top && pos.Y < r.Bottom);
             if (row is not { Kind: TimelineRowKind.Video or TimelineRowKind.Audio })
-                return null;
-            if (FindTrack(row.TrackId) is not { Locked: false })
                 return null;
 
             return _session.FindGap(row.TrackId, _viewport.XToTicks(pos.X));
@@ -1088,9 +1140,34 @@ namespace Prisc.UI.VideoEditor.Timeline
             }, false));
         }
 
-        private static MenuItem NewMenuItem(string header, bool enabled, Action execute)
+        internal static readonly SimpleKeyGesture SplitGesture = new SimpleKeyGesture(Key.K, KeyModifiers.Control);
+        internal static readonly SimpleKeyGesture CutGesture = new SimpleKeyGesture(Key.X, KeyModifiers.Control);
+
+        internal static readonly SimpleKeyGesture CopyGesture = new SimpleKeyGesture(Key.C, KeyModifiers.Control);
+
+        internal static readonly SimpleKeyGesture PasteGesture = new SimpleKeyGesture(Key.V, KeyModifiers.Control);
+
+        internal static readonly SimpleKeyGesture GroupGesture = new SimpleKeyGesture(Key.G, KeyModifiers.Control);
+
+        internal static readonly SimpleKeyGesture UngroupGesture =
+            new SimpleKeyGesture(Key.G, KeyModifiers.Control | KeyModifiers.Shift);
+
+        /// <param name="disabledTip">Why the entry is greyed out, shown only then.</param>
+        /// <param name="tip">What the entry does, shown when no <paramref name="disabledTip"/> applies.</param>
+        /// <param name="gesture">The shortcut to show beside it. Display only: the window binds the keys.</param>
+        private static MenuItem NewMenuItem(string header, bool enabled, Action execute, string disabledTip = null,
+            string tip = null, SimpleKeyGesture gesture = null)
         {
             var menuItem = new MenuItem { Header = header, IsEnabled = enabled };
+            if (gesture != null)
+                menuItem.InputGesture = gesture.ForApp().ToKeyGesture();
+
+            if ((enabled ? tip : disabledTip ?? tip) is { } shownTip)
+            {
+                ToolTip.SetTip(menuItem, shownTip);
+                ToolTip.SetShowOnDisabled(menuItem, true);
+            }
+
             menuItem.Click += (_, _) => execute();
             return menuItem;
         }
@@ -1113,41 +1190,20 @@ namespace Prisc.UI.VideoEditor.Timeline
                     if (item.TrackId != row.TrackId)
                         continue;
 
-                    var x = _viewport.TickToX(item.TimelineStartTicks);
-                    var w = Math.Max(1, item.DurationTicks / _viewport.TicksPerPixel);
-                    if (x > Bounds.Width + OffscreenSlackPx || x + w < -OffscreenSlackPx)
+                    var rect = TimelineHitTester.ItemRect(item, i, row, _viewport.ScrollTicks, _viewport.TicksPerPixel);
+                    if (rect.X > Bounds.Width + OffscreenSlackPx || rect.Right < -OffscreenSlackPx)
                         continue;
 
-                    rects.Add(new TimelineItemRect(item.Id, i, x, w, row.Top, row.Height));
+                    rects.Add(rect);
                 }
             }
 
             return rects;
         }
 
-        /// <summary>Whether the row is one of the recording's input-capture overlays — read off
-        /// the laid-out rows (the layout already classified them by content), which is the same
-        /// answer the header panel and the session's refusals give.</summary>
-        private bool IsInputOverlayRow(Guid trackId)
-        {
-            foreach (var row in _rows)
-            {
-                if (row.TrackId == trackId)
-                    return TimelineRowLayout.IsInputOverlay(row.Kind);
-            }
-
-            return false;
-        }
-
         private Item FindItem(Guid id) => _session?.Project.Items.FirstOrDefault(i => i.Id == id);
 
         private Track FindTrack(Guid trackId) => _session?.Project.Tracks.FirstOrDefault(t => t.Id == trackId);
-
-        private Track TrackOfItem(Guid itemId)
-        {
-            var item = FindItem(itemId);
-            return item == null ? null : FindTrack(item.TrackId);
-        }
 
         /// <summary>Whether the item is drawn or mixed through a model: the track's speech
         /// enhancer (audio, where the toggle is track-wide) or an effect that consumes the person
@@ -1169,24 +1225,16 @@ namespace Prisc.UI.VideoEditor.Timeline
             if (project == null)
                 return;
 
-            // a screen row and the overlays glued above it read as one combined track: one band
-            // of background, one separator under the whole block (the header panel draws them the
-            // same way)
-            var band = 0;
             for (var i = 0; i < _rows.Count; i++)
             {
                 var row = _rows[i];
-                var (_, unitEnd) = TimelineReorder.UnitRange(_rows, i);
-                context.FillRectangle(band % 2 == 0 ? palette.RowBackground : palette.RowBackgroundAlt,
+                context.FillRectangle(i % 2 == 0 ? palette.RowBackground : palette.RowBackgroundAlt,
                     new Rect(0, row.Top, Bounds.Width, row.Height));
 
                 // the gutter between two blocks: bare surface, where the drag cannot go
                 if (i > 0 && _rows[i - 1].Bottom < row.Top)
                     palette.DrawBlockGap(context,
                         new Rect(0, _rows[i - 1].Bottom, Bounds.Width, row.Top - _rows[i - 1].Bottom));
-
-                if (i != unitEnd)
-                    continue;
 
                 // the rule sits between two rows of one block: none under the block's last row
                 // (the gutter, or the end of the rows, already separates it — a rule there and
@@ -1195,7 +1243,6 @@ namespace Prisc.UI.VideoEditor.Timeline
                 if (!lastInBlock)
                     context.DrawLine(palette.RowSeparatorPen,
                         new Point(0, row.Bottom - 0.5), new Point(Bounds.Width, row.Bottom - 0.5));
-                band++;
             }
 
             // past the end of the project the rows stop — but a row band painted to the right
@@ -1209,7 +1256,6 @@ namespace Prisc.UI.VideoEditor.Timeline
                 palette.DrawBlockGap(context,
                     new Rect(Math.Max(0, endX), 0, Bounds.Width - Math.Max(0, endX), Bounds.Height));
 
-            var selection = _session.SelectedItemIds;
             for (var i = 0; i < _rows.Count; i++)
             {
                 var row = _rows[i];
@@ -1222,13 +1268,12 @@ namespace Prisc.UI.VideoEditor.Timeline
                     if (item.TrackId != row.TrackId)
                         continue;
 
-                    var x = _viewport.TickToX(item.TimelineStartTicks);
-                    var w = Math.Max(1, item.DurationTicks / _viewport.TicksPerPixel);
-                    if (x > Bounds.Width + OffscreenSlackPx || x + w < -OffscreenSlackPx)
+                    var rect = TimelineHitTester.ItemRect(item, i, row, _viewport.ScrollTicks, _viewport.TicksPerPixel);
+                    if (rect.X > Bounds.Width + OffscreenSlackPx || rect.Right < -OffscreenSlackPx)
                         continue;
 
-                    var body = new Rect(x, row.Top + ItemPadY, w, Math.Max(1, row.Height - ItemPadY * 2));
-                    RenderItem(context, palette, project, track, row, item, body, selection.Contains(item.Id),
+                    var body = new Rect(rect.X, row.Top + ItemPadY, rect.Width, Math.Max(1, row.Height - ItemPadY * 2));
+                    RenderItem(context, palette, project, track, row, item, body, _session.IsSelected(item.Id),
                         evenRow: i % 2 == 0);
                 }
             }
@@ -1386,10 +1431,10 @@ namespace Prisc.UI.VideoEditor.Timeline
                     RenderBackgroundMesh(context, background, body);
                     break;
                 case CursorContent cursor:
-                    RenderCursorActivity(context, palette, project, item, cursor, body);
+                    RenderCursorActivity(context, palette, item, cursor, body);
                     break;
                 case KeyboardContent keyboard:
-                    RenderKeyBlips(context, palette, project, item, keyboard, body);
+                    RenderKeyBlips(context, palette, item, keyboard, body);
                     break;
             }
 
@@ -1466,21 +1511,18 @@ namespace Prisc.UI.VideoEditor.Timeline
                 context.DrawRectangle(palette.DimFill, null, body, ItemCornerRadius, ItemCornerRadius);
                 RenderHatch(context, palette.HatchPen, body);
             }
-
-            if (track.Locked && body.Width > GlyphSize * 2)
+            else if (item.Content is CursorContent)
             {
-                DrawGlyph(context, TimelineIcons.Find("IconLock"), palette.ItemLabelBrush,
-                    new Point(body.Right - GlyphSize - 4, body.Y + 2), GlyphSize * 0.85);
+                RenderHostlessSpans(context, palette, project, item, body);
             }
 
             var hovered = _hoverItemId == item.Id;
             if (hovered && !selected)
                 context.DrawRectangle(palette.HoverOverlay, null, body, ItemCornerRadius, ItemCornerRadius);
 
-            // a group on the move is painted in the group color, the dragged clip included, so
-            // every clip travelling with the pointer reads as one thing — the same orange as the
-            // headers' group badge, which is what the cue refers back to.
-            if (_dragGroupIds?.Contains(item.Id) == true)
+            // several clips on the move are painted alike, the dragged clip included, so every clip
+            // travelling with the pointer reads as one thing, whichever groups brought them.
+            if (_dragEngaged && _dragMoveIds is { Count: > 1 } && _dragMoveIds.Contains(item.Id))
             {
                 context.DrawRectangle(palette.GroupDragFill, null, body, ItemCornerRadius, ItemCornerRadius);
                 context.DrawRectangle(null, palette.GroupDragPen, body.Deflate(0.75), ItemCornerRadius, ItemCornerRadius);
@@ -1489,9 +1531,22 @@ namespace Prisc.UI.VideoEditor.Timeline
             {
                 context.DrawRectangle(null, palette.SelectionPen, body.Deflate(0.75), ItemCornerRadius, ItemCornerRadius);
             }
+            else if (_linkedOutlines.Clips(_session).Contains(item.Id) && track.GroupId is Guid group)
+            {
+                context.DrawRectangle(null, palette.LinkedClipPen(_linkedOutlines.GroupNumbers.GetValueOrDefault(group)),
+                    body.Deflate(0.5), ItemCornerRadius, ItemCornerRadius);
+            }
 
             if ((selected || hovered) && body.Width >= TimelineHitTester.MinEdgeGrabWidth)
                 RenderTrimHandles(context, palette, body, selected);
+        }
+
+        /// <summary>The selection or the project changed, so the linked outlines may have too. The
+        /// parent control calls this; it also repaints.</summary>
+        public void InvalidateLinkedClips()
+        {
+            _linkedOutlines.Invalidate();
+            InvalidateVisual();
         }
 
         /// <summary>
@@ -1725,7 +1780,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             // so it uses the scaled tick-per-pixel throughout.
             var speed = TimelineOps.SpeedOf(media);
             var tpp = _viewport.TicksPerPixel * speed;
-            var sourceSpan = speed == 1.0 ? item.DurationTicks : (long)Math.Round(item.DurationTicks * speed);
+            var sourceSpan = TimelineOps.ToSourceTicks(item.DurationTicks, speed);
             var naturalSlotPx = Math.Max(8, body.Height * aspect);
             var strip = _previewProvider.GetThumbnails(new ThumbnailRequest(media.SourceId, media.StreamIndex,
                 media.SourceInTicks, sourceSpan, (long)(naturalSlotPx * tpp), (int)Math.Round(body.Height)));
@@ -1854,8 +1909,8 @@ namespace Prisc.UI.VideoEditor.Timeline
             // the peaks are read in SOURCE time: a re-timed item's timeline bucket covers
             // perBucket * speed of source, so bucket i lines up under the same x either way.
             var speed = TimelineOps.SpeedOf(media);
-            var srcDuration = speed == 1.0 ? item.DurationTicks : (long)Math.Round(item.DurationTicks * speed);
-            var srcPerBucket = speed == 1.0 ? perBucket : Math.Max(1L, (long)Math.Round(perBucket * speed));
+            var srcDuration = TimelineOps.ToSourceTicks(item.DurationTicks, speed);
+            var srcPerBucket = Math.Max(1L, TimelineOps.ToSourceTicks(perBucket, speed));
             var peaks = _previewProvider.GetAudioPeaks(new AudioPeaksRequest(media.SourceId,
                 media.StreamIndex, media.SourceInTicks, srcDuration, srcPerBucket));
 
@@ -1880,19 +1935,40 @@ namespace Prisc.UI.VideoEditor.Timeline
                 context.DrawGeometry(palette.WaveformBrush, null, cache.Geometry);
         }
 
+        /// <summary>Dims the parts of a cursor bar with no clip of its recording to draw through,
+        /// where the cursor draws nothing. No hatch: that says the row is hidden, and this one may
+        /// not be.</summary>
+        private static void RenderHostlessSpans(DrawingContext context, TimelinePalette palette, Project project,
+            Item item, Rect body)
+        {
+            var hostless = TimelineViewMath.Uncovered(item.TimelineStartTicks, item.TimelineEndTicks,
+                TimelineOps.CursorHostSpans(project, item));
+            if (hostless.Count == 0)
+                return;
+
+            var pixelsPerTick = body.Width / item.DurationTicks;
+            using (context.PushClip(new RoundedRect(body, ItemCornerRadius)))
+            {
+                foreach (var (start, end) in hostless)
+                    context.FillRectangle(palette.DimFill, new Rect(
+                        body.X + (start - item.TimelineStartTicks) * pixelsPerTick, body.Y,
+                        (end - start) * pixelsPerTick, body.Height));
+            }
+        }
+
         /// <summary>
         /// The cursor row's preview: the pointer's speed as a mirrored envelope (the waveform's
         /// shape, so the two read as one language — "activity") with every press over it as a
-        /// short bar, stretched to cover a drag. Time runs through the hard-synced screen item,
-        /// exactly as the composer places the cursor; with no screen item covering the span the
-        /// composer draws no cursor, and neither does this.
+        /// short bar, stretched to cover a drag. Time runs on the clip's own clock, as the composer
+        /// reads the capture. A clip on a freeze holds one instant, which is no activity to show.
         /// </summary>
-        private void RenderCursorActivity(DrawingContext context, TimelinePalette palette, Project project,
+        private void RenderCursorActivity(DrawingContext context, TimelinePalette palette,
             Item item, CursorContent cursor, Rect body)
         {
-            if (!OverlayTiming.TryResolve(project, item, cursor.SourceId, out var sourceIn, out var speed))
+            if (InputPreviewMath.SpanOf(item, cursor) is not { } span)
                 return;
 
+            var (sourceIn, speed, srcDuration) = span;
             var tpp = _viewport.TicksPerPixel;
             var perBucket = Math.Max((long)Math.Round(tpp), Math.Max(1, item.DurationTicks / MaxWaveformBuckets));
             var bucketCount = (int)Math.Min((item.DurationTicks + perBucket - 1) / perBucket, Int32.MaxValue / 2);
@@ -1905,8 +1981,7 @@ namespace Prisc.UI.VideoEditor.Timeline
                 !cache.Matches(tpp, sourceIn, speed, item.DurationTicks, bucketCount) ||
                 !cache.Complete)
             {
-                var srcDuration = speed == 1.0 ? item.DurationTicks : (long)Math.Round(item.DurationTicks * speed);
-                var srcPerBucket = speed == 1.0 ? perBucket : Math.Max(1L, (long)Math.Round(perBucket * speed));
+                var srcPerBucket = Math.Max(1L, TimelineOps.ToSourceTicks(perBucket, speed));
                 var activity = _previewProvider.GetCursorActivity(new CursorActivityRequest(cursor.SourceId,
                     sourceIn, srcDuration, srcPerBucket));
                 cache = CursorActivityCache.Build(activity, tpp, sourceIn, speed, item.DurationTicks,
@@ -1942,24 +2017,23 @@ namespace Prisc.UI.VideoEditor.Timeline
         /// <summary>
         /// The keys row's preview: one blip per keystroke run (the row the overlay will show),
         /// spanning its first key to its last, with runs that crowd together at the current zoom
-        /// folded into one blip that grows with the count. Time runs through the hard-synced
-        /// screen item; with none the keys fall back to item-relative time, the composer's own
-        /// degrade, so the blips still line up with what plays.
+        /// folded into one blip that grows with the count. Time runs on the clip's own clock, as
+        /// the composer reads the capture, so the blips line up with what plays. A clip on a freeze
+        /// holds one instant, which starts no runs.
         /// </summary>
-        private void RenderKeyBlips(DrawingContext context, TimelinePalette palette, Project project,
+        private void RenderKeyBlips(DrawingContext context, TimelinePalette palette,
             Item item, KeyboardContent keyboard, Rect body)
         {
-            OverlayTiming.TryResolve(project, item, keyboard.SourceId, out var sourceIn, out var speed);
-
             var tpp = _viewport.TicksPerPixel;
-            if (!(tpp > 0))
+            if (InputPreviewMath.SpanOf(item, keyboard) is not { } span || !(tpp > 0))
                 return;
+
+            var (sourceIn, speed, srcDuration) = span;
 
             if (!_keyBlips.TryGetValue(item.Id, out var cache) ||
                 !cache.Matches(tpp, sourceIn, speed, item.DurationTicks, keyboard.PauseBreakMs, keyboard.Filter) ||
                 !cache.Complete)
             {
-                var srcDuration = speed == 1.0 ? item.DurationTicks : (long)Math.Round(item.DurationTicks * speed);
                 var runs = _previewProvider.GetKeyRuns(new KeyRunsRequest(keyboard.SourceId, sourceIn, srcDuration,
                     keyboard.PauseBreakMs, keyboard.Filter));
                 cache = KeyBlipCache.Build(runs, tpp, sourceIn, speed, item.DurationTicks,

@@ -106,7 +106,6 @@ namespace Prisc.UI.VideoEditor.Inspector
             dotKeyFilter.DefaultValue = SelectedItemViewModel.DefaultKeystrokeFilterOption;
 
             btnFont.Click += async (_, _) => await PickFontAsync();
-            btnUngroup.Click += async (_, _) => await ConfirmUngroupAsync();
             colorWell.PointerPressed += (_, e) => OpenColorPicker(e,
                 () => _vm.TextColorHex, hex => _vm.TextColorHex = hex);
             surroundColorWell.PointerPressed += (_, e) => OpenColorPicker(e,
@@ -122,6 +121,7 @@ namespace Prisc.UI.VideoEditor.Inspector
             miniColor.Canceled += (_, _) => colorPopup.IsOpen = false;
 
             DataContextChanged += (_, _) => AttachViewModel(DataContext as SelectedItemViewModel);
+            ActualThemeVariantChanged += (_, _) => RefreshGroupIcon();
         }
 
         protected override void OnAttachedToVisualTree(Avalonia.VisualTreeAttachmentEventArgs e)
@@ -159,6 +159,7 @@ namespace Prisc.UI.VideoEditor.Inspector
             RefreshTransitionDefaults();
             RefreshTransitionKinds();
             RefreshTrackIcons();
+            RefreshGroupIcon();
             RefreshBackgroundThemes();
             RefreshCropWindows();
             RefreshVoiceRecorderDevices();
@@ -198,6 +199,9 @@ namespace Prisc.UI.VideoEditor.Inspector
                 case nameof(SelectedItemViewModel.TrackHidden):
                 case nameof(SelectedItemViewModel.TrackMuted):
                     RefreshTrackIcons();
+                    break;
+                case nameof(SelectedItemViewModel.TrackGroupNumber):
+                    RefreshGroupIcon();
                     break;
             }
         }
@@ -342,6 +346,11 @@ namespace Prisc.UI.VideoEditor.Inspector
             btnMute.IconPath = TimelineIcons.Find(_vm?.TrackMuted == true ? "IconSpeakerDisabled" : "IconSpeakerEnabled");
         }
 
+        /// <summary>The link icon wears its group's color, the one on the timeline's badge and
+        /// outlines.</summary>
+        private void RefreshGroupIcon() =>
+            iconTrackGroup.Fill = TimelinePalette.ForVariant(ActualThemeVariant).GroupBrush(_vm?.TrackGroupNumber ?? 0);
+
         private async System.Threading.Tasks.Task PickFontAsync()
         {
             var vm = _vm;
@@ -371,26 +380,6 @@ namespace Prisc.UI.VideoEditor.Inspector
             miniColor.Reset(current, c => write($"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}"));
             colorPopup.IsOpen = true;
             e.Handled = true;
-        }
-
-        /// <summary>Ungroup is one-way, so it gets a real explanation and a yes/no — not a bare
-        /// button that quietly severs the row from its recording.</summary>
-        private async System.Threading.Tasks.Task ConfirmUngroupAsync()
-        {
-            var vm = _vm;
-            if (vm == null)
-                return;
-
-            var confirmed = await NiceDialog.ShowYesNoPromptAsync(this, NiceDialogIcon.Warning,
-                "This track is grouped with the other tracks from its recording: they move, split " +
-                "and cut together, so they always stay aligned. Ungrouping lets this track move on " +
-                "its own — but it cannot be regrouped, so it can end up permanently out of step " +
-                "with the rest of the recording.",
-                "Ungroup this object?");
-
-            var command = (System.Windows.Input.ICommand)vm.CommandUngroup;
-            if (confirmed && command.CanExecute(null))
-                command.Execute(null);
         }
     }
 }

@@ -7,8 +7,8 @@ namespace Prisc.VideoSDK.Audio
 {
     /// <summary>
     /// The preview path's <see cref="IAudioSource"/>: the repositionable twin of
-    /// <see cref="SequentialAudioSource"/>. Each requested (sourceId, streamIndex) lazily opens its
-    /// own <see cref="SyncAudioStreamDecoder"/>, and the pending-window / gap-silence / anchor
+    /// <see cref="SequentialAudioSource"/>. Each requested (sourceId, streamIndex, lane) lazily opens
+    /// its own <see cref="SyncAudioStreamDecoder"/>, and the pending-window / gap-silence / anchor
     /// bookkeeping is <b>the same logic as the render source</b> — deliberately copied rather than
     /// shared, so the render path keeps a source that provably cannot seek.
     ///
@@ -62,8 +62,8 @@ namespace Prisc.VideoSDK.Audio
 
         private readonly Project _project;
         private readonly int _rate;
-        private readonly Dictionary<(Guid SourceId, int StreamIndex), StreamState> _streams
-            = new Dictionary<(Guid, int), StreamState>();
+        private readonly Dictionary<(Guid SourceId, int StreamIndex, int Lane), StreamState> _streams
+            = new Dictionary<(Guid, int, int), StreamState>();
         private int _decoderOpens;
         private int _repositionCount;
         private bool _disposed;
@@ -107,6 +107,10 @@ namespace Prisc.VideoSDK.Audio
 
         public bool ReadSamples(Guid sourceId, int streamIndex, long sourcePosFrames, float[] dst,
             int frames, out int framesRead)
+            => ReadSamples(sourceId, streamIndex, 0, sourcePosFrames, dst, frames, out framesRead);
+
+        public bool ReadSamples(Guid sourceId, int streamIndex, int lane, long sourcePosFrames, float[] dst,
+            int frames, out int framesRead)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             ArgumentNullException.ThrowIfNull(dst);
@@ -116,7 +120,7 @@ namespace Prisc.VideoSDK.Audio
                 throw new ArgumentOutOfRangeException(nameof(frames),
                     $"{frames} stereo frames do not fit in a buffer of {dst.Length} floats.");
 
-            var key = (sourceId, streamIndex);
+            var key = (sourceId, streamIndex, lane);
             if (!_streams.TryGetValue(key, out var state))
             {
                 state = OpenStream(sourceId, streamIndex);

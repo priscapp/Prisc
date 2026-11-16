@@ -25,9 +25,9 @@ namespace Prisc.VideoSDK.Tests
         {
             var sourceId = Guid.NewGuid();
             var linkGroup = Guid.NewGuid();
-            var screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0 };
-            var webcamTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Webcam", Order = 1 };
-            var audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 2 };
+            var screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0, GroupId = linkGroup };
+            var webcamTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Webcam", Order = 1, GroupId = linkGroup };
+            var audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 2, GroupId = linkGroup };
 
             Item NewItem(Track track, int streamIndex) => new Item
             {
@@ -36,7 +36,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = 0,
                 DurationTicks = Ms(10_000),
                 Content = new MediaContent { SourceId = sourceId, StreamIndex = streamIndex, SourceInTicks = Ms(2_000) },
-                GroupId = linkGroup,
             };
 
             screen = NewItem(screenTrack, 0);
@@ -136,22 +135,22 @@ namespace Prisc.VideoSDK.Tests
                 Action<EditorSession, Item, Item, Item> Setup,
                 Action<EditorSession, Item, Item, Item> Act)[]
             {
-                ("MoveItem", null, (s, sc, wc, au) => s.MoveItem(sc.Id, Ms(1_000))),
+                ("MoveItems", null, (s, sc, wc, au) => s.MoveLinked(sc.Id, Ms(1_000))),
                 ("TrimItemStart", null, (s, sc, wc, au) => s.TrimItemStart(sc.Id, Ms(500))),
                 ("TrimItemEnd", null, (s, sc, wc, au) => s.TrimItemEnd(sc.Id, -Ms(500))),
-                ("SplitAt", null, (s, sc, wc, au) => Assert.True(s.SplitAt(sc.Id, Ms(4_000)))),
+                ("SplitItemAt", null, (s, sc, wc, au) => Assert.True(s.SplitItemAt(sc.Id, Ms(4_000)))),
                 ("SplitAtPlayhead", null, (s, sc, wc, au) => Assert.True(s.SplitAtPlayhead(Ms(4_000)))),
                 ("RippleDeleteItem", null, (s, sc, wc, au) => s.RippleDeleteItem(sc.Id)),
-                ("DeleteItem", null, (s, sc, wc, au) => s.DeleteItem(wc.Id)),
-                ("UngroupTrack", null, (s, sc, wc, au) => s.UngroupTrack(wc.TrackId)),
-                ("TryRegroupTrack",
-                    (s, sc, wc, au) => s.UngroupTrack(wc.TrackId),
-                    (s, sc, wc, au) => Assert.True(s.TryRegroupTrack(wc.TrackId))),
+                ("DeleteItem", null, (s, sc, wc, au) => s.DeleteItems(new[] { wc.Id })),
+                ("UngroupTrack", null, (s, sc, wc, au) => s.UngroupTracks(new[] { wc.TrackId })),
                 ("SetTrackHidden", null, (s, sc, wc, au) => s.SetTrackHidden(wc.TrackId, true)),
                 ("SetTrackMuted", null, (s, sc, wc, au) => s.SetTrackMuted(au.TrackId, true)),
-                ("SetTrackLocked", null, (s, sc, wc, au) => s.SetTrackLocked(sc.TrackId, true)),
                 ("RenameTrack", null, (s, sc, wc, au) => s.RenameTrack(au.TrackId, "Microphone")),
                 ("EditItem", null, (s, sc, wc, au) => s.EditItem(wc.Id, i => i.Transform.X = 0.8)),
+                ("EditPlacement", null, (s, sc, wc, au) => Assert.True(s.EditPlacement(wc.Id, i => i.Transform.X = 0.8, "x", null))),
+                ("SetTrackPlacementLocked", null, (s, sc, wc, au) => s.SetTrackPlacementLocked(wc.TrackId, true)),
+                ("SetTrackPlacementLocked off", (s, sc, wc, au) => s.SetTrackPlacementLocked(wc.TrackId, true),
+                    (s, sc, wc, au) => s.SetTrackPlacementLocked(wc.TrackId, false)),
                 ("AddText", null, (s, sc, wc, au) => Assert.NotNull(s.AddText(Ms(12_000), Ms(5_000)))),
                 ("AddImage", null, (s, sc, wc, au) => Assert.NotNull(s.AddImage(TestPath.Native(@"C:\media\logo.png"), Ms(12_000), Ms(5_000)))),
                 ("ImportMedia", null, (s, sc, wc, au) => Assert.NotEmpty(s.ImportMedia(TestPath.Native(@"C:\media\clip.mp4"), ClipProbe(), 0))),
@@ -186,7 +185,7 @@ namespace Prisc.VideoSDK.Tests
 
             var original = session.Project;
             var before = session.Project.ToJson();
-            session.MoveItem(screen.Id, Ms(1_000));
+            session.MoveLinked(screen.Id, Ms(1_000));
             var after = session.Project.ToJson();
 
             Assert.True(session.CanUndo);
@@ -213,11 +212,11 @@ namespace Prisc.VideoSDK.Tests
         {
             var session = NewSession(out var screen, out _, out _, out _);
 
-            session.MoveItem(screen.Id, Ms(1_000));
+            session.MoveLinked(screen.Id, Ms(1_000));
             session.Undo();
             Assert.True(session.CanRedo);
 
-            session.MoveItem(screen.Id, Ms(2_000));
+            session.MoveLinked(screen.Id, Ms(2_000));
             Assert.False(session.CanRedo);
         }
 
@@ -227,7 +226,7 @@ namespace Prisc.VideoSDK.Tests
             var session = NewSession(out var screen, out _, out _, out _);
 
             for (var i = 0; i < 105; i++)
-                session.MoveItem(screen.Id, Ms(10));
+                session.MoveLinked(screen.Id, Ms(10));
 
             var undos = 0;
             while (session.CanUndo)
@@ -252,7 +251,7 @@ namespace Prisc.VideoSDK.Tests
             session.ProjectChanged += (_, _) => projectEvents++;
             session.HistoryChanged += (_, _) => historyEvents++;
 
-            Assert.Equal(0, session.MoveItem(screen.Id, 0));
+            Assert.Equal(0, session.MoveLinked(screen.Id, 0));
             session.SetTrackHidden(screen.TrackId, false); // already visible
 
             Assert.False(session.CanUndo);
@@ -441,6 +440,26 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(3, Track(session, audio.TrackId).Order);     // …which still sits above the video rows
         }
 
+        /// <summary>A duplicated row is independent of the recording it was copied from: left in
+        /// the group, every group move and split would apply to it as well.</summary>
+        [Fact]
+        public void DuplicateTrack_leaves_the_copy_out_of_the_original_group()
+        {
+            var session = NewSession(out var screen, out var webcam, out _, out _);
+            var group = Track(session, screen.TrackId).GroupId;
+            Assert.NotNull(group);
+
+            Assert.True(session.DuplicateTrack(screen.TrackId));
+
+            var copy = session.Project.Items.Single(i => i.TrackId != screen.TrackId
+                && session.Project.Tracks.First(t => t.Id == i.TrackId).Name == "Screen copy");
+            Assert.Null(Track(session, copy.TrackId).GroupId);
+            Assert.Equal(group, Track(session, screen.TrackId).GroupId);
+
+            session.MoveLinked(webcam.Id, Ms(1_000));
+            Assert.Equal(0, session.Project.Items.Single(i => i.Id == copy.Id).TimelineStartTicks);
+        }
+
         /// <summary>A new card goes in front of everything, and a second one at a free time reuses
         /// that same row rather than stacking up a new one.</summary>
         [Fact]
@@ -480,10 +499,10 @@ namespace Prisc.VideoSDK.Tests
             var seen = new List<(ProjectChangeKind Kind, object Origin)>();
             session.ProjectChanged += (_, e) => seen.Add((e.Kind, e.Origin));
 
-            session.MoveItem(screen.Id, Ms(1_000), origin);
+            session.MoveLinked(screen.Id, Ms(1_000), origin);
             session.RenameTrack(webcam.TrackId, "Camera");
             session.SetTrackHidden(webcam.TrackId, true);
-            session.DeleteItem(webcam.Id, origin);
+            session.DeleteItems(new[] { webcam.Id }, origin);
 
             Assert.Equal(ProjectChangeKind.Mapping, seen[0].Kind);
             Assert.Same(origin, seen[0].Origin);
@@ -513,7 +532,7 @@ namespace Prisc.VideoSDK.Tests
             using (var gesture = session.BeginGesture("Move"))
             {
                 for (var i = 0; i < 50; i++)
-                    session.MoveItem(screen.Id, Ms(10));
+                    session.MoveLinked(screen.Id, Ms(10));
 
                 Assert.Equal(50, previews);
                 Assert.Equal(0, persist.Writes);
@@ -538,7 +557,7 @@ namespace Prisc.VideoSDK.Tests
             var before = session.Project.ToJson();
 
             var gesture = session.BeginGesture("Move");
-            session.MoveItem(screen.Id, Ms(3_000));
+            session.MoveLinked(screen.Id, Ms(3_000));
             gesture.Cancel();
 
             Assert.Equal(before, session.Project.ToJson());
@@ -547,7 +566,7 @@ namespace Prisc.VideoSDK.Tests
 
             // dispose-without-commit is the exception-safety path and must behave identically.
             using (session.BeginGesture("Move"))
-                session.MoveItem(screen.Id, Ms(3_000));
+                session.MoveLinked(screen.Id, Ms(3_000));
 
             Assert.Equal(before, session.Project.ToJson());
             Assert.False(session.CanUndo);
@@ -561,7 +580,7 @@ namespace Prisc.VideoSDK.Tests
 
             using (var gesture = session.BeginGesture("Move"))
             {
-                session.MoveItem(screen.Id, 0);
+                session.MoveLinked(screen.Id, 0);
                 gesture.Commit();
             }
 
@@ -582,7 +601,7 @@ namespace Prisc.VideoSDK.Tests
 
             using (var gesture = session.BeginGesture("Delete"))
             {
-                session.DeleteItem(webcam.Id);
+                session.DeleteItems(new[] { webcam.Id });
                 gesture.Commit();
             }
 
@@ -753,21 +772,21 @@ namespace Prisc.VideoSDK.Tests
 
             session.Select(screen.Id);
             Assert.Equal(new[] { screen.Id }, session.SelectedItemIds);
-            Assert.Same(screen, session.PrimarySelectedItem);
+            Assert.Same(screen, session.SoleSelectedItem);
             Assert.Equal(1, selectionEvents);
 
             session.Select(screen.Id); // reselecting is a no-op
             Assert.Equal(1, selectionEvents);
 
             // undo replaces the item instances; the selection resolves against the new one.
-            session.MoveItem(screen.Id, Ms(1_000));
+            session.MoveLinked(screen.Id, Ms(1_000));
             session.Undo();
-            Assert.NotSame(screen, session.PrimarySelectedItem);
-            Assert.Equal(screen.Id, session.PrimarySelectedItem.Id);
+            Assert.NotSame(screen, session.SoleSelectedItem);
+            Assert.Equal(screen.Id, session.SoleSelectedItem.Id);
 
             session.ClearSelection();
             Assert.Empty(session.SelectedItemIds);
-            Assert.Null(session.PrimarySelectedItem);
+            Assert.Null(session.SoleSelectedItem);
 
             session.ClearSelection(); // clearing nothing raises nothing
             Assert.Equal(2, selectionEvents);
@@ -779,13 +798,13 @@ namespace Prisc.VideoSDK.Tests
             var session = NewSession(out var screen, out _, out _, out _);
             session.Select(screen.Id);
 
-            session.DeleteItem(screen.Id);
+            session.DeleteItems(new[] { screen.Id });
             Assert.Empty(session.SelectedItemIds);
-            Assert.Null(session.PrimarySelectedItem);
+            Assert.Null(session.SoleSelectedItem);
 
             session.Undo();
             Assert.Equal(new[] { screen.Id }, session.SelectedItemIds);
-            Assert.Equal(screen.Id, session.PrimarySelectedItem.Id);
+            Assert.Equal(screen.Id, session.SoleSelectedItem.Id);
         }
 
         [Fact]
@@ -796,14 +815,14 @@ namespace Prisc.VideoSDK.Tests
             // the session does not validate selected ids up front; the first committed mutation
             // filters them, and the undo entry's dead id filters again on restore.
             session.Select(Guid.NewGuid());
-            Assert.Null(session.PrimarySelectedItem);
+            Assert.Null(session.SoleSelectedItem);
 
-            session.MoveItem(screen.Id, Ms(1_000));
+            session.MoveLinked(screen.Id, Ms(1_000));
             Assert.Empty(session.SelectedItemIds);
 
             session.Undo();
             Assert.Empty(session.SelectedItemIds);
-            Assert.Null(session.PrimarySelectedItem);
+            Assert.Null(session.SoleSelectedItem);
         }
 
         // ------------------------------------------------------------------- validation rollback
@@ -812,7 +831,7 @@ namespace Prisc.VideoSDK.Tests
         public void A_mutation_that_fails_validation_rolls_back_and_surfaces_without_throwing()
         {
             var session = NewSession(out var screen, out _, out _, out var persist);
-            Assert.True(session.SplitAt(screen.Id, Ms(4_000)));
+            Assert.True(session.SplitItemAt(screen.Id, Ms(4_000)));
             var right = session.Project.Items.Single(i => i.TrackId == screen.TrackId && i.Id != screen.Id);
 
             var before = session.Project.ToJson();
@@ -851,7 +870,7 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(4, session.Project.Tracks.Count);
             var afterAdd = session.Project.ToJson();
 
-            session.DeleteItem(image.Id);
+            session.DeleteItems(new[] { image.Id });
             Assert.Equal(3, session.Project.Tracks.Count);
             Assert.DoesNotContain(session.Project.Tracks, t => t.Id == image.TrackId);
 
@@ -864,7 +883,7 @@ namespace Prisc.VideoSDK.Tests
         {
             var session = NewSession(out _, out var webcam, out _, out _);
 
-            session.DeleteItem(webcam.Id);
+            session.DeleteItems(new[] { webcam.Id });
 
             Assert.DoesNotContain(session.Project.Items, i => i.TrackId == webcam.TrackId);
             Assert.Contains(session.Project.Tracks, t => t.Id == webcam.TrackId);
@@ -875,7 +894,9 @@ namespace Prisc.VideoSDK.Tests
         [Fact]
         public void AddText_defaults_land_on_the_topmost_free_video_track()
         {
-            var session = NewSession(out _, out var webcam, out _, out _);
+            var session = NewSession(out _, out var webcam, out var audio, out _);
+            session.UngroupTracks(new[] { webcam.TrackId });
+            session.UngroupTracks(new[] { audio.TrackId });
 
             // [12s, 17s) is free on both video rows; the webcam row is the topmost.
             var text = session.AddText(Ms(12_000), Ms(5_000));
@@ -908,22 +929,124 @@ namespace Prisc.VideoSDK.Tests
         /// overlay was never enabled, making it the topmost "free" row exactly when the timeline
         /// is empty or the playhead sits past the end.</summary>
         [Fact]
-        public void AddText_never_lands_on_a_hidden_or_locked_row()
+        public void AddText_never_lands_on_a_hidden_row()
         {
-            var session = NewSession(out var screen, out var webcam, out _, out _);
+            var session = NewSession(out var screen, out var webcam, out var audio, out _);
+            session.UngroupTracks(new[] { webcam.TrackId });
+            session.UngroupTracks(new[] { audio.TrackId });
             session.SetTrackHidden(webcam.TrackId, true);
 
             // the hidden webcam row is skipped even though it is topmost and free
             var text = session.AddText(Ms(12_000), Ms(5_000));
             Assert.Equal(screen.TrackId, text.TrackId);
 
-            // with the only other free row locked, a fresh visible Overlay row is minted instead
-            session.SetTrackLocked(screen.TrackId, true);
-            var second = session.AddText(Ms(20_000), Ms(5_000));
+            // with the first card now filling that span, the hidden row is the only free one:
+            // a fresh visible Overlay row is minted instead
+            var second = session.AddText(Ms(12_000), Ms(5_000));
             var track = session.Project.Tracks.Single(t => t.Id == second.TrackId);
             Assert.Equal("Overlay", track.Name);
             Assert.False(track.Hidden);
-            Assert.False(track.Locked);
+        }
+
+        /// <summary>A card on a grouped row would be time-linked to the recording, so a grouped
+        /// frontmost row is passed over for a fresh one, even with its span free.</summary>
+        [Fact]
+        public void AddText_mints_a_new_top_row_when_the_frontmost_row_is_grouped()
+        {
+            var session = NewSession(out _, out var webcam, out _, out _);
+
+            var text = session.AddText(Ms(12_000), Ms(5_000));
+
+            var track = Track(session, text.TrackId);
+            Assert.NotEqual(webcam.TrackId, text.TrackId);
+            Assert.Equal("Overlay", track.Name);
+            Assert.Null(track.GroupId);
+            Assert.True(track.Order > Track(session, webcam.TrackId).Order);
+        }
+
+        /// <summary>The frontmost row is chosen first and only then checked: skipping a grouped row
+        /// while choosing would land the card on the free row behind it, under the import the user
+        /// can see.</summary>
+        [Fact]
+        public void AddText_does_not_fall_back_to_a_free_row_behind_a_grouped_one()
+        {
+            var session = NewSession(out _, out _, out _, out _);
+            var freeRow = session.AddText(Ms(30_000), Ms(1_000)).TrackId;
+            var import = session.ImportMedia(TestPath.Native(@"C:\media\clip.mp4"), ClipProbe(), 0);
+            var importRow = import.Single(i => Track(session, i.TrackId).Kind == TrackKind.Video).TrackId;
+            Assert.NotNull(Track(session, importRow).GroupId);
+            Assert.True(Track(session, importRow).Order > Track(session, freeRow).Order);
+
+            var text = session.AddText(Ms(50_000), Ms(5_000));
+
+            Assert.NotEqual(freeRow, text.TrackId);
+            Assert.NotEqual(importRow, text.TrackId);
+            Assert.True(Track(session, text.TrackId).Order > Track(session, importRow).Order);
+        }
+
+        /// <summary>A card on a placement-locked row could not be put where the user wants it, so that
+        /// row is passed over like a grouped one, for every kind of add, even with its span free.</summary>
+        [Fact]
+        public void An_add_mints_a_new_top_row_when_the_frontmost_row_is_placement_locked()
+        {
+            var adds = new (string Name, Func<EditorSession, Item> Add)[]
+            {
+                ("Text", s => s.AddText(Ms(30_000), Ms(1_000))),
+                ("Image", s => s.AddImage(TestPath.Native(@"C:\media\logo.png"), Ms(30_000), Ms(1_000))),
+                ("Obscure", s => s.AddObscure(Ms(30_000), Ms(1_000))),
+                ("Shape", s => s.AddShape(Ms(30_000), Ms(1_000))),
+            };
+
+            foreach (var (name, add) in adds)
+            {
+                var session = NewSession(out _, out _, out _, out _);
+                var free = session.AddText(Ms(12_000), Ms(5_000)).TrackId;
+                var reused = add(session);
+                Assert.True(free == reused.TrackId, $"{name}: an unlocked frontmost row with its span free is reused.");
+                session.DeleteItems(new[] { reused.Id });
+
+                session.SetTrackPlacementLocked(free, true);
+                var item = add(session);
+
+                Assert.True(free != item.TrackId, $"{name} landed on the locked row.");
+                Assert.True(Track(session, item.TrackId).Order > Track(session, free).Order, $"{name} went behind it.");
+                Assert.False(Track(session, item.TrackId).PlacementLocked);
+            }
+        }
+
+        /// <summary>The frontmost row is chosen first and only then checked, the same as a grouped one:
+        /// skipping a locked row while choosing would land the card on the free row behind it.</summary>
+        [Fact]
+        public void An_add_does_not_fall_back_to_a_free_row_behind_a_placement_locked_one()
+        {
+            var session = NewSession(out _, out _, out _, out _);
+            var behind = session.AddText(Ms(30_000), Ms(1_000)).TrackId;
+            var front = session.AddImage(TestPath.Native(@"C:\media\logo.png"), Ms(30_000), Ms(1_000)).TrackId;
+            Assert.NotEqual(behind, front);
+            session.SetTrackPlacementLocked(front, true);
+
+            var text = session.AddText(Ms(50_000), Ms(5_000));
+
+            Assert.NotEqual(behind, text.TrackId);
+            Assert.NotEqual(front, text.TrackId);
+            Assert.True(Track(session, text.TrackId).Order > Track(session, front).Order);
+        }
+
+        /// <summary>A hidden row is never a candidate, so a locked hidden row says nothing about the
+        /// free row below it.</summary>
+        [Fact]
+        public void A_hidden_placement_locked_row_does_not_stop_a_card_reusing_the_row_below()
+        {
+            var session = NewSession(out _, out _, out _, out _);
+            var visible = session.AddText(Ms(12_000), Ms(1_000)).TrackId;
+            var hidden = session.AddText(Ms(12_000), Ms(1_000)).TrackId;
+            Assert.NotEqual(visible, hidden);
+            session.SetTrackPlacementLocked(hidden, true);
+            session.SetTrackHidden(hidden, true);
+
+            var text = session.AddText(Ms(50_000), Ms(5_000));
+
+            Assert.Equal(visible, text.TrackId);
         }
 
         [Fact]
@@ -933,19 +1056,19 @@ namespace Prisc.VideoSDK.Tests
 
             var image = session.AddImage(TestPath.Native(@"C:\media\logo.png"), Ms(12_000), Ms(5_000));
 
-            Assert.Equal(webcam.TrackId, image.TrackId);
+            Assert.NotEqual(webcam.TrackId, image.TrackId);
             Assert.Equal(TestPath.Native(@"C:\media\logo.png"), Assert.IsType<ImageContent>(image.Content).Path);
             Assert.Equal(0.5, image.Transform.X);
             Assert.Equal(0.5, image.Transform.Y);
             Assert.Equal(0.5, image.Transform.Scale);
-            Assert.Null(image.GroupId);
+            Assert.Null(Track(session, image.TrackId).GroupId);
         }
 
         [Fact]
         public void ImportMedia_creates_source_tracks_and_linked_items_in_one_undo_entry()
         {
             var session = NewSession(out var screen, out _, out _, out _);
-            var recordingGroup = screen.GroupId;
+            var recordingGroup = Track(session, screen.TrackId).GroupId;
             var before = session.Project.ToJson();
 
             var created = session.ImportMedia(TestPath.Native(@"C:\media\clip.mp4"), ClipProbe(), Ms(2_000));
@@ -975,9 +1098,9 @@ namespace Prisc.VideoSDK.Tests
             Assert.All(created, i => Assert.Equal(0L, ((MediaContent)i.Content).SourceInTicks));
             Assert.Equal(Ms(8_000), videoItem.DurationTicks);
             Assert.Equal(Ms(7_900), audioItem.DurationTicks);
-            Assert.NotNull(videoItem.GroupId);
-            Assert.Equal(videoItem.GroupId, audioItem.GroupId);
-            Assert.NotEqual(recordingGroup, videoItem.GroupId);
+            Assert.NotNull(videoTrack.GroupId);
+            Assert.Equal(videoTrack.GroupId, audioTrack.GroupId);
+            Assert.NotEqual(recordingGroup, videoTrack.GroupId);
             Assert.Equal(0.5, videoItem.Transform.X);
 
             session.Undo();
@@ -993,7 +1116,7 @@ namespace Prisc.VideoSDK.Tests
             var created = session.ImportMedia(TestPath.Native(@"C:\media\clip.mp4"), ClipProbe(withAudio: false), 0);
 
             var item = Assert.Single(created);
-            Assert.Null(item.GroupId);
+            Assert.Null(Track(session, item.TrackId).GroupId);
         }
 
         /// <summary>A silent audio stream (as the caller's scan reported it) gets no row: the
@@ -1011,7 +1134,7 @@ namespace Prisc.VideoSDK.Tests
             var item = Assert.Single(created);
             Assert.Empty(session.Project.Validate());
             Assert.Equal(0, ((MediaContent)item.Content).StreamIndex);
-            Assert.Null(item.GroupId);
+            Assert.Null(Track(session, item.TrackId).GroupId);
             Assert.Equal(tracksBefore + 1, session.Project.Tracks.Count);
 
             var source = session.Project.Sources.Single(s => s.Path == TestPath.Native(@"C:\media\clip.mp4"));
@@ -1025,8 +1148,9 @@ namespace Prisc.VideoSDK.Tests
         // ------------------------------------------------------------- lone-group collapse
 
         /// <summary>A recording with nothing but a screen row opens with its segments unlinked:
-        /// the group would only pin them, and a pinned clip is the one thing the sync gate
-        /// forbids dragging. So they are not ripple groups, and one moves without the other.</summary>
+        /// a group with one row has nothing to keep in step, so
+        /// <see cref="Model.TimelineOps.CollapseLoneGroups"/> dissolves it and each segment moves
+        /// alone.</summary>
         [Fact]
         public void A_screen_only_recording_opens_ungrouped_and_movable()
         {
@@ -1039,16 +1163,15 @@ namespace Prisc.VideoSDK.Tests
                 Segments = new[] { new KeepSegment(0, Ms(10_000)), new KeepSegment(Ms(20_000), Ms(10_000)) },
                 Ids = RecordingIds.New(0),
             });
-            Assert.All(project.Items, i => Assert.NotNull(i.GroupId)); // Build itself still groups
+            Assert.NotNull(Assert.Single(project.Tracks).GroupId); // Build itself still groups
 
             var session = new EditorSession(project, null, null);
 
             Assert.Equal(2, session.Project.Items.Count);
-            Assert.All(session.Project.Items, i => Assert.Null(i.GroupId));
-            Assert.All(session.Project.Items, i => Assert.False(session.IsRippleGroup(i.Id)));
+            Assert.Null(Assert.Single(session.Project.Tracks).GroupId);
 
             var second = session.Project.Items.Single(i => i.TimelineStartTicks == Ms(10_000));
-            Assert.Equal(Ms(5_000), session.MoveItem(second.Id, Ms(5_000)));
+            Assert.Equal(Ms(5_000), session.MoveLinked(second.Id, Ms(5_000)));
             Assert.Equal(Ms(15_000), session.Project.Items.Single(i => i.Id == second.Id).TimelineStartTicks);
             Assert.Equal(0, session.Project.Items.Single(i => i.Id != second.Id).TimelineStartTicks);
         }
@@ -1063,16 +1186,14 @@ namespace Prisc.VideoSDK.Tests
             var before = session.Project.ToJson();
 
             Assert.True(session.DeleteTrack(webcam.TrackId));
-            Assert.NotNull(session.Project.Items.Single(i => i.Id == screen.Id).GroupId); // still two rows
+            Assert.NotNull(Track(session, screen.TrackId).GroupId); // still two rows
 
             Assert.True(session.DeleteTrack(audio.TrackId));
-            var lone = session.Project.Items.Single(i => i.Id == screen.Id);
-            Assert.Null(lone.GroupId);
-            Assert.False(session.IsRippleGroup(screen.Id));
+            Assert.Null(Track(session, screen.TrackId).GroupId);
 
             session.Undo();
             Assert.Equal(2, session.Project.Tracks.Count);
-            Assert.NotNull(session.Project.Items.Single(i => i.Id == screen.Id).GroupId);
+            Assert.NotNull(Track(session, screen.TrackId).GroupId);
             session.Undo();
             Assert.Equal(before, session.Project.ToJson());
         }
@@ -1082,57 +1203,12 @@ namespace Prisc.VideoSDK.Tests
         [Fact]
         public void Ungrouping_every_other_row_ungroups_the_last_one()
         {
-            var session = NewSession(out var screen, out var webcam, out var audio, out _);
+            var session = NewSession(out _, out var webcam, out var audio, out _);
 
-            session.UngroupTrack(webcam.TrackId);
-            session.UngroupTrack(audio.TrackId);
+            session.UngroupTracks(new[] { webcam.TrackId });
+            session.UngroupTracks(new[] { audio.TrackId });
 
-            Assert.All(session.Project.Items, i => Assert.Null(i.GroupId));
-            Assert.False(session.IsRippleGroup(screen.Id));
-        }
-
-        /// <summary>The delete-routing discriminator: a recording segment's group has members on
-        /// the tracks the session opened with; an import's group lives entirely on session-created
-        /// rows. Ripple (and the move gate) applies to the former only.</summary>
-        [Fact]
-        public void IsRippleGroup_is_true_for_recording_segments_and_false_for_imports()
-        {
-            var session = NewSession(out var screen, out _, out _, out _);
-            var created = session.ImportMedia(TestPath.Native(@"C:\media\clip.mp4"), ClipProbe(), Ms(2_000));
-            var text = session.AddText(Ms(15_000), Ms(5_000));
-
-            Assert.True(session.IsRippleGroup(screen.Id));
-            Assert.False(session.IsRippleGroup(created[0].Id));
-            Assert.False(session.IsRippleGroup(text.Id)); // unlinked: a group of one never ripples
-            Assert.False(session.IsRippleGroup(Guid.NewGuid()));
-        }
-
-        /// <summary>Deleting an imported file must not ripple: an import's link group means
-        /// "streams of one file", and closing its gap under everything else silently moved (or,
-        /// via the overlap rollback, silently refused to move) unrelated material.</summary>
-        [Fact]
-        public void DeleteGroup_lifts_the_whole_group_in_place_without_rippling()
-        {
-            var session = NewSession(out var screen, out _, out _, out _);
-            var created = session.ImportMedia(TestPath.Native(@"C:\media\clip.mp4"), ClipProbe(), Ms(2_000));
-            var text = session.AddText(Ms(15_000), Ms(5_000)); // starts after the import's span
-            var before = session.Project.ToJson();
-
-            session.DeleteGroup(created[0].Id);
-
-            // both of the file's items are gone, and nothing else moved — a ripple would have
-            // pulled the text card left by the import's 8s span.
-            Assert.DoesNotContain(session.Project.Items, i => created.Any(c => c.Id == i.Id));
-            Assert.Equal(Ms(15_000), Resolve(session, text.Id).TimelineStartTicks);
-            Assert.Equal(0, Resolve(session, screen.Id).TimelineStartTicks);
-            // the audio row the import brought is empty and pruned; its video row still holds the
-            // text card and survives.
-            Assert.DoesNotContain(session.Project.Tracks, t => t.Id == created[1].TrackId);
-            Assert.Contains(session.Project.Tracks, t => t.Id == created[0].TrackId);
-            Assert.Empty(session.Project.Validate());
-
-            session.Undo(); // the whole group delete was one entry
-            Assert.Equal(before, session.Project.ToJson());
+            Assert.All(session.Project.Tracks, t => Assert.Null(t.GroupId));
         }
 
         [Fact]
@@ -1210,7 +1286,7 @@ namespace Prisc.VideoSDK.Tests
             Assert.True(EditorSession.IsSourceReferenced(session.Project, clipId));
 
             foreach (var item in created)
-                session.DeleteItem(item.Id);
+                session.DeleteItems(new[] { item.Id });
 
             // the source outlives its items (nothing prunes it); it just stops mattering.
             Assert.Contains(session.Project.Sources, s => s.Path == TestPath.Native(@"C:\media\clip.mp4"));
@@ -1261,6 +1337,7 @@ namespace Prisc.VideoSDK.Tests
         public void RemoveSource_leaves_rows_that_still_hold_something()
         {
             var session = NewSession(out _, out var webcam, out _, out _);
+            session.UngroupTracks(new[] { webcam.TrackId });
 
             // a text card shares the webcam row; removing the recording must not take it with it.
             var text = session.AddText(Ms(12_000), Ms(5_000));
@@ -1319,7 +1396,7 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(3, session.Project.Tracks.Count);
 
             // …and mutating the session leaves the snapshot alone.
-            session.MoveItem(screen.Id, Ms(1_000));
+            session.MoveLinked(screen.Id, Ms(1_000));
             Assert.Empty(snapshot.Items);
         }
 
@@ -1333,8 +1410,8 @@ namespace Prisc.VideoSDK.Tests
             var session = new EditorSession(RecordingProject(out var screen, out _, out _),
                 persist, save => deferred.Add(save));
 
-            session.MoveItem(screen.Id, Ms(1_000));
-            session.MoveItem(screen.Id, Ms(1_000));
+            session.MoveLinked(screen.Id, Ms(1_000));
+            session.MoveLinked(screen.Id, Ms(1_000));
             Assert.Equal(0, persist.Writes);
 
             session.FlushSave();
@@ -1352,7 +1429,7 @@ namespace Prisc.VideoSDK.Tests
         {
             var session = new EditorSession(RecordingProject(out var screen, out _, out _), null, null);
 
-            session.MoveItem(screen.Id, Ms(1_000));
+            session.MoveLinked(screen.Id, Ms(1_000));
             session.FlushSave();
             session.Undo();
 

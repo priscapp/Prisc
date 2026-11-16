@@ -27,30 +27,55 @@ namespace Prisc.VideoSDK.Model;
 [JsonDerivedType(typeof(ShapeContent), "shape")]
 public abstract class ItemContent
 {
-    /// <summary>Deep copy, used by <see cref="TimelineOps.Split"/> so the two halves never share
-    /// mutable state.</summary>
+    /// <summary>Deep copy, used by <see cref="Item.Clone"/> so the copy never shares mutable
+    /// state.</summary>
     public abstract ItemContent Clone();
 }
 
-/// <summary>One stream of a probed <see cref="Source"/>. Timeline time <c>t</c> inside the item
-/// maps to source time <c>SourceInTicks + (t - item.TimelineStartTicks)</c>.</summary>
-public sealed class MediaContent : ItemContent
+/// <summary>
+/// Content that plays a stretch of a recording on a clock of its own: timeline time <c>t</c> inside
+/// the item is source time <c>SourceInTicks + (t - item.TimelineStartTicks) * Speed</c>, a pure
+/// function of the clip and <c>t</c> (<c>FrameComposer.SourceTimeTicks</c>), so moving a clip keeps
+/// its mapping and trimming or cutting one (<see cref="TimelineOps"/>) leaves every instant it still
+/// covers where it was.
+/// </summary>
+public abstract class SourceClockContent : ItemContent
 {
     public Guid SourceId { get; set; }
-
-    /// <summary>Stream index within the source container.</summary>
-    public int StreamIndex { get; set; }
 
     /// <summary>Where in the source this item starts, in 100ns ticks. Trimming the start of the
     /// item moves this by the same amount (scaled by <see cref="Speed"/>).</summary>
     public long SourceInTicks { get; set; }
 
     /// <summary>Playback speed: how many source seconds one timeline second consumes (2 = twice
-    /// as fast). With speed, timeline time <c>t</c> maps to source time
-    /// <c>SourceInTicks + (t - item.TimelineStartTicks) * Speed</c>. Audio pitch rides with the
-    /// speed (linear resample, no time stretching). 1 = realtime; only desynced (unlinked) items
-    /// carry a non-unity speed — linked rows must keep the recording's own clock.</summary>
+    /// as fast). 1 = realtime. On media, audio pitch rides with the speed (linear resample, no time
+    /// stretching).</summary>
     public double Speed { get; set; } = 1.0;
+
+    /// <summary>
+    /// When true the item is a freeze frame: every instant it covers holds the one source instant
+    /// at <see cref="SourceInTicks"/> (for a picture, the latest frame at or before it), so it
+    /// consumes no source at all: <see cref="Speed"/> is ignored, a trim never moves the in-point
+    /// and the item may be stretched to any length. Video rows only. Made by filling a timeline gap
+    /// with a neighbor's edge frame (<see cref="TimelineOps.FillGapWithFreeze"/>), and an overlay
+    /// clip over such a frame holds with it.
+    /// </summary>
+    public bool Freeze { get; set; }
+}
+
+/// <summary>What a recording's input capture draws, cursor or keys: it reads the capture of
+/// <see cref="SourceClockContent.SourceId"/> on the clip's own clock, and a row of it holds nothing
+/// else (<see cref="TimelineOps.CanHost"/>).</summary>
+public abstract class InputOverlayContent : SourceClockContent
+{
+}
+
+/// <summary>One stream of a probed <see cref="Source"/>, on the clock
+/// <see cref="SourceClockContent"/> describes.</summary>
+public sealed class MediaContent : SourceClockContent
+{
+    /// <summary>Stream index within the source container.</summary>
+    public int StreamIndex { get; set; }
 
     /// <summary>
     /// When true the clip is mixed on the OUTPUT clock and ignores every speed effect item: it
@@ -67,15 +92,6 @@ public sealed class MediaContent : ItemContent
     /// speed item in the project the two clocks coincide and the flag changes nothing.</para>
     /// </summary>
     public bool SpeedWarpExempt { get; set; }
-
-    /// <summary>
-    /// When true the item is a freeze frame: every instant it covers shows the one source frame
-    /// at <see cref="SourceInTicks"/> (the latest frame at or before it), so it consumes no
-    /// source at all — <see cref="Speed"/> is ignored, a trim never moves the in-point and the
-    /// item may be stretched to any length. Video rows only. Made by filling a timeline gap with
-    /// a neighbor's edge frame (<see cref="TimelineOps.FillGapWithFreeze"/>).
-    /// </summary>
-    public bool Freeze { get; set; }
 
     public override ItemContent Clone() => new MediaContent
     {
@@ -508,11 +524,14 @@ public sealed class ZoomContent : ItemContent
 }
 
 /// <summary>A rendered cursor overlay driven by the recording's input-capture data
-/// (<see cref="Source.InputCapturePath"/>). Lives on a <see cref="TrackKind.Video"/> row that is
-/// hard-synced to its recording: every item always carries the recording's
-/// <see cref="Item.GroupId"/>, so it moves/trims/splits with the screen row. Position is
-/// data-driven (the captured cursor path), never the item's <see cref="Item.Transform"/>.</summary>
-public sealed class CursorContent : ItemContent
+/// (<see cref="Source.InputCapturePath"/>). Lives on a <see cref="TrackKind.Video"/> row, grouped
+/// with the recording's screen row when it is added (<see cref="Track.GroupId"/>), so a drag of
+/// either brings the other. Position is data-driven (the captured cursor path), never the item's
+/// <see cref="Item.Transform"/>. Its clock (<see cref="SourceClockContent"/>) says which moment of
+/// the capture it shows, and it draws only while a screen-stream clip of its source is on the
+/// timeline, because capture pixels need that clip's picture to land on
+/// (<c>FrameComposer.ResolveCursorHost</c>).</summary>
+public sealed class CursorContent : InputOverlayContent
 {
     /// <summary>The style names the editor offers, in menu order. <c>none</c> draws no cursor at
     /// all (the click highlight is its own setting and still draws); <c>native</c> draws the cursor
@@ -526,8 +545,6 @@ public sealed class CursorContent : ItemContent
     /// while a button is held and springs back out; <c>pressure</c> draws nothing of its own and
     /// instead stretches the recorded pixels toward the pointer while a button is held.</summary>
     public static readonly IReadOnlyList<string> ClickAnimations = new[] { "none", "ripple", "pulse", "ring", "pressure" };
-
-    public Guid SourceId { get; set; }
 
     /// <summary>One of <see cref="Styles"/>.</summary>
     public string Style { get; set; } = "vision";
@@ -580,13 +597,16 @@ public sealed class CursorContent : ItemContent
     public double ClickSize { get; set; } = 1.0;
 
     /// <summary>Playback-rate multiplier on that animation: 2 runs it in half the time. Distinct
-    /// from the clip's own speed, which the composer already folds in so a sped-up clip does not
-    /// compress the highlight.</summary>
+    /// from the clip's own <see cref="SourceClockContent.Speed"/>, which the composer already folds
+    /// in so a sped-up clip does not compress the highlight.</summary>
     public double AnimationSpeed { get; set; } = 1.0;
 
     public override ItemContent Clone() => new CursorContent
     {
         SourceId = SourceId,
+        SourceInTicks = SourceInTicks,
+        Speed = Speed,
+        Freeze = Freeze,
         Style = Style,
         Variant = Variant,
         Size = Size,
@@ -616,17 +636,17 @@ public enum KeystrokeFilter
 }
 
 /// <summary>A keystroke overlay driven by the recording's input-capture data
-/// (<see cref="Source.InputCapturePath"/>). Same hard-sync rules as <see cref="CursorContent"/>;
+/// (<see cref="Source.InputCapturePath"/>). Grouped when added, like <see cref="CursorContent"/>;
 /// unlike it, placement <b>is</b> the item's <see cref="Item.Transform"/> — X/Y anchor the
 /// block's bottom center and Scale is the wrap width as a fraction of the canvas, with rows
-/// stacking upward from the anchor.</summary>
-public sealed class KeyboardContent : ItemContent, IJsonOnDeserialized
+/// stacking upward from the anchor. Between that and its clock
+/// (<see cref="SourceClockContent"/>) it has everything it needs, so it draws with or without a
+/// clip of its recording on the timeline.</summary>
+public sealed class KeyboardContent : InputOverlayContent, IJsonOnDeserialized
 {
     /// <summary>Keystrokes read at a glance or not at all, so the block starts big — the
     /// compositor falls back to this for a non-positive size too.</summary>
     public const double DefaultFontSize = 40;
-
-    public Guid SourceId { get; set; }
 
     /// <summary>Font size in output-canvas pixels, validated to 8..200.</summary>
     public double FontSize { get; set; } = DefaultFontSize;
@@ -714,6 +734,9 @@ public sealed class KeyboardContent : ItemContent, IJsonOnDeserialized
     public override ItemContent Clone() => new KeyboardContent
     {
         SourceId = SourceId,
+        SourceInTicks = SourceInTicks,
+        Speed = Speed,
+        Freeze = Freeze,
         FontSize = FontSize,
         LingerMs = LingerMs,
         PauseBreakMs = PauseBreakMs,

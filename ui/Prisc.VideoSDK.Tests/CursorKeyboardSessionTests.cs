@@ -9,18 +9,17 @@ namespace Prisc.VideoSDK.Tests
 {
     /// <summary>
     /// <see cref="EditorSession"/>'s input-overlay surface: the cursor/keyboard track factories
-    /// (placement above the screen row, span/link-group mirroring), the Has* flags, the hard-sync
-    /// refusals (unlink, reorder, duplicate), pruning and undo/redo — pure model math over a
-    /// recording-shaped fixture; only the <see cref="EditorSession.HasInputCapture"/> tests touch
-    /// the filesystem.
+    /// (placement above the screen row, span mirroring, joining the group), the CanAdd flags, overlay
+    /// rows behaving as ordinary rows (ungroup, reorder, duplicate), pruning and undo/redo — pure model
+    /// math over a recording-shaped fixture; the capture sidecars are the only files involved.
     /// </summary>
     public class CursorKeyboardSessionTests
     {
         private static long Ms(long ms) => ms * TimeSpan.TicksPerMillisecond;
 
         /// <summary>A recording with two keep-segments: screen row (order 0) and webcam row
-        /// (order 1) over one source, each segment its own link group — the shape the editor
-        /// produces after one cut — plus an audio row.</summary>
+        /// (order 1) over one source, in one group — the shape the editor produces after one
+        /// cut — plus an audio row with nothing on it.</summary>
         private static Project BaseProject(string capturePath, out Source source,
             out Track screenTrack, out Track webcamTrack, out Track audioTrack)
         {
@@ -36,8 +35,9 @@ namespace Prisc.VideoSDK.Tests
                 },
             };
 
-            screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0 };
-            webcamTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Webcam", Order = 1 };
+            var group = Guid.NewGuid();
+            screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0, GroupId = group };
+            webcamTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Webcam", Order = 1, GroupId = group };
             audioTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = "Audio", Order = 2 };
 
             var project = new Project
@@ -47,15 +47,13 @@ namespace Prisc.VideoSDK.Tests
                 Tracks = { screenTrack, webcamTrack, audioTrack },
             };
 
-            var g1 = Guid.NewGuid();
-            var g2 = Guid.NewGuid();
-            AddSegment(project, screenTrack, webcamTrack, source.Id, 0, Ms(8_000), g1);
-            AddSegment(project, screenTrack, webcamTrack, source.Id, Ms(8_000), Ms(12_000), g2);
+            AddSegment(project, screenTrack, webcamTrack, source.Id, 0, Ms(8_000));
+            AddSegment(project, screenTrack, webcamTrack, source.Id, Ms(8_000), Ms(12_000));
             return project;
         }
 
         private static void AddSegment(Project project, Track screen, Track webcam, Guid sourceId,
-            long startTicks, long durationTicks, Guid group)
+            long startTicks, long durationTicks)
         {
             project.Items.Add(new Item
             {
@@ -64,7 +62,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = startTicks,
                 DurationTicks = durationTicks,
                 Content = new MediaContent { SourceId = sourceId, StreamIndex = 0, SourceInTicks = startTicks },
-                GroupId = group,
             });
             project.Items.Add(new Item
             {
@@ -73,12 +70,17 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = startTicks,
                 DurationTicks = durationTicks,
                 Content = new MediaContent { SourceId = sourceId, StreamIndex = 1, SourceInTicks = startTicks },
-                GroupId = group,
             });
         }
 
-        private static EditorSession NewSession(out Track screenTrack, out Track webcamTrack,
-            out Track audioTrack, string capturePath = @"C:\rec\input-capture.jsonl")
+        private static EditorSession NewSession(out Track screenTrack, out Track webcamTrack, out Track audioTrack)
+        {
+            var project = BaseProject(TestPath.ExistingCapture, out _, out screenTrack, out webcamTrack, out audioTrack);
+            return new EditorSession(project, null, save => save());
+        }
+
+        private static EditorSession NewSession(string capturePath, out Track screenTrack, out Track webcamTrack,
+            out Track audioTrack)
         {
             var project = BaseProject(capturePath, out _, out screenTrack, out webcamTrack, out audioTrack);
             return new EditorSession(project, null, save => save());
@@ -103,7 +105,7 @@ namespace Prisc.VideoSDK.Tests
 
             Assert.NotNull(item);
             Assert.Equal(ProjectChangeKind.Structural, kind);
-            Assert.True(session.HasCursorTrack);
+            Assert.False(session.CanAddCursorTrack);
 
             var track = TrackOf(session, item);
             Assert.Equal(TrackKind.Video, track.Kind);
@@ -119,7 +121,7 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void Cursor_items_mirror_the_screen_segments_and_their_groups()
+        public void Cursor_items_mirror_the_screen_segments_and_their_row_joins_the_group()
         {
             var session = NewSession(out var screenTrack, out _, out _);
             var first = session.AddCursorTrack();
@@ -131,12 +133,12 @@ namespace Prisc.VideoSDK.Tests
 
             Assert.Equal(2, cursorItems.Count);
             Assert.Same(first, cursorItems[0]);
+            Assert.NotNull(TrackOf(session, first).GroupId);
+            Assert.Equal(session.Project.Tracks.Single(t => t.Id == screenTrack.Id).GroupId, TrackOf(session, first).GroupId);
             for (var i = 0; i < 2; i++)
             {
                 Assert.Equal(screenItems[i].TimelineStartTicks, cursorItems[i].TimelineStartTicks);
                 Assert.Equal(screenItems[i].DurationTicks, cursorItems[i].DurationTicks);
-                Assert.Equal(screenItems[i].GroupId, cursorItems[i].GroupId);
-                Assert.NotNull(cursorItems[i].GroupId);
 
                 var content = (CursorContent)cursorItems[i].Content;
                 Assert.Equal(session.Project.Sources.Single().Id, content.SourceId);
@@ -152,7 +154,7 @@ namespace Prisc.VideoSDK.Tests
             var keys = session.AddKeyboardTrack();
 
             Assert.NotNull(keys);
-            Assert.True(session.HasKeyboardTrack);
+            Assert.False(session.CanAddKeyboardTrack);
             var keysTrack = TrackOf(session, keys);
             Assert.Equal("Keys", keysTrack.Name);
             Assert.Equal(TrackKind.Video, keysTrack.Kind);
@@ -184,11 +186,15 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void A_second_add_is_refused_and_changes_nothing()
+        public void A_second_add_for_the_one_recording_is_refused_and_changes_nothing()
         {
             var session = NewSession(out _, out _, out _);
+            Assert.True(session.CanAddCursorTrack);
+            Assert.True(session.CanAddKeyboardTrack);
             session.AddCursorTrack();
             session.AddKeyboardTrack();
+            Assert.False(session.CanAddCursorTrack);
+            Assert.False(session.CanAddKeyboardTrack);
             var json = session.Project.ToJson();
 
             Assert.Null(session.AddCursorTrack());
@@ -199,33 +205,34 @@ namespace Prisc.VideoSDK.Tests
         [Fact]
         public void Adds_are_refused_without_an_input_capture_source()
         {
-            var session = NewSession(out _, out _, out _, capturePath: null);
+            var session = NewSession(capturePath: null, out _, out _, out _);
             var json = session.Project.ToJson();
 
+            Assert.False(session.CanAddCursorTrack);
+            Assert.False(session.CanAddKeyboardTrack);
             Assert.Null(session.AddCursorTrack());
             Assert.Null(session.AddKeyboardTrack());
             Assert.Equal(json, session.Project.ToJson());
         }
 
         [Fact]
-        public void An_unlinked_screen_segment_gets_a_fresh_shared_group()
+        public void An_ungrouped_screen_row_gets_a_fresh_group_shared_with_the_overlay()
         {
-            var session = NewSession(out var screenTrack, out _, out _);
-            var project = session.Project;
-            var loose = project.Items.First(i => i.TrackId == screenTrack.Id);
-            loose.GroupId = null;
+            var session = NewSession(out var screenTrack, out var webcamTrack, out _);
+            session.UngroupTracks(new[] { webcamTrack.Id });
+            var liveScreen = session.Project.Tracks.Single(t => t.Id == screenTrack.Id);
+            Assert.Null(liveScreen.GroupId);
 
-            session.AddCursorTrack();
+            var cursor = session.AddCursorTrack();
 
-            var refreshed = session.Project.Items.Single(i => i.Id == loose.Id);
-            Assert.NotNull(refreshed.GroupId);
-            var mirror = session.Project.Items.Single(i =>
-                i.Content is CursorContent && i.TimelineStartTicks == refreshed.TimelineStartTicks);
-            Assert.Equal(refreshed.GroupId, mirror.GroupId);
+            liveScreen = session.Project.Tracks.Single(t => t.Id == screenTrack.Id);
+            Assert.NotNull(liveScreen.GroupId);
+            Assert.Equal(liveScreen.GroupId, TrackOf(session, cursor).GroupId);
+            Assert.Null(session.Project.Tracks.Single(t => t.Id == webcamTrack.Id).GroupId);
             Assert.Empty(session.Project.Validate());
         }
 
-        // ------------------------------------------------------------------------------ hard sync
+        // ------------------------------------------------------------------------------ the group
 
         [Fact]
         public void Moving_a_cursor_item_moves_its_whole_recording_segment()
@@ -237,23 +244,23 @@ namespace Prisc.VideoSDK.Tests
             var screenItem = session.Project.Items
                 .Where(i => i.TrackId == screenTrack.Id).OrderBy(i => i.TimelineStartTicks).Last();
 
-            Assert.Equal(Ms(1_000), session.MoveItem(cursorItem.Id, Ms(1_000)));
+            Assert.Equal(Ms(1_000), session.MoveLinked(cursorItem.Id, Ms(1_000)));
 
             Assert.Equal(Ms(9_000), session.Project.Items.Single(i => i.Id == screenItem.Id).TimelineStartTicks);
             Assert.Equal(Ms(9_000), session.Project.Items.Single(i => i.Id == cursorItem.Id).TimelineStartTicks);
         }
 
         [Fact]
-        public void SplitAt_cuts_the_overlay_with_its_segment()
+        public void SplitAtPlayhead_cuts_the_overlay_with_its_segment()
         {
             var session = NewSession(out var screenTrack, out _, out _);
             session.AddCursorTrack();
-            var cursorItem = session.Project.Items
-                .Where(i => i.Content is CursorContent).OrderBy(i => i.TimelineStartTicks).First();
 
-            Assert.True(session.SplitAt(cursorItem.Id, Ms(4_000)));
+            Assert.True(session.SplitAtPlayhead(Ms(4_000)));
 
             Assert.Equal(3, session.Project.Items.Count(i => i.Content is CursorContent));
+            Assert.Contains(session.Project.Items,
+                i => i.Content is CursorContent && i.TimelineStartTicks == Ms(4_000));
             Assert.Equal(3, session.Project.Items.Count(i => i.TrackId == screenTrack.Id));
             Assert.Empty(session.Project.Validate());
         }
@@ -271,11 +278,10 @@ namespace Prisc.VideoSDK.Tests
             var cursorItems = session.Project.Items.Where(i => i.Content is CursorContent).ToList();
             Assert.Single(cursorItems);
             Assert.Equal(0, cursorItems[0].TimelineStartTicks); // the gap closed
-            Assert.True(session.HasCursorTrack);
             Assert.Empty(session.Project.Validate());
         }
 
-        // ---------------------------------------------------------------------------- trim clamp
+        // ---------------------------------------------------------------------------------- trim
 
         /// <summary>The overlay items of the first recording segment ([0, 8s)) and of the second
         /// ([8s, 20s)), in timeline order.</summary>
@@ -289,295 +295,207 @@ namespace Prisc.VideoSDK.Tests
         private static Item Live(EditorSession session, Item item) =>
             session.Project.Items.Single(i => i.Id == item.Id);
 
+        /// <summary>What each clip spans, by id.</summary>
+        private static System.Collections.Generic.Dictionary<Guid, (long Start, long Duration)> Spans(EditorSession session) =>
+            session.Project.Items.ToDictionary(i => i.Id, i => (i.TimelineStartTicks, i.DurationTicks));
+
+        /// <summary>A trim is the grabbed clip alone on every kind of row: screen, webcam, cursor,
+        /// keys, text and zoom alike, grouped or not.</summary>
         [Fact]
-        public void An_overlay_item_never_trims_past_the_end_of_its_screen_segment()
+        public void A_trim_changes_only_the_grabbed_clip_on_every_kind_of_row()
         {
             var session = NewSession(out _, out _, out _);
             session.AddCursorTrack();
+            session.AddKeyboardTrack();
+            session.AddText(Ms(1_000), Ms(5_000));
+            session.AddZoomEffect(Ms(1_000), Ms(5_000));
+
+            foreach (var id in session.Project.Items.Select(i => i.Id).ToList())
+            {
+                var before = Spans(session);
+
+                Assert.Equal(Ms(500), session.TrimItemStart(id, Ms(500)));
+                Assert.Equal(-Ms(500), session.TrimItemEnd(id, -Ms(500)));
+
+                var after = Spans(session);
+                Assert.Equal(before.Count, after.Count);
+                Assert.All(after.Where(a => a.Key != id), a => Assert.Equal(before[a.Key], a.Value));
+                Assert.Equal((before[id].Start + Ms(500), before[id].Duration - Ms(1_000)), after[id]);
+                Assert.Empty(session.Project.Validate());
+            }
+        }
+
+        [Fact]
+        public void Trimming_the_screen_leaves_the_overlays_where_they_are()
+        {
+            var session = NewSession(out var screenTrack, out _, out _);
+            session.AddCursorTrack();
+            var keys = session.AddKeyboardTrack();
+            var firstScreen = session.Project.Items
+                .Where(i => i.TrackId == screenTrack.Id).OrderBy(i => i.TimelineStartTicks).First();
             var (cursor, _) = CursorItems(session);
 
-            // the item already ends exactly at the screen segment's end: there is nowhere to go.
-            Assert.Equal(0, session.TrimItemEnd(cursor.Id, Ms(5_000)));
+            Assert.Equal(-Ms(3_000), session.TrimItemEnd(firstScreen.Id, -Ms(3_000)));
+
+            // the cursor hangs past the screen now: it draws nothing there, it is not touched
+            Assert.Equal(Ms(5_000), Live(session, firstScreen).DurationTicks);
             Assert.Equal(Ms(8_000), Live(session, cursor).DurationTicks);
-
-            // shorter is always allowed — hiding the cursor for the tail of the segment.
-            Assert.Equal(-Ms(2_000), session.TrimItemEnd(cursor.Id, -Ms(2_000)));
-            Assert.Equal(Ms(6_000), Live(session, cursor).DurationTicks);
-
-            // and it may grow back, but only as far as the screen segment reaches.
-            Assert.Equal(Ms(2_000), session.TrimItemEnd(cursor.Id, Ms(9_000)));
-            Assert.Equal(0, Live(session, cursor).TimelineStartTicks);
-            Assert.Equal(Ms(8_000), Live(session, cursor).DurationTicks);
-            Assert.Empty(session.Project.Validate());
-        }
-
-        [Fact]
-        public void An_overlay_item_never_trims_past_the_start_of_its_screen_segment()
-        {
-            var session = NewSession(out _, out _, out _);
-            session.AddCursorTrack();
-            var (_, cursor) = CursorItems(session); // the [8s, 20s) segment
-
-            Assert.Equal(0, session.TrimItemStart(cursor.Id, -Ms(3_000)));
-            Assert.Equal(Ms(8_000), Live(session, cursor).TimelineStartTicks);
-
-            Assert.Equal(Ms(2_000), session.TrimItemStart(cursor.Id, Ms(2_000)));
-            Assert.Equal(Ms(10_000), Live(session, cursor).TimelineStartTicks);
-            Assert.Equal(Ms(10_000), Live(session, cursor).DurationTicks);
-
-            Assert.Equal(-Ms(2_000), session.TrimItemStart(cursor.Id, -Ms(6_000)));
-            Assert.Equal(Ms(8_000), Live(session, cursor).TimelineStartTicks);
-            Assert.Equal(Ms(12_000), Live(session, cursor).DurationTicks);
-            Assert.Empty(session.Project.Validate());
-        }
-
-        [Fact]
-        public void A_keyboard_item_is_clamped_to_the_screen_segment_too()
-        {
-            var session = NewSession(out _, out _, out _);
-            var keys = session.AddKeyboardTrack();
-
-            Assert.Equal(0, session.TrimItemEnd(keys.Id, Ms(4_000)));
-            Assert.Equal(0, session.TrimItemStart(keys.Id, -Ms(4_000)));
-            Assert.Equal(0, Live(session, keys).TimelineStartTicks);
             Assert.Equal(Ms(8_000), Live(session, keys).DurationTicks);
             Assert.Empty(session.Project.Validate());
         }
 
+        /// <summary>The old rule refused to let an overlay reach past its screen segment.</summary>
         [Fact]
-        public void Trimming_the_screen_item_shorter_takes_its_overlay_items_along()
-        {
-            var session = NewSession(out var screenTrack, out var webcamTrack, out _);
-            session.AddCursorTrack();
-            var screenItems = session.Project.Items
-                .Where(i => i.TrackId == screenTrack.Id).OrderBy(i => i.TimelineStartTicks).ToList();
-            var (firstCursor, secondCursor) = CursorItems(session);
-
-            Assert.Equal(-Ms(3_000), session.TrimItemEnd(screenItems[0].Id, -Ms(3_000)));
-            Assert.Equal(0, Live(session, firstCursor).TimelineStartTicks);
-            Assert.Equal(Ms(5_000), Live(session, firstCursor).DurationTicks);
-
-            Assert.Equal(Ms(2_000), session.TrimItemStart(screenItems[1].Id, Ms(2_000)));
-            Assert.Equal(Ms(10_000), Live(session, secondCursor).TimelineStartTicks);
-            Assert.Equal(Ms(10_000), Live(session, secondCursor).DurationTicks);
-
-            // only the overlay rows follow: the webcam row is linked too, but a trim has always
-            // been single-item and its spans are untouched.
-            var webcam = session.Project.Items
-                .Where(i => i.TrackId == webcamTrack.Id).OrderBy(i => i.TimelineStartTicks).ToList();
-            Assert.Equal(new[] { 0L, Ms(8_000) }, webcam.Select(i => i.TimelineStartTicks));
-            Assert.Equal(new[] { Ms(8_000), Ms(12_000) }, webcam.Select(i => i.DurationTicks));
-            Assert.Empty(session.Project.Validate());
-        }
-
-        [Fact]
-        public void Trimming_the_screen_item_longer_leaves_the_overlay_where_it_was()
+        public void Trimming_an_overlay_leaves_the_screen_and_may_run_past_it()
         {
             var session = NewSession(out var screenTrack, out _, out _);
             session.AddCursorTrack();
-            var firstScreen = session.Project.Items
-                .Where(i => i.TrackId == screenTrack.Id).OrderBy(i => i.TimelineStartTicks).First();
-            var (cursor, _) = CursorItems(session);
-
-            session.TrimItemEnd(firstScreen.Id, -Ms(3_000));
-            Assert.Equal(Ms(5_000), Live(session, cursor).DurationTicks);
-
-            // growing the screen back only re-opens room the overlay may be dragged into; the
-            // clamp never lengthens an item by itself.
-            Assert.Equal(Ms(3_000), session.TrimItemEnd(firstScreen.Id, Ms(3_000)));
-            Assert.Equal(Ms(5_000), Live(session, cursor).DurationTicks);
-            Assert.Equal(Ms(3_000), session.TrimItemEnd(cursor.Id, Ms(4_000)));
-            Assert.Equal(Ms(8_000), Live(session, cursor).DurationTicks);
-            Assert.Empty(session.Project.Validate());
-        }
-
-        [Fact]
-        public void A_screen_trim_that_strands_an_overlay_piece_drops_it_and_prunes_the_row()
-        {
-            var session = NewSession(out var screenTrack, out _, out _);
-            session.AddCursorTrack();
-            var (firstCursor, secondCursor) = CursorItems(session);
-            var firstScreen = session.Project.Items
-                .Where(i => i.TrackId == screenTrack.Id).OrderBy(i => i.TimelineStartTicks).First();
-
-            // leave one overlay piece, [0, 2s), over a screen segment that still runs to 8s.
-            session.DeleteItem(secondCursor.Id);
-            Assert.True(session.SplitItemAt(firstCursor.Id, Ms(2_000)));
-            var tail = session.Project.Items
-                .Where(i => i.Content is CursorContent).OrderBy(i => i.TimelineStartTicks).Last();
-            session.DeleteItem(tail.Id);
-            Assert.True(session.HasCursorTrack);
-
-            ProjectChangeKind? kind = null;
-            session.ProjectChanged += (_, e) => kind = e.Kind;
-
-            // the screen now starts at 3s: the piece annotates material that no longer plays.
-            Assert.Equal(Ms(3_000), session.TrimItemStart(firstScreen.Id, Ms(3_000)));
-
-            Assert.DoesNotContain(session.Project.Items, i => i.Content is CursorContent);
-            Assert.False(session.HasCursorTrack);
-            Assert.DoesNotContain(session.Project.Tracks, t => t.Name == "Cursor");
-            // the row went with it, so the timeline must rebuild.
-            Assert.Equal(ProjectChangeKind.Structural, kind);
-            Assert.Empty(session.Project.Validate());
-        }
-
-        [Fact]
-        public void A_split_screen_segment_bounds_the_overlay_by_both_halves()
-        {
-            var session = NewSession(out var screenTrack, out _, out _);
-            session.AddCursorTrack();
-            var firstScreen = session.Project.Items
-                .Where(i => i.TrackId == screenTrack.Id).OrderBy(i => i.TimelineStartTicks).First();
-            var (cursor, _) = CursorItems(session);
-
-            // a right-click split of the screen row leaves both halves in the recording's group,
-            // so the overlay may still span the cut — but not the segment's outer edge.
-            Assert.True(session.SplitItemAt(firstScreen.Id, Ms(4_000)));
-            Assert.Equal(0, session.TrimItemEnd(cursor.Id, Ms(1_000)));
-            Assert.Equal(-Ms(5_000), session.TrimItemEnd(cursor.Id, -Ms(5_000)));
-            Assert.Equal(Ms(5_000), session.TrimItemEnd(cursor.Id, Ms(9_000)));
-            Assert.Equal(Ms(8_000), Live(session, cursor).DurationTicks);
-            Assert.Empty(session.Project.Validate());
-        }
-
-        [Fact]
-        public void Without_a_screen_row_there_is_nothing_to_clamp_to()
-        {
-            var session = NewSession(out var screenTrack, out _, out _);
-            session.AddCursorTrack();
-            var (_, cursor) = CursorItems(session); // the last item on the row: room to grow into
-            session.DeleteTrack(screenTrack.Id);
+            var (_, cursor) = CursorItems(session); // the last clip on the row: room to grow into
+            var lastScreen = session.Project.Items
+                .Where(i => i.TrackId == screenTrack.Id).OrderBy(i => i.TimelineStartTicks).Last();
 
             Assert.Equal(Ms(3_000), session.TrimItemEnd(cursor.Id, Ms(3_000)));
+
             Assert.Equal(Ms(15_000), Live(session, cursor).DurationTicks);
+            Assert.Equal(Ms(12_000), Live(session, lastScreen).DurationTicks);
+            Assert.Empty(session.Project.Validate());
         }
 
+        /// <summary>Nothing is stranded by a trim any more, so no row can go with it, and the
+        /// timeline never has to rebuild for one.</summary>
         [Fact]
-        public void Undo_restores_a_clamped_trim_on_both_sides()
+        public void A_trim_is_a_mapping_change_and_one_undo_restores_it()
         {
             var session = NewSession(out var screenTrack, out _, out _);
             session.AddCursorTrack();
-            var (cursor, _) = CursorItems(session);
             var firstScreen = session.Project.Items
                 .Where(i => i.TrackId == screenTrack.Id).OrderBy(i => i.TimelineStartTicks).First();
             var before = session.Project.ToJson();
+            ProjectChangeKind? kind = null;
+            session.ProjectChanged += (_, e) => kind = e.Kind;
 
-            session.TrimItemEnd(cursor.Id, -Ms(2_000));
-            var afterOverlayTrim = session.Project.ToJson();
-            session.TrimItemEnd(firstScreen.Id, -Ms(4_000));
-            Assert.Equal(Ms(4_000), Live(session, cursor).DurationTicks); // rippled with the screen
+            Assert.Equal(Ms(7_000), session.TrimItemStart(firstScreen.Id, Ms(7_000)));
 
-            session.Undo();
-            Assert.Equal(afterOverlayTrim, session.Project.ToJson());
-            Assert.Equal(Ms(6_000), Live(session, cursor).DurationTicks);
+            Assert.Equal(ProjectChangeKind.Mapping, kind);
 
             session.Undo();
             Assert.Equal(before, session.Project.ToJson());
-            Assert.Equal(Ms(8_000), Live(session, cursor).DurationTicks);
         }
 
-        // ------------------------------------------------------------------------------- refusals
+        // -------------------------------------------------------------------- ordinary rows
 
         [Fact]
-        public void UnlinkTrack_refuses_overlay_rows()
+        public void Overlay_rows_ungroup_like_any_row_and_then_stay_put_on_a_drag()
         {
-            var session = NewSession(out _, out var webcamTrack, out _);
+            var session = NewSession(out var screenTrack, out _, out _);
             var cursor = session.AddCursorTrack();
             var keys = session.AddKeyboardTrack();
-            var json = session.Project.ToJson();
-            var undoCount = 0;
-            session.HistoryChanged += (_, _) => undoCount++;
+            var screenClip = session.Project.Items.First(i => i.TrackId == screenTrack.Id);
+            Assert.Contains(cursor.Id, TimelineOps.TimeLinked(session.Project, new[] { screenClip.Id }));
 
-            session.UngroupTrack(cursor.TrackId);
-            session.UngroupTrack(keys.TrackId);
+            session.UngroupTracks(new[] { cursor.TrackId });
 
-            Assert.Equal(json, session.Project.ToJson());
-            Assert.Equal(0, undoCount); // refused before the pipeline, not rolled back inside it
+            Assert.Null(TrackOf(session, cursor).GroupId);
+            Assert.NotNull(TrackOf(session, keys).GroupId);
+            Assert.DoesNotContain(cursor.Id, TimelineOps.TimeLinked(session.Project, new[] { screenClip.Id }));
+            Assert.Contains(keys.Id, TimelineOps.TimeLinked(session.Project, new[] { screenClip.Id }));
+            Assert.Empty(session.Project.Validate());
 
-            // a normal row still unlinks.
-            session.UngroupTrack(webcamTrack.Id);
-            Assert.All(session.Project.Items.Where(i => i.TrackId == webcamTrack.Id),
-                i => Assert.Null(i.GroupId));
+            session.Undo();
+            Assert.NotNull(TrackOf(session, cursor).GroupId);
         }
 
+        /// <summary>Cursor and keys rows step through the stack like any row, past their own screen
+        /// row too: what lands behind it composes behind it, as any stacking does.</summary>
         [Fact]
-        public void Overlay_rows_never_reorder_or_duplicate()
-        {
-            var session = NewSession(out _, out _, out _);
-            var cursor = session.AddCursorTrack();
-            var json = session.Project.ToJson();
-
-            Assert.False(session.CanMoveTrackLayer(cursor.TrackId, towardsFront: true));
-            Assert.False(session.CanMoveTrackLayer(cursor.TrackId, towardsFront: false));
-            Assert.False(session.MoveTrackLayer(cursor.TrackId, towardsFront: false));
-            Assert.False(session.MoveTrackToIndex(cursor.TrackId, 0));
-            Assert.False(session.DuplicateTrack(cursor.TrackId));
-            Assert.Equal(json, session.Project.ToJson());
-        }
-
-        /// <summary>The screen row never rises above its overlay rows — not because the move is
-        /// refused, but because they come along: the three move as one unit, and a raise of the
-        /// screen row steps the whole unit over the row above it.</summary>
-        [Fact]
-        public void The_screen_row_moves_with_its_overlay_rows()
+        public void Overlay_rows_reorder_like_any_row()
         {
             var session = NewSession(out var screenTrack, out var webcamTrack, out _);
             var cursor = session.AddCursorTrack();
+            var cursorRow = cursor.TrackId;
 
-            // screen=0, cursor=1, webcam=2: raising the screen row lifts screen+cursor over the
-            // webcam — webcam=0, screen=1, cursor=2 — never the screen over its own cursor row.
-            Assert.True(session.CanMoveTrackLayer(screenTrack.Id, towardsFront: true));
-            Assert.True(session.MoveTrackLayer(screenTrack.Id, towardsFront: true));
-            Assert.Equal(0, OrderOf(session, webcamTrack.Id));
-            Assert.Equal(1, OrderOf(session, screenTrack.Id));
-            Assert.Equal(2, TrackOf(session, cursor).Order);
-            Assert.Empty(session.Project.Validate());
+            // screen=0, cursor=1, webcam=2
+            Assert.True(session.CanMoveTrackLayer(cursorRow, towardsFront: true));
+            Assert.True(session.CanMoveTrackLayer(cursorRow, towardsFront: false));
 
-            // …and the unit is now the frontmost thing: nothing left to rise over
-            Assert.False(session.CanMoveTrackLayer(screenTrack.Id, towardsFront: true));
-            Assert.False(session.MoveTrackLayer(screenTrack.Id, towardsFront: true));
-
-            // back down together
-            Assert.True(session.CanMoveTrackLayer(screenTrack.Id, towardsFront: false));
-            Assert.True(session.MoveTrackLayer(screenTrack.Id, towardsFront: false));
-            Assert.Equal(0, OrderOf(session, screenTrack.Id));
-            Assert.Equal(1, TrackOf(session, cursor).Order);
-            Assert.Equal(2, OrderOf(session, webcamTrack.Id));
-            Assert.False(session.CanMoveTrackLayer(screenTrack.Id, towardsFront: false));
-
-            // MoveTrackToIndex counts among the rows outside the unit: one other row, so the
-            // unit has exactly two places — 0 (behind the webcam) and 1 (in front of it).
-            var json = session.Project.ToJson();
-            Assert.False(session.MoveTrackToIndex(screenTrack.Id, 0)); // already there
-            Assert.False(session.MoveTrackToIndex(screenTrack.Id, 2)); // past the last place
-            Assert.Equal(json, session.Project.ToJson());
-            Assert.True(session.MoveTrackToIndex(screenTrack.Id, 1));
-            Assert.Equal(0, OrderOf(session, webcamTrack.Id));
-            Assert.Equal(1, OrderOf(session, screenTrack.Id));
-            Assert.Equal(2, TrackOf(session, cursor).Order);
-            Assert.Empty(session.Project.Validate());
-        }
-
-        /// <summary>A row another edit left between the screen row and its overlays (the session
-        /// permits the webcam to step down into the run) is stepped out again when the unit
-        /// moves: the unit is lifted whole, so the pair comes back together.</summary>
-        [Fact]
-        public void Moving_the_screen_row_regroups_a_run_another_row_stepped_into()
-        {
-            var session = NewSession(out var screenTrack, out var webcamTrack, out _);
-            var cursor = session.AddCursorTrack();
-
-            // screen=0, webcam=1, cursor=2
-            Assert.True(session.MoveTrackLayer(webcamTrack.Id, towardsFront: false));
+            Assert.True(session.MoveTrackLayer(cursorRow, towardsFront: true));
             Assert.Equal(1, OrderOf(session, webcamTrack.Id));
+            Assert.Equal(2, OrderOf(session, cursorRow));
+            Assert.False(session.CanMoveTrackLayer(cursorRow, towardsFront: true));
 
-            // the unit [screen, cursor] lifts out (webcam is the only row outside it) and goes
-            // in front: webcam=0, screen=1, cursor=2
-            Assert.True(session.MoveTrackLayer(screenTrack.Id, towardsFront: true));
-            Assert.Equal(0, OrderOf(session, webcamTrack.Id));
+            Assert.True(session.MoveTrackToIndex(cursorRow, 0));
+            Assert.Equal(0, OrderOf(session, cursorRow));
             Assert.Equal(1, OrderOf(session, screenTrack.Id));
-            Assert.Equal(2, TrackOf(session, cursor).Order);
+            Assert.Equal(2, OrderOf(session, webcamTrack.Id));
+            Assert.False(session.CanMoveTrackLayer(cursorRow, towardsFront: false));
+            Assert.Empty(session.Project.Validate());
+        }
+
+        /// <summary>The copy sits directly above the original, plays the same moments and is its own
+        /// material: no group, so a drag of the original does not bring it.</summary>
+        [Fact]
+        public void Overlay_rows_duplicate_like_any_row()
+        {
+            var session = NewSession(out var screenTrack, out _, out _);
+            session.SplitAtPlayhead(Ms(4_000));
+            var cursor = session.AddCursorTrack();
+            session.SetItemSpeed(cursor.Id, 2.0);
+            var row = TrackOf(session, cursor);
+            var before = session.Project.ToJson();
+            var originals = session.Project.Items.Where(i => i.TrackId == row.Id).ToList();
+
+            Assert.True(session.DuplicateTrack(row.Id));
+
+            var copyRow = session.Project.Tracks.Single(t => t.Name == "Cursor copy");
+            Assert.Equal(TrackKind.Video, copyRow.Kind);
+            Assert.Equal(OrderOf(session, row.Id) + 1, copyRow.Order);
+            Assert.Null(copyRow.GroupId);
+
+            var copies = session.Project.Items.Where(i => i.TrackId == copyRow.Id).OrderBy(i => i.TimelineStartTicks).ToList();
+            Assert.Equal(originals.Count, copies.Count);
+            for (var i = 0; i < copies.Count; i++)
+            {
+                var (original, copy) = (originals.OrderBy(o => o.TimelineStartTicks).ElementAt(i), copies[i]);
+                Assert.NotEqual(original.Id, copy.Id);
+                Assert.Equal((original.TimelineStartTicks, original.DurationTicks), (copy.TimelineStartTicks, copy.DurationTicks));
+                var (a, b) = ((CursorContent)original.Content, (CursorContent)copy.Content);
+                Assert.Equal((a.SourceId, a.SourceInTicks, a.Speed, a.Freeze), (b.SourceId, b.SourceInTicks, b.Speed, b.Freeze));
+            }
+
+            var screenClip = session.Project.Items.First(i => i.TrackId == screenTrack.Id);
+            Assert.DoesNotContain(TimelineOps.TimeLinked(session.Project, new[] { screenClip.Id }), id => copies.Any(c => c.Id == id));
+            Assert.Empty(session.Project.Validate());
+
+            session.Undo();
+            Assert.Equal(before, session.Project.ToJson());
+        }
+
+        /// <summary>A screen row is a row: nothing comes along when it moves, and a move can leave
+        /// its overlays beneath it.</summary>
+        [Fact]
+        public void The_screen_row_moves_alone()
+        {
+            var session = NewSession(out var screenTrack, out var webcamTrack, out _);
+            var cursor = session.AddCursorTrack();
+
+            // screen=0, cursor=1, webcam=2
+            Assert.True(session.MoveTrackLayer(screenTrack.Id, towardsFront: true));
+            Assert.Equal(0, TrackOf(session, cursor).Order);
+            Assert.Equal(1, OrderOf(session, screenTrack.Id));
+            Assert.Equal(2, OrderOf(session, webcamTrack.Id));
+
+            // index 2 of three: a real place now, with no unit taken out of the count
+            Assert.True(session.MoveTrackToIndex(screenTrack.Id, 2));
+            Assert.Equal(0, TrackOf(session, cursor).Order);
+            Assert.Equal(1, OrderOf(session, webcamTrack.Id));
+            Assert.Equal(2, OrderOf(session, screenTrack.Id));
+
+            // and out of range or staying put is still no move
+            var json = session.Project.ToJson();
+            Assert.False(session.MoveTrackToIndex(screenTrack.Id, 2));
+            Assert.False(session.MoveTrackToIndex(screenTrack.Id, 3));
+            Assert.False(session.MoveTrackToIndex(screenTrack.Id, -1));
+            Assert.Equal(json, session.Project.ToJson());
             Assert.Empty(session.Project.Validate());
         }
 
@@ -589,7 +507,7 @@ namespace Prisc.VideoSDK.Tests
             session.AddCursorTrack();
             var firstCursor = session.Project.Items
                 .Where(i => i.Content is CursorContent).OrderBy(i => i.TimelineStartTicks).First();
-            session.DeleteItem(firstCursor.Id); // frees [0, 8s) on the cursor row
+            session.DeleteItems(new[] { firstCursor.Id }); // frees [0, 8s) on the cursor row
 
             var text = session.AddText(Ms(1_000), Ms(2_000));
 
@@ -617,18 +535,22 @@ namespace Prisc.VideoSDK.Tests
 
         // -------------------------------------------------------------------------- prune / flags
 
+        /// <summary>A recording that kept any of its cursor clips is not offered a second row: a
+        /// clip deleted from it means "no cursor here". The last one going is what offers it
+        /// again.</summary>
         [Fact]
-        public void Deleting_the_last_overlay_item_prunes_the_row()
+        public void Deleting_the_last_overlay_item_prunes_the_row_and_offers_the_add_again()
         {
             var session = NewSession(out _, out _, out _);
             session.AddCursorTrack();
             var cursorItems = session.Project.Items.Where(i => i.Content is CursorContent).ToList();
 
-            session.DeleteItem(cursorItems[0].Id);
-            Assert.True(session.HasCursorTrack); // one item left, row survives
+            session.DeleteItems(new[] { cursorItems[0].Id });
+            Assert.False(session.CanAddCursorTrack); // one item left, row survives
+            Assert.Contains(session.Project.Tracks, t => t.Name == "Cursor");
 
-            session.DeleteItem(cursorItems[1].Id);
-            Assert.False(session.HasCursorTrack); // row pruned — the sidebar re-enables
+            session.DeleteItems(new[] { cursorItems[1].Id });
+            Assert.True(session.CanAddCursorTrack); // row pruned — the sidebar re-enables
             Assert.DoesNotContain(session.Project.Tracks, t => t.Name == "Cursor");
             Assert.Empty(session.Project.Validate());
         }
@@ -639,28 +561,26 @@ namespace Prisc.VideoSDK.Tests
             var session = NewSession(out _, out _, out _);
             var first = session.AddCursorTrack();
             session.DeleteTrack(first.TrackId);
-            Assert.False(session.HasCursorTrack);
+            Assert.True(session.CanAddCursorTrack);
 
             Assert.NotNull(session.AddCursorTrack());
-            Assert.True(session.HasCursorTrack);
+            Assert.False(session.CanAddCursorTrack);
             Assert.Empty(session.Project.Validate());
         }
 
         [Fact]
-        public void Has_flags_classify_by_content_not_name()
+        public void CanAdd_flags_classify_by_content_not_name()
         {
             var session = NewSession(out _, out _, out _);
-            Assert.False(session.HasCursorTrack);
-            Assert.False(session.HasKeyboardTrack);
 
             session.AddCursorTrack();
-            Assert.True(session.HasCursorTrack);
-            Assert.False(session.HasKeyboardTrack);
+            Assert.False(session.CanAddCursorTrack);
+            Assert.True(session.CanAddKeyboardTrack);
 
             // renaming the row changes nothing — classification is by item content.
             var track = session.Project.Tracks.Single(t => t.Name == "Cursor");
             session.RenameTrack(track.Id, "My pointer");
-            Assert.True(session.HasCursorTrack);
+            Assert.False(session.CanAddCursorTrack);
         }
 
         // -------------------------------------------------------------------------- undo / redo
@@ -675,11 +595,11 @@ namespace Prisc.VideoSDK.Tests
 
             session.Undo();
             Assert.Equal(before, session.Project.ToJson());
-            Assert.False(session.HasCursorTrack);
+            Assert.True(session.CanAddCursorTrack);
 
             session.Redo();
             Assert.Equal(after, session.Project.ToJson());
-            Assert.True(session.HasCursorTrack);
+            Assert.False(session.CanAddCursorTrack);
         }
 
         // ---------------------------------------------------------------------- HasInputCapture
@@ -688,7 +608,7 @@ namespace Prisc.VideoSDK.Tests
         public void HasInputCapture_requires_the_sidecar_file_to_exist()
         {
             var missing = Path.Combine(Path.GetTempPath(), $"input-capture-{Guid.NewGuid():N}.jsonl");
-            var session = NewSession(out _, out _, out _, capturePath: missing);
+            var session = NewSession(missing, out _, out _, out _);
 
             Assert.False(session.HasInputCapture);
         }
@@ -700,7 +620,7 @@ namespace Prisc.VideoSDK.Tests
             File.WriteAllText(path, "");
             try
             {
-                var session = NewSession(out _, out _, out _, capturePath: path);
+                var session = NewSession(path, out _, out _, out _);
                 Assert.True(session.HasInputCapture);
 
                 // the probe is cached: the file vanishing mid-session does not flip the flag
@@ -718,7 +638,7 @@ namespace Prisc.VideoSDK.Tests
         [Fact]
         public void HasInputCapture_is_false_without_a_capture_path()
         {
-            var session = NewSession(out _, out _, out _, capturePath: null);
+            var session = NewSession(capturePath: null, out _, out _, out _);
             Assert.False(session.HasInputCapture);
         }
 
@@ -736,7 +656,7 @@ namespace Prisc.VideoSDK.Tests
 
             Assert.Empty(session.Project.Items);
             Assert.DoesNotContain(session.Project.Tracks, t => t.Name is "Cursor" or "Keys");
-            Assert.False(session.HasCursorTrack);
+            Assert.False(session.CanAddCursorTrack);
             Assert.Empty(session.Project.Validate());
         }
     }

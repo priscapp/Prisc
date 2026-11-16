@@ -161,7 +161,7 @@ namespace Prisc.VideoSDK.Tests
             item.Entry = Ramp(300);
             item.Exit = Ramp(400);
 
-            Assert.True(TimelineOps.Split(project, item.Id, Ms(2_000)));
+            Assert.True(TimelineOps.SplitItem(project, item.Id, Ms(2_000)));
 
             var halves = project.Items.OrderBy(i => i.TimelineStartTicks).ToList();
             Assert.Equal(2, halves.Count);
@@ -191,15 +191,13 @@ namespace Prisc.VideoSDK.Tests
             });
             var session = new EditorSession(project, null, null);
 
-            Assert.True(session.CanCopyItem(item.Id));
-            Assert.True(session.CopyItem(item.Id));
+            Assert.True(session.CopyItems(new[] { item.Id }));
 
             var gap = session.FindGap(track.Id, Ms(7_000));
             Assert.NotNull(gap);
             Assert.True(session.CanPasteIntoGap(gap.Value));
-            var pasted = session.PasteIntoGap(gap.Value);
+            var pasted = Assert.Single(session.PasteIntoGap(gap.Value));
 
-            Assert.NotNull(pasted);
             var copy = session.Project.Items.Single(i => i.Id == pasted);
             Assert.Equal(ObscureKind.Blackout, Assert.IsType<ObscureContent>(copy.Content).Kind);
             Assert.Equal(Ms(5_000), copy.TimelineStartTicks);

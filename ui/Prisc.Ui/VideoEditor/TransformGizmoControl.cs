@@ -41,9 +41,12 @@ namespace Prisc.UI.VideoEditor
     /// composed on top there. Otherwise the press is left unhandled and falls through to the
     /// preview's own hit-test, which selects the overlay the click was actually aimed at.
     ///
-    /// <b>Writes.</b> One <see cref="EditorSession.EditItems"/> per pointer move over the selected
-    /// item's whole linked row (<see cref="ItemRowScope"/> — placement belongs to the feed, not the
-    /// cut, the same rule the inspector's transform fields follow), bracketed by an
+    /// <b>Read-only.</b> A clip on a placement-locked row gets its outline and nothing else: no
+    /// handles, and every press is declined the same way, so it can still be clicked to select.
+    ///
+    /// <b>Writes.</b> One <see cref="EditorSession.EditPlacement"/> per pointer move over the selected
+    /// item's whole feed (placement belongs to the feed, not the cut, the same rule the inspector's
+    /// transform fields follow), bracketed by an
     /// <see cref="EditGesture"/> so the entire drag is one undo entry; Esc (or a lost capture)
     /// cancels it back to where the drag began.
     /// </summary>
@@ -98,6 +101,7 @@ namespace Prisc.UI.VideoEditor
         private bool _freeResize;
         private bool _freeByContent; // a wallpaper: free-sized whatever _freeResize says
         private bool _widthOnly;
+        private bool _readOnly;
 
         /// <summary>Smallest fraction of the source picture a crop drag can leave on either axis —
         /// stops a handle from crossing its opposite edge (and a 0-sized item from killing the
@@ -233,13 +237,15 @@ namespace Prisc.UI.VideoEditor
         /// <see cref="Guid.Empty"/> means "nothing to show" — the preview then arranges this control
         /// to an empty rect, which is what makes it invisible and unhittable. Ignored for the item
         /// identity while a drag is in flight: a drag owns its target until it ends.
+        /// <paramref name="readOnly"/> is a placement-locked row (see the class remarks).
         /// </summary>
-        internal void SetTarget(Guid itemId, PlacedItem placed)
+        internal void SetTarget(Guid itemId, PlacedItem placed, bool readOnly = false)
         {
             if (_drag != DragKind.None && itemId != _itemId)
                 return;
 
             _itemId = itemId;
+            _readOnly = readOnly;
             if (itemId != Guid.Empty)
             {
                 var current = CurrentItem();
@@ -339,7 +345,7 @@ namespace Prisc.UI.VideoEditor
                 return;
 
             var item = CurrentItem();
-            if (item == null || CanvasRect.Width <= 0 || CanvasRect.Height <= 0)
+            if (item == null || _readOnly || CanvasRect.Width <= 0 || CanvasRect.Height <= 0)
                 return;
 
             // a second pointer (touch/pen) can land here while a timeline drag owns the session;
@@ -778,15 +784,13 @@ namespace Prisc.UI.VideoEditor
         /// per-item call would pay the serialize/validate/notify pipeline once per segment per
         /// move.</summary>
         private void WriteRow(Item item, string coalesceKey, Action<ModelTransform> apply) =>
-            _session.EditItems(ItemRowScope.RowItemIds(_session, item),
-                i => apply(i.Transform ??= new ModelTransform()),
-                coalesceKey, structural: false, origin: this);
+            _session.EditPlacement(item.Id, i => apply(i.Transform ??= new ModelTransform()), coalesceKey, this);
 
         /// <summary>The text-card resize write: the font size that draws the dragged width plus the
-        /// anchored center, in one mutation (a text card is a row of one, but the row scope keeps
-        /// the coalescing identical to every other gizmo write).</summary>
+        /// anchored center, in one mutation (a text card is a feed of one, but this path keeps the
+        /// coalescing identical to every other gizmo write).</summary>
         private void WriteTextResize(Item item, double fontSize, double x, double y) =>
-            _session.EditItems(ItemRowScope.RowItemIds(_session, item), i =>
+            _session.EditPlacement(item.Id, i =>
             {
                 if (i.Content is TextContent text)
                     text.Size = fontSize;
@@ -794,7 +798,7 @@ namespace Prisc.UI.VideoEditor
                 var transform = i.Transform ??= new ModelTransform();
                 transform.X = x;
                 transform.Y = y;
-            }, "gizmo:resize", structural: false, origin: this);
+            }, "gizmo:resize", this);
 
         /// <summary>Ends the drag. Commit pushes one undo entry for the whole drag (none when
         /// nothing net-changed — a no-op drag costs nothing); cancel restores the pre-drag
@@ -896,7 +900,7 @@ namespace Prisc.UI.VideoEditor
         private int HitHandle(Point local)
         {
             var b = ItemRect(Bounds.Size);
-            if (b.Width <= 0 || b.Height <= 0)
+            if (_readOnly || b.Width <= 0 || b.Height <= 0)
                 return -1;
 
             // crop mode always offers all eight handles (every edge is croppable on its own) and
@@ -932,7 +936,7 @@ namespace Prisc.UI.VideoEditor
             {
                 HandleRotate => CursorResources.Rotate,
                 >= 0 => ResizeCursor(handle),
-                _ when !ItemRect(Bounds.Size).Contains(local) => ArrowCursor,
+                _ when _readOnly || !ItemRect(Bounds.Size).Contains(local) => ArrowCursor,
                 _ => IsTopmostAt(parentPoint) ? MoveCursor : ArrowCursor,
             };
         }
@@ -1029,6 +1033,9 @@ namespace Prisc.UI.VideoEditor
                 // masked items — the corner handles sit on this rectangle.
                 if (mask != null)
                     context.DrawRectangle(null, new Pen(new SolidColorBrush(Colors.White, 0.35), 1), bounds);
+
+                if (_owner._readOnly)
+                    return;
 
                 // Edge handles only in free-resize (Unlocked) mode: a ratio-holding item resizes
                 // by its four corners alone. A width-only block gets its two side handles instead

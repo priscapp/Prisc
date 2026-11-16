@@ -130,12 +130,14 @@ namespace Prisc.UI.VideoEditor
         /// What a press at <paramref name="p"/> on <paramref name="item"/> grabs. A body press is
         /// declined (None) while another item is composed on top there, so it falls through to the
         /// preview's click-to-select of that item, the rule the transform gizmo follows for its
-        /// body; the handles are chrome of their own and always win.
+        /// body; the handles are chrome of their own and win otherwise. On a placement-locked row
+        /// nothing is grabbed at all, so every press falls through and still selects.
         /// </summary>
         public static ShapeHandlePart ResolvePress(Project project, Item item, long timeTicks, Vec2 p,
             double canvasWidth, double canvasHeight)
         {
             if (project == null || item?.Content is not ShapeContent { IsLine: true } shape ||
+                project.TrackOf(item) is { PlacementLocked: true } ||
                 !(canvasWidth > 0) || !(canvasHeight > 0) ||
                 !ShapeLineLayout.TryResolve(item.Transform, shape, canvasWidth, canvasHeight, out var line))
                 return ShapeHandlePart.None;
@@ -231,7 +233,7 @@ namespace Prisc.UI.VideoEditor
     /// previous move, so the box re-fit each move writes cannot feed back into the drag (the
     /// gizmo's discipline). <see cref="ShapeHandlesControl"/> opens a gesture with
     /// <see cref="Label"/> and calls <see cref="Apply"/> inside one coalesced
-    /// <c>EditItem</c> per pointer move.
+    /// <c>EditPlacement</c> per pointer move.
     ///
     /// <list type="bullet">
     /// <item><b>Start / End</b>: the endpoint follows the pointer (Shift snaps the line's angle to
@@ -358,7 +360,7 @@ namespace Prisc.UI.VideoEditor
         }
 
         /// <summary>Writes this drag at <paramref name="pointer"/> into <paramref name="item"/> (the
-        /// session's live copy inside an <c>EditItem</c>). Anything that is no longer a line kind
+        /// session's live copy inside an <c>EditPlacement</c>). Anything that is no longer a line kind
         /// is left alone.</summary>
         public void Apply(Item item, Vec2 pointer, bool snap)
         {

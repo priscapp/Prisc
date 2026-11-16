@@ -116,15 +116,20 @@ namespace Prisc.VideoSDK.Editing
         internal ProjectChangeKind Kind { get; set; } = ProjectChangeKind.Mapping;
 
         /// <summary>The exempt clips' real-time extents as the gesture began, or null when there
-        /// were none: every step of a speed-item drag re-fits them from these rather than from
-        /// the previous step, so a long drag cannot accumulate rounding (see
-        /// <see cref="EditorSession.RefitExemptItems"/>).</summary>
+        /// were none: every step of a drag re-fits from these rather than from the previous step,
+        /// so a step's rounding or end-trim does not outlast it. A speed-item drag re-fits every
+        /// exempt clip (see <see cref="EditorSession.RefitExemptItems"/>), and a clip's own drag
+        /// re-fits that clip (see <see cref="EditorSession.MoveItems"/>).</summary>
         internal EditorSession.ExemptSnapshot ExemptBefore { get; set; }
 
         /// <summary>True once a step of this gesture re-fit the exempt clips: the flag that
         /// lets a drag which comes back to its starting mapping put their original durations
         /// back instead of leaving a re-fit in place.</summary>
         internal bool ExemptRefitApplied { get; set; }
+
+        /// <summary>Each clip the gesture trimmed, with the span it began with: what
+        /// <see cref="EditorSession.CommitGesture"/> measures the growth against.</summary>
+        internal Dictionary<Guid, (long Start, long End)> TrimmedSpans { get; } = new Dictionary<Guid, (long, long)>();
 
         /// <summary>Ends the gesture, pushing one undo entry and persisting — unless nothing
         /// actually changed, in which case a no-op drag costs nothing.</summary>
@@ -192,7 +197,6 @@ namespace Prisc.VideoSDK.Editing
         private readonly List<UndoEntry> _undo = new List<UndoEntry>();
         private readonly List<UndoEntry> _redo = new List<UndoEntry>();
         private readonly HashSet<Guid> _selectedIds = new HashSet<Guid>();
-        private Guid? _selectionAnchor;
         private EditGesture _gesture;
         private bool _suppressCoalesce;
         private string _pendingSaveJson;
@@ -218,7 +222,7 @@ namespace Prisc.VideoSDK.Editing
             ArgumentNullException.ThrowIfNull(project);
 
             project.Normalize();
-            // a group with one row left in it pins that row for nothing (see
+            // a group with one row left in it has nothing to keep in step (see
             // TimelineOps.CollapseLoneGroups): a recording that only ever had a screen row, or a
             // saved edit from before lone groups were dissolved, opens already collapsed.
             TimelineOps.CollapseLoneGroups(project);
@@ -265,6 +269,11 @@ namespace Prisc.VideoSDK.Editing
         /// rolled back when this fires.</summary>
         public event EventHandler<ValidationFailureEventArgs> ValidationFailed;
 
+        /// <summary>Raised with a sentence for the user when an edit did something they could not
+        /// otherwise tell, such as refusing part of what was asked. The host shows it for a few
+        /// seconds.</summary>
+        public event EventHandler<string> StatusRaised;
+
         /// <summary>Deep clone via a JSON round-trip — what the window hands
         /// <c>CompositionPlayer.UpdateProject</c>, which retains the reference and reads it from
         /// background rebuild threads, so it must never see the live mutable instance.</summary>
@@ -272,26 +281,33 @@ namespace Prisc.VideoSDK.Editing
 
         // ------------------------------------------------------------------------------ selection
 
-        /// <summary>The selected item ids, primary (anchor) first. Empty when nothing is
+        /// <summary>The selected item ids, in no particular order. Empty when nothing is
         /// selected.</summary>
         public IReadOnlyList<Guid> SelectedItemIds => SelectionSnapshot();
 
-        /// <summary>The primary selected item, resolved against the live <see cref="Project"/> on
-        /// every read (items are replaced by undo/redo, so a cached reference would go stale).
-        /// Null when nothing is selected or the selected item no longer exists.</summary>
-        public Item PrimarySelectedItem
+        /// <summary>The rows holding selected clips, lowest order first. What the group commands act
+        /// on: there is no selection of rows, only of the clips on them.</summary>
+        public IReadOnlyList<Guid> SelectedTrackIds
         {
             get
             {
-                var id = _selectionAnchor ?? (_selectedIds.Count > 0 ? _selectedIds.First() : (Guid?)null);
-                return id is Guid g ? Project.Items.FirstOrDefault(i => i.Id == g) : null;
+                var rows = Project.Items.Where(i => _selectedIds.Contains(i.Id)).Select(i => i.TrackId).ToHashSet();
+                return Project.Tracks.Where(t => rows.Contains(t.Id)).Select(t => t.Id).ToList();
             }
         }
 
-        /// <summary>Selects an item (null clears). <paramref name="additive"/> is accepted for the
-        /// coming multi-select — the session currently caps selection at one item, so it behaves
-        /// as replace.</summary>
-        public void Select(Guid? itemId, bool additive = false)
+        public bool IsSelected(Guid itemId) => _selectedIds.Contains(itemId);
+
+        /// <summary>The selected item when exactly one is selected, resolved against the live
+        /// <see cref="Project"/> on every read (items are replaced by undo/redo, so a cached
+        /// reference would go stale). Null with nothing selected, with several selected, or when the
+        /// selected item no longer exists, so an edit that takes one clip cannot silently reach an
+        /// arbitrary member of a multi-selection.</summary>
+        public Item SoleSelectedItem =>
+            _selectedIds.Count == 1 ? Project.Items.FirstOrDefault(i => _selectedIds.Contains(i.Id)) : null;
+
+        /// <summary>Makes the item the whole selection (null clears).</summary>
+        public void Select(Guid? itemId)
         {
             if (itemId == null)
             {
@@ -300,16 +316,33 @@ namespace Prisc.VideoSDK.Editing
             }
 
             var id = itemId.Value;
-            if (_selectedIds.Count == 1 && _selectedIds.Contains(id) && _selectionAnchor == id)
+            if (_selectedIds.Count == 1 && _selectedIds.Contains(id))
                 return;
 
             _selectedIds.Clear();
             _selectedIds.Add(id);
-            _selectionAnchor = id;
-            // a selection change ends any coalescing run: even a caller whose coalesce key forgot
-            // to name its item cannot merge edits made to two different selections into one entry.
-            _suppressCoalesce = true;
-            SelectionChanged?.Invoke(this, EventArgs.Empty);
+            RaiseSelectionEdited();
+        }
+
+        /// <summary>Adds the item to the selection, or takes it out if it is already there.</summary>
+        public void ToggleSelected(Guid itemId)
+        {
+            if (!_selectedIds.Remove(itemId))
+                _selectedIds.Add(itemId);
+            RaiseSelectionEdited();
+        }
+
+        /// <summary>Makes these items the selection, ignoring ids not in the project.</summary>
+        public void SelectMany(IEnumerable<Guid> itemIds)
+        {
+            var live = itemIds.ToHashSet();
+            live.IntersectWith(Project.Items.Select(i => i.Id));
+            if (_selectedIds.SetEquals(live))
+                return;
+
+            _selectedIds.Clear();
+            _selectedIds.UnionWith(live);
+            RaiseSelectionEdited();
         }
 
         public void ClearSelection()
@@ -318,10 +351,24 @@ namespace Prisc.VideoSDK.Editing
                 return;
 
             _selectedIds.Clear();
-            _selectionAnchor = null;
+            RaiseSelectionEdited();
+        }
+
+        /// <summary>A selection change ends any coalescing run: even a caller whose coalesce key
+        /// forgot to name its item cannot merge edits made to two different selections into one
+        /// entry.</summary>
+        private void RaiseSelectionEdited()
+        {
             _suppressCoalesce = true;
             SelectionChanged?.Invoke(this, EventArgs.Empty);
         }
+
+        /// <summary>Whether a drag of the selection would bring clips that are not selected.</summary>
+        public bool HasLinkedClips => TimelineOps.TimeLinked(Project, _selectedIds).Count > _selectedIds.Count;
+
+        /// <summary>Extends the selection to everything a drag of it would bring, which is the
+        /// explicit way to copy or delete that set: those commands act on the exact selection.</summary>
+        public void SelectLinkedClips() => SelectMany(TimelineOps.TimeLinked(Project, _selectedIds));
 
         // ------------------------------------------------------------------------------- gestures
 
@@ -347,6 +394,12 @@ namespace Prisc.VideoSDK.Editing
         {
             _gesture = null;
 
+            foreach (var (itemId, span) in gesture.TrimmedSpans)
+            {
+                if (Project.Items.FirstOrDefault(i => i.Id == itemId) is { } item)
+                    TimelineOps.RebaseGrownSpan(Project, item, span.Start, span.End);
+            }
+
             var after = Project.ToJson();
             if (after != gesture.BeforeJson)
             {
@@ -371,7 +424,7 @@ namespace Prisc.VideoSDK.Editing
             if (Project.ToJson() != gesture.BeforeJson)
             {
                 RestoreInPlace(gesture.BeforeJson);
-                RestoreSelection(gesture.BeforeSelection);
+                SelectMany(gesture.BeforeSelection);
                 RaiseProjectChanged(gesture.Kind, gesture.Origin);
             }
 
@@ -542,160 +595,47 @@ namespace Prisc.VideoSDK.Editing
 
         // --------------------------------------------------------------------------- timeline ops
 
-        /// <summary>Wraps <see cref="TimelineOps.Move"/> (whole group, clamped at the
-        /// origin). Returns the delta actually applied — 0 when clamped away entirely or when the
-        /// result was rolled back (a move onto an occupied span of the same track).</summary>
-        public long MoveItem(Guid itemId, long deltaTicks, object origin = null) =>
+        /// <summary>Wraps <see cref="TimelineOps.Move"/>: exactly these clips, clamped at the origin.
+        /// A drag freezes the set from <see cref="TimelineOps.TimeLinked"/> at press and passes it
+        /// on every step, so a clip it passes over does not join. Returns the delta actually applied
+        /// — 0 when clamped away entirely or when the result was rolled back (a move onto an
+        /// occupied span of the same track), and the whole set stops then. Inside a gesture an
+        /// exempt clip keeps the real-time span the gesture began with, so an end-trim at a
+        /// neighbour lasts only while the clip is up against it.</summary>
+        public long MoveItems(IEnumerable<Guid> itemIds, long deltaTicks, object origin = null) =>
             Mutate("Move", ProjectChangeKind.Mapping, null, origin,
-                p => TimelineOps.Move(p, itemId, deltaTicks));
+                p => TimelineOps.Move(p, itemIds, deltaTicks, _gesture?.ExemptBefore is { } start ? start.OutputSpanOf : null));
 
-        /// <summary>Wraps <see cref="TimelineOps.TrimStart"/> (single item), with the input-overlay
-        /// clamp on both sides of the hard sync (see <see cref="ClampOverlayTrim"/> and
-        /// <see cref="ClampOverlayItemsToScreen"/>). Returns the delta actually applied.</summary>
+        /// <summary>Wraps <see cref="TimelineOps.TrimStart"/>: this clip's edge alone, on every kind of
+        /// row. A trim that grows the clip hands grouped overlays under the new span its clock, once
+        /// on release for a drag (see <see cref="TrimItem"/>). Returns the delta actually applied.</summary>
         public long TrimItemStart(Guid itemId, long deltaTicks, object origin = null) =>
-            Mutate("Trim", TrimChangeKind(itemId), null, origin, p =>
-            {
-                var applied = TimelineOps.TrimStart(p, itemId,
-                    ClampOverlayTrim(p, itemId, deltaTicks, fromStart: true));
-                ClampOverlayItemsToScreen(p, itemId);
-                return applied;
-            });
+            TrimItem(itemId, origin, p => TimelineOps.TrimStart(p, itemId, deltaTicks));
 
-        /// <summary>Wraps <see cref="TimelineOps.TrimEnd"/> (single item), clamped exactly as
-        /// <see cref="TrimItemStart"/>. Returns the delta actually applied.</summary>
+        /// <summary>Wraps <see cref="TimelineOps.TrimEnd"/>: this clip's edge alone, as
+        /// <see cref="TrimItemStart"/> does. Returns the delta actually applied.</summary>
         public long TrimItemEnd(Guid itemId, long deltaTicks, object origin = null) =>
-            Mutate("Trim", TrimChangeKind(itemId), null, origin, p =>
+            TrimItem(itemId, origin, p => TimelineOps.TrimEnd(p, itemId, deltaTicks));
+
+        /// <summary>One step of a trim, ending with <see cref="TimelineOps.RebaseGrownSpan"/>. A drag
+        /// waits for its release (<see cref="CommitGesture"/>), and measures from the span the clip
+        /// began with: a pointer step at a time would cut an overlay once per step, and a drag out
+        /// and back would leave those cuts behind.</summary>
+        private long TrimItem(Guid itemId, object origin, Func<Project, long> trim) =>
+            Mutate("Trim", ProjectChangeKind.Mapping, null, origin, p =>
             {
-                var applied = TimelineOps.TrimEnd(p, itemId,
-                    ClampOverlayTrim(p, itemId, deltaTicks, fromStart: false));
-                ClampOverlayItemsToScreen(p, itemId);
+                var item = RequireItem(p, itemId);
+                var (start, end) = (item.TimelineStartTicks, item.TimelineEndTicks);
+                var applied = trim(p);
+                if (_gesture != null)
+                    _gesture.TrimmedSpans.TryAdd(itemId, (start, end));
+                else
+                    TimelineOps.RebaseGrownSpan(p, item, start, end);
                 return applied;
             });
 
-        /// <summary>
-        /// The change kind a trim of this item raises: <see cref="ProjectChangeKind.Structural"/>
-        /// when the item's recording carries cursor/keyboard rows, because shrinking the screen
-        /// takes those items along and may strand — and so drop — one of them, emptying a row.
-        /// Deliberately keyed on the group rather than on what the trim turns out to do: the answer
-        /// is needed before the mutation runs, and an extra row rebuild once per trim gesture costs
-        /// nothing (mid-gesture changes raise Preview and escalate the gesture's kind instead).
-        /// </summary>
-        private ProjectChangeKind TrimChangeKind(Guid itemId)
-        {
-            var item = Project.Items.FirstOrDefault(i => i.Id == itemId);
-            if (item?.GroupId is not Guid group || item.Content is not MediaContent)
-                return ProjectChangeKind.Mapping;
-
-            return Project.Items.Any(i => i.GroupId == group
-                                          && i.Content is CursorContent or KeyboardContent)
-                ? ProjectChangeKind.Structural
-                : ProjectChangeKind.Mapping;
-        }
-
-        /// <summary>
-        /// The trim delta an input-overlay item may actually take. Cursor/keyboard items annotate a
-        /// screen segment and are hard-synced to it: they may be trimmed <i>shorter</i> freely (hide
-        /// the cursor for a while) but must never reach past the screen span, where they would have
-        /// nothing to annotate — the cursor draws nothing there and the keyboard falls back to
-        /// item-relative time (see <c>FrameComposer.FindScreenMediaItem</c>). The dragged edge is
-        /// therefore clamped to the span of the screen items sharing the overlay's group. An
-        /// item already hanging past that span may still shrink, it just cannot grow, exactly as
-        /// <see cref="TimelineOps.TrimEnd"/> treats an item hanging past the end of its source.
-        /// Non-overlay items — and overlays whose screen row is gone — pass through unchanged.
-        /// </summary>
-        private static long ClampOverlayTrim(Project project, Guid itemId, long deltaTicks, bool fromStart)
-        {
-            var item = project.Items.FirstOrDefault(i => i.Id == itemId);
-            if (item == null || OverlayScreenSpan(project, item) is not { } span)
-                return deltaTicks;
-
-            return fromStart
-                ? Math.Max(deltaTicks, Math.Min(0, span.Start - item.TimelineStartTicks))
-                : Math.Min(deltaTicks, Math.Max(0, span.End - item.TimelineEndTicks));
-        }
-
-        /// <summary>
-        /// The other side of the same contract: after a screen item is trimmed, the overlay items of
-        /// its group are pulled in with it so they never outlive the screen span. Trims are
-        /// single-item by design (the group's rows keep their own in-points), so nothing else fans
-        /// out this way — but an overlay left hanging over material that is gone is exactly the
-        /// state the hard sync exists to prevent. An overlay item the trim leaves entirely outside
-        /// the span is removed: what it annotated no longer plays. No-op for anything but a grouped
-        /// media item.
-        /// </summary>
-        private void ClampOverlayItemsToScreen(Project project, Guid trimmedItemId)
-        {
-            var trimmed = project.Items.FirstOrDefault(i => i.Id == trimmedItemId);
-            if (trimmed?.GroupId is not Guid group || trimmed.Content is not MediaContent)
-                return;
-
-            var dropped = false;
-            foreach (var overlay in project.Items.Where(i => i.GroupId == group
-                         && i.Content is CursorContent or KeyboardContent).ToList())
-            {
-                if (OverlayScreenSpan(project, overlay) is not { } span)
-                    continue;
-
-                var start = Math.Max(overlay.TimelineStartTicks, span.Start);
-                var end = Math.Min(overlay.TimelineEndTicks, span.End);
-                if (end <= start)
-                {
-                    project.Items.Remove(overlay);
-                    dropped = true;
-                    continue;
-                }
-
-                overlay.TimelineStartTicks = start;
-                overlay.DurationTicks = end - start;
-            }
-
-            if (dropped)
-                PruneEmptyTracks(project);
-        }
-
-        /// <summary>The span an input-overlay item is allowed to occupy: the union of the video-row
-        /// screen items sharing its group — the segment it mirrors, which a
-        /// <see cref="TimelineOps.SplitItem"/> on the screen row may have left as two back-to-back
-        /// members. Null for a non-overlay item, and for an overlay whose screen partner is gone
-        /// (nothing to clamp to; the overlay already draws nothing).</summary>
-        private static (long Start, long End)? OverlayScreenSpan(Project project, Item item)
-        {
-            Guid sourceId;
-            if (item.Content is CursorContent cursor)
-                sourceId = cursor.SourceId;
-            else if (item.Content is KeyboardContent keyboard)
-                sourceId = keyboard.SourceId;
-            else
-                return null;
-
-            if (item.GroupId is not Guid group)
-                return null;
-
-            var source = project.Sources.FirstOrDefault(s => s.Id == sourceId);
-            if (source == null)
-                return null;
-
-            long start = long.MaxValue, end = long.MinValue;
-            foreach (var partner in project.Items)
-            {
-                if (partner.GroupId != group || partner.Content is not MediaContent media
-                    || media.SourceId != sourceId
-                    || !Composition.FrameComposer.IsScreenStream(source, media.StreamIndex))
-                    continue;
-
-                var track = project.Tracks.FirstOrDefault(t => t.Id == partner.TrackId);
-                if (track?.Kind != TrackKind.Video)
-                    continue;
-
-                start = Math.Min(start, partner.TimelineStartTicks);
-                end = Math.Max(end, partner.TimelineEndTicks);
-            }
-
-            return end > start ? (start, end) : null;
-        }
-
-        /// <summary>Wraps <see cref="TimelineOps.SetSpeed"/> (single media item, re-timed in
-        /// place). Returns the speed actually stored.</summary>
+        /// <summary>Wraps <see cref="TimelineOps.SetSpeed"/> (single clip, re-timed in place, with the
+        /// overlays a screen clip keeps in step). Returns the speed actually stored.</summary>
         public double SetItemSpeed(Guid itemId, double speed, object origin = null) =>
             Mutate("Speed", ProjectChangeKind.Mapping, null, origin,
                 p => TimelineOps.SetSpeed(p, itemId, speed), failureValue: 1.0);
@@ -755,19 +695,14 @@ namespace Prisc.VideoSDK.Editing
                 if (value)
                 {
                     // the project span it covered is the real time it played for
-                    FitExemptItem(p, warp, item, item.DurationTicks);
+                    TimelineOps.FitExemptItem(p, warp, item, item.DurationTicks);
                 }
                 else
                 {
-                    var outputSpan = warp.ToOutput(item.TimelineEndTicks) - warp.ToOutput(item.TimelineStartTicks);
+                    var outputSpan = warp.OutputSpan(item.TimelineStartTicks, item.TimelineEndTicks);
                     item.DurationTicks = TimelineOps.ClampDurationToRow(p, item, outputSpan);
                 }
             });
-
-        /// <summary>Wraps <see cref="TimelineOps.Split"/> (whole group, all-or-nothing).</summary>
-        public bool SplitAt(Guid itemId, long timelineTicks, object origin = null) =>
-            Mutate("Split", ProjectChangeKind.Mapping, null, origin,
-                p => TimelineOps.Split(p, itemId, timelineTicks));
 
         /// <summary>Wraps <see cref="TimelineOps.SplitItem"/>: cuts this clip and nothing else, not
         /// even the rest of its recording. The timeline's right-click split.</summary>
@@ -775,59 +710,60 @@ namespace Prisc.VideoSDK.Editing
             Mutate("Split", ProjectChangeKind.Mapping, null, origin,
                 p => TimelineOps.SplitItem(p, itemId, timelineTicks));
 
-        /// <summary>The split-everything command: cuts every item covering the playhead — video,
-        /// audio, text and image rows alike — taking each group once. Deliberately ignores the
-        /// selection: this is the "cut straight down the timeline" gesture, and a selected clip must
-        /// not quietly narrow it to one row (the right-click menu is what cuts a single clip).
-        /// Returns true when anything split.</summary>
-        public bool SplitAtPlayhead(long playheadTicks, object origin = null) =>
-            Mutate("Split", ProjectChangeKind.Mapping, null, origin, p =>
+        /// <summary>The split-everything command: wraps <see cref="TimelineOps.SplitAcross"/>, which
+        /// cuts every item running through the playhead — video, audio, text and image rows alike — all or
+        /// nothing per group. Deliberately ignores the selection: this is the "cut straight down the
+        /// timeline" gesture, and a selected clip must not quietly narrow it to one row (the
+        /// right-click menu is what cuts a single clip). A refused group raises
+        /// <see cref="StatusRaised"/>, whether or not other groups were cut. Returns true when
+        /// anything split.</summary>
+        public bool SplitAtPlayhead(long playheadTicks, object origin = null)
+        {
+            var refused = false;
+            var cut = Mutate("Split", ProjectChangeKind.Mapping, null, origin, p =>
             {
-                // snapshot the candidates first: right halves produced by a split start exactly at
-                // the playhead, so they cover it and must not themselves be split.
-                var candidates = p.Items.Where(i => Covers(i, playheadTicks))
-                                        .Select(i => (i.Id, i.GroupId)).ToList();
-                var handledGroups = new HashSet<Guid>();
-                var any = false;
-                foreach (var (id, group) in candidates)
-                {
-                    if (group is Guid g && !handledGroups.Add(g))
-                        continue; // a split from another member already covered this group
-                    any |= TimelineOps.Split(p, id, playheadTicks);
-                }
-                return any;
+                var result = TimelineOps.SplitAcross(p, playheadTicks);
+                refused = result.Refused;
+                return result.Cut;
             });
 
+            if (refused)
+                StatusRaised?.Invoke(this, "Couldn't cut one group: a clip edge is too close to the playhead.");
+            return cut;
+        }
+
         /// <summary>Wraps <see cref="TimelineOps.RippleDelete"/> (the clip's span cut out of its
-        /// group, gap closes on all tracks), then prunes any non-initial track that lost its
+        /// group's rows, gap closes on all tracks), then prunes any non-initial track that lost its
         /// last item — inside the same mutation, so one undo restores tracks and items
         /// together.</summary>
         public void RippleDeleteItem(Guid itemId, object origin = null) =>
-            Mutate("Delete", ProjectChangeKind.Structural, null, origin, p =>
-            {
-                TimelineOps.RippleDelete(p, itemId);
-                PruneEmptyTracks(p);
-            });
+            Mutate("Delete", ProjectChangeKind.Structural, null, origin, p => RippleDeleteAndPrune(p, itemId));
 
-        /// <summary>Wraps <see cref="TimelineOps.Delete"/> (single item, no ripple), with the same
-        /// track prune as <see cref="RippleDeleteItem"/>.</summary>
-        public void DeleteItem(Guid itemId, object origin = null) =>
+        /// <summary>Whether <see cref="RippleDeleteItem"/> would go through — tried on a copy,
+        /// because the shift can run a clip on a row outside the group into a neighbour that
+        /// straddles the cut, and only validation knows.</summary>
+        public bool CanRippleDeleteItem(Guid itemId) => DryRun(p =>
+        {
+            RippleDeleteAndPrune(p, itemId);
+            return true;
+        });
+
+        private void RippleDeleteAndPrune(Project project, Guid itemId)
+        {
+            TimelineOps.RippleDelete(project, itemId);
+            PruneEmptyTracks(project);
+        }
+
+        /// <summary>Wraps <see cref="TimelineOps.Delete"/> over exactly these clips (no ripple), with
+        /// the same track prune as <see cref="RippleDeleteItem"/>, in one undo entry.</summary>
+        public void DeleteItems(IEnumerable<Guid> itemIds, object origin = null) =>
             Mutate("Delete", ProjectChangeKind.Structural, null, origin, p =>
             {
-                if (TimelineOps.Delete(p, itemId))
+                var deleted = false;
+                foreach (var id in itemIds)
+                    deleted |= TimelineOps.Delete(p, id);
+                if (deleted)
                     PruneEmptyTracks(p);
-            });
-
-        /// <summary>Wraps <see cref="TimelineOps.DeleteGrouped"/> (the clip's span cut out of its
-        /// group in place — no ripple) with the same track prune, all in one mutation. The
-        /// delete for an imported file's rows, whose group means "streams of one file", not
-        /// "contiguous recording segments" (see <see cref="IsRippleGroup"/>): closing the gap
-        /// under everything else is the recording cut's semantics, not the overlay's.</summary>
-        public void DeleteGroup(Guid itemId, object origin = null) =>
-            Mutate("Delete", ProjectChangeKind.Structural, null, origin, p =>
-            {
-                TimelineOps.DeleteGrouped(p, itemId);
-                PruneEmptyTracks(p);
             });
 
         // ---------------------------------------------------------------------------------- gaps
@@ -835,14 +771,13 @@ namespace Prisc.VideoSDK.Editing
         /// <summary>Wraps <see cref="TimelineOps.FindGap"/> on the live project.</summary>
         public TimelineGap? FindGap(Guid trackId, long ticks) => TimelineOps.FindGap(Project, trackId, ticks);
 
-        /// <summary>Whether <see cref="CloseGap"/> would go through — tried on a copy, because
-        /// the group members that slide with the right-hand clip can run into other items on their
-        /// own rows, and only validation knows.</summary>
+        /// <summary>Whether <see cref="CloseGap"/> would go through — tried on a copy, so it can
+        /// never disagree with the edit. False when a clip on another row of the group sits in the
+        /// gap.</summary>
         public bool CanCloseGap(TimelineGap gap) => DryRun(p => TimelineOps.CloseGap(p, gap));
 
-        /// <summary>Wraps <see cref="TimelineOps.CloseGap"/>: the gap's right-hand clip (and its
-        /// group members past the gap) slides left onto the gap's start. Returns false when nothing
-        /// changed or the shift was rolled back.</summary>
+        /// <summary>Wraps <see cref="TimelineOps.CloseGap"/>: everything past the gap on the row and
+        /// its group slides left onto the gap's start. Returns false when it was refused.</summary>
         public bool CloseGap(TimelineGap gap, object origin = null) =>
             Mutate("Close Gap", ProjectChangeKind.Mapping, null, origin,
                 p => TimelineOps.CloseGap(p, gap), failureValue: false);
@@ -876,76 +811,145 @@ namespace Prisc.VideoSDK.Editing
             Mutate("Extend Clip", ProjectChangeKind.Mapping, null, origin,
                 p => TimelineOps.ExtendIntoGap(p, gap, fromLeft), failureValue: false);
 
+        // ------------------------------------------------------------------------- copy and paste
+
         /// <summary>
-        /// The copied clip, process-wide so a clip copied in one editor window pastes into
-        /// another: a one-item project holding the item, its row (for the row kind) and, for media,
-        /// its source — everything a paste into a project that has never seen that source needs.
-        /// Stored as JSON so every paste deserializes a private copy.
+        /// What was copied, process-wide so that clips copied in one editor window paste into
+        /// another: the <see cref="TimelineOps.Lift"/> of the clips, which holds everything a paste
+        /// into a project that has never seen their sources needs. Stored as JSON so every paste
+        /// deserializes a private copy.
         /// </summary>
         private static string s_clipboard;
 
-        /// <summary>Whether <see cref="CopyItem"/> can lift the item: media, text, images, solids,
-        /// obscure boxes and shapes on a video or audio row. Effect items and input overlays are
-        /// defined by the rows they sit on and have nowhere else to go.</summary>
-        public bool CanCopyItem(Guid itemId)
+        /// <summary>Copies exactly these clips (a drag's time-linked clips are not brought along).
+        /// Returns false, leaving the clipboard alone, when none of them is in the project.</summary>
+        public bool CopyItems(IEnumerable<Guid> itemIds)
         {
-            var item = Project.Items.FirstOrDefault(i => i.Id == itemId);
-            var track = item == null ? null : Project.Tracks.FirstOrDefault(t => t.Id == item.TrackId);
-            return track is { Kind: TrackKind.Video or TrackKind.Audio }
-                   && item.Content is MediaContent or TextContent or ImageContent or SolidContent or ObscureContent
-                       or ShapeContent;
-        }
-
-        /// <summary>Copies the item to the clip clipboard (see <see cref="CanCopyItem"/>).
-        /// Returns false, leaving the clipboard alone, when it cannot be copied.</summary>
-        public bool CopyItem(Guid itemId)
-        {
-            if (!CanCopyItem(itemId))
+            var clip = TimelineOps.Lift(Project, itemIds);
+            if (clip.Items.Count == 0)
                 return false;
 
-            var item = Project.Items.First(i => i.Id == itemId);
-            var clip = new Project
-            {
-                Output = Project.Output,
-                Tracks = Project.Tracks.Where(t => t.Id == item.TrackId).ToList(),
-                Items = new List<Item> { item },
-                Sources = item.Content is MediaContent media
-                    ? Project.Sources.Where(s => s.Id == media.SourceId).ToList()
-                    : new List<Source>(),
-            };
             s_clipboard = clip.ToJson();
             return true;
         }
 
-        /// <summary>Whether the copied clip can be pasted into the gap (see
-        /// <see cref="TimelineOps.CanPasteIntoGap"/>). False with nothing copied.</summary>
-        public bool CanPasteIntoGap(TimelineGap gap) =>
-            ReadClipboard() is { } clip &&
-            TimelineOps.CanPasteIntoGap(Project, gap, clip.Item, clip.TrackKind);
-
-        /// <summary>Wraps <see cref="TimelineOps.PasteIntoGap"/> with a private copy of the
-        /// copied clip. Returns the new item's id, or null when nothing was pasted.</summary>
-        public Guid? PasteIntoGap(TimelineGap gap, object origin = null)
+        /// <summary>Copies exactly these clips and deletes them in one undo entry. Their rows stay
+        /// even when emptied, so a paste returns to them and a zoom reaches the rows it did (a row
+        /// made this session, and any effect row, goes at the next delete). The exception is the
+        /// speed row, which only its items can identify and which a paste puts back on top, in its
+        /// group, anyway. Returns false, changing nothing, when <see cref="CanCut"/> is false or none
+        /// of them is in the project.</summary>
+        public bool CutItems(IEnumerable<Guid> itemIds, object origin = null)
         {
-            if (ReadClipboard() is not { } clip)
-                return null;
+            var ids = itemIds.ToList();
+            if (!CanCut || !CopyItems(ids))
+                return false;
 
-            return Mutate("Paste", ProjectChangeKind.Structural, null, origin,
-                p => TimelineOps.PasteIntoGap(p, gap, clip.Item, clip.TrackKind, clip.Source),
-                failureValue: null);
+            return Mutate("Cut", ProjectChangeKind.Structural, null, origin, p =>
+            {
+                var speedRow = TimelineOps.FindSpeedTrack(p);
+                foreach (var id in ids)
+                    TimelineOps.Delete(p, id);
+                if (speedRow != null && p.Items.All(i => i.TrackId != speedRow.Id))
+                    p.Tracks.Remove(speedRow);
+            });
         }
 
-        private static (Item Item, TrackKind TrackKind, Source Source)? ReadClipboard()
+        /// <summary>Whether a Cut can run now: neither a drag nor a voice take owns the model.</summary>
+        public bool CanCut => !IsGestureActive && !IsVoiceTakeActive;
+
+        /// <summary>Whether a paste can run now: something was copied, and neither a drag nor a voice
+        /// take owns the model. A paste inside a gesture would be thrown away with the drag, and one
+        /// during a take could land on the row its ghost is on.</summary>
+        public bool CanPaste => s_clipboard != null && CanCut;
+
+        /// <summary>How much was copied, for a menu to describe it. Zeros with nothing copied.</summary>
+        public (int Clips, int Rows) ClipboardSize
         {
-            var json = s_clipboard;
-            if (json == null)
-                return null;
+            get
+            {
+                if (s_clipboard == null)
+                    return (0, 0);
 
-            var clip = Project.FromJson(json);
-            if (clip.Items.Count != 1 || clip.Tracks.Count != 1)
-                return null;
+                var clip = Project.FromJson(s_clipboard);
+                return (clip.Items.Count, clip.Tracks.Count);
+            }
+        }
 
-            return (clip.Items[0], clip.Tracks[0].Kind, clip.Sources.FirstOrDefault());
+        /// <summary>Pastes the clipboard so its earliest clip starts at
+        /// <paramref name="anchor"/>, without fitting it to anything (see
+        /// <see cref="TimelineOps.Paste"/>). Returns the pasted clips, which become the selection.
+        /// Empty when nothing was pasted.</summary>
+        public IReadOnlyList<Guid> PasteAt(long anchor, object origin = null) => PasteClipboard(anchor, null, origin);
+
+        /// <summary>Whether the gap menu's Paste can run: a clip with one row has to fit the gap, and
+        /// one with several goes to its own rows wherever the gap's row is.</summary>
+        public bool CanPasteIntoGap(TimelineGap gap)
+        {
+            if (!CanPaste)
+                return false;
+
+            var clip = Project.FromJson(s_clipboard);
+            return clip.Tracks.Count > 1 || TimelineOps.CanFitInGap(Project, clip, gap);
+        }
+
+        /// <summary>The gap menu's Paste: at the gap's start, and fitted to the gap if the clipboard
+        /// has one row. Otherwise as <see cref="PasteAt"/>.</summary>
+        public IReadOnlyList<Guid> PasteIntoGap(TimelineGap gap, object origin = null) =>
+            CanPasteIntoGap(gap) ? PasteClipboard(gap.StartTicks, gap, origin) : Array.Empty<Guid>();
+
+        private IReadOnlyList<Guid> PasteClipboard(long anchor, TimelineGap? fitGap, object origin)
+        {
+            if (!CanPaste)
+                return Array.Empty<Guid>();
+
+            var clip = Project.FromJson(s_clipboard);
+            var rows = clip.Tracks.Select(t => t.Id).ToList();
+            var newRows = 0;
+            var refused = false;
+            IReadOnlyList<Guid> none = Array.Empty<Guid>();
+            var pasted = Mutate("Paste", ProjectChangeKind.Structural, null, origin, p =>
+            {
+                var result = TimelineOps.Paste(p, clip, anchor, fitGap);
+                newRows = result.NewRows;
+                refused = result.Refused;
+                return result.Pasted;
+            }, failureValue: none);
+
+            if (refused)
+                StatusRaised?.Invoke(this, "Can't paste: a Speed effect is already there.");
+
+            if (pasted.Count > 0)
+            {
+                SelectMany(pasted);
+                var originsHere = rows.All(id => Project.Tracks.Any(t => t.Id == id));
+                if (PasteStatus(newRows, originsHere, pasted) is { } status)
+                    StatusRaised?.Invoke(this, status);
+            }
+
+            return pasted;
+        }
+
+        /// <summary>What a paste has to say for itself: that it made rows, and why if it was not
+        /// simply that the origins are in another project, and that a pasted cursor has a stretch it
+        /// will not draw on. Null when it has nothing to say.</summary>
+        private string PasteStatus(int newRows, bool originsHere, IReadOnlyList<Guid> pasted)
+        {
+            var rows = (newRows, originsHere) switch
+            {
+                (0, _) => null,
+                (1, true) => "Pasted on a new track: the original track is occupied here.",
+                (1, false) => "Pasted on a new track.",
+                (_, true) => $"Pasted on {newRows} new tracks: the original tracks are occupied here.",
+                _ => $"Pasted on {newRows} new tracks.",
+            };
+
+            var ids = pasted.ToHashSet();
+            var hostless = Project.Items.Any(i => i.Content is CursorContent && ids.Contains(i.Id)
+                && TimelineOps.CursorHostSpans(Project, i).Sum(span => span.End - span.Start) < i.DurationTicks);
+            var cursor = hostless ? "The pasted cursor shows only over a clip of its recording." : null;
+
+            return rows != null && cursor != null ? rows + " " + cursor : rows ?? cursor;
         }
 
         /// <summary>Runs <paramref name="edit"/> on a throwaway copy of the project through the
@@ -954,48 +958,60 @@ namespace Prisc.VideoSDK.Editing
         /// asks "would this work?" without touching the model or the undo stack.</summary>
         private bool DryRun(Func<Project, bool> edit)
         {
+            var exemptBefore = CaptureExemptSpans(Project);
             var copy = Project.FromJson(Project.ToJson());
             if (!edit(copy))
                 return false;
 
-            TimelineOps.CollapseLoneGroups(copy);
-            copy.Normalize();
+            FinishEdit(copy, exemptBefore);
             return copy.Validate().Count == 0;
         }
 
-        /// <summary>
-        /// True when the item's group is a recording-segment group — one with a member on a
-        /// track the session opened with — as opposed to the per-file group an import gets. The
-        /// discriminator the UI keys the move gate off: a recording group is pinned in place
-        /// while an import moves as one. False for ungrouped items.
-        /// </summary>
-        public bool IsRippleGroup(Guid itemId)
-        {
-            var item = Project.Items.FirstOrDefault(i => i.Id == itemId);
-            if (item?.GroupId is not Guid group)
-                return false;
+        // -------------------------------------------------------------------------------- groups
+        // Groups only affect editing, never playback, so all of these are mapping changes.
 
-            return Project.Items.Any(i => i.GroupId == group && _initialTrackIds.Contains(i.TrackId));
+        /// <summary>See <see cref="TimelineOps.CanMergeIntoGroup"/>.</summary>
+        public bool CanGroupTracks(IEnumerable<Guid> trackIds) => TimelineOps.CanMergeIntoGroup(Project, trackIds);
+
+        /// <summary>Whether any of these rows is in a group, so an ungroup would do something.</summary>
+        public bool CanUngroupTracks(IEnumerable<Guid> trackIds)
+        {
+            var rows = trackIds.ToHashSet();
+            return Project.Tracks.Any(t => t.GroupId != null && rows.Contains(t.Id));
         }
 
-        /// <summary>Wraps <see cref="TimelineOps.UngroupTrack"/> — the row taken out of its
-        /// recording's group. Groups only affect editing, never playback, so this is a mapping
-        /// change. Refused for cursor/keyboard rows: their items are pinned to the recording
-        /// (validation requires the group), so they never come out.</summary>
-        public void UngroupTrack(Guid trackId, object origin = null)
+        /// <summary>Wraps <see cref="TimelineOps.MergeIntoGroup"/>: these rows and every row of any
+        /// group they touch, as one group.</summary>
+        public void GroupTracks(IEnumerable<Guid> trackIds, object origin = null)
         {
-            if (IsInputOverlayTrack(Project, trackId))
-                return;
-
-            Mutate("Ungroup Track", ProjectChangeKind.Mapping, null, origin,
-                p => TimelineOps.UngroupTrack(p, trackId));
+            var rows = Mutate("Group Tracks", ProjectChangeKind.Mapping, null, origin,
+                p => TimelineOps.MergeIntoGroup(p, trackIds));
+            RaiseCountStatus("Grouped", rows);
         }
 
-        /// <summary>Wraps <see cref="TimelineOps.TryRegroupTrack"/>. False means the row has
-        /// drifted and the toggle stays off — the project is untouched.</summary>
-        public bool TryRegroupTrack(Guid trackId, object origin = null) =>
-            Mutate("Regroup Track", ProjectChangeKind.Mapping, null, origin,
-                p => TimelineOps.TryRegroupTrack(p, trackId));
+        /// <summary>Wraps <see cref="TimelineOps.UngroupTracks"/>: these rows out of their groups, and
+        /// no others, though a group left with one row holding clips dissolves.</summary>
+        public void UngroupTracks(IEnumerable<Guid> trackIds, object origin = null)
+        {
+            var rows = Mutate("Ungroup Track", ProjectChangeKind.Mapping, null, origin,
+                p => TimelineOps.UngroupTracks(p, trackIds));
+            RaiseCountStatus("Ungrouped", rows);
+        }
+
+        /// <summary>Wraps <see cref="TimelineOps.UngroupAll"/>: every group these rows belong to,
+        /// dissolved.</summary>
+        public void UngroupAll(IEnumerable<Guid> trackIds, object origin = null)
+        {
+            var rows = Mutate("Ungroup All", ProjectChangeKind.Mapping, null, origin,
+                p => TimelineOps.UngroupAll(p, trackIds));
+            RaiseCountStatus("Ungrouped", rows);
+        }
+
+        private void RaiseCountStatus(string verb, int rows)
+        {
+            if (rows > 0)
+                StatusRaised?.Invoke(this, rows == 1 ? $"{verb} 1 track." : $"{verb} {rows} tracks.");
+        }
 
         // ---------------------------------------------------------------- tracks and properties
 
@@ -1010,6 +1026,12 @@ namespace Prisc.VideoSDK.Editing
         public void SetTrackMuted(Guid trackId, bool value, object origin = null) =>
             Mutate(value ? "Mute Track" : "Unmute Track", ProjectChangeKind.Structural, null, origin,
                 p => RequireTrack(p, trackId).Muted = value);
+
+        /// <summary>Video rows' Lock Placement toggle (see <see cref="EditPlacement"/>). Mapping:
+        /// nothing the player decodes changes, and the timeline re-reads its row badges on it.</summary>
+        public void SetTrackPlacementLocked(Guid trackId, bool value, object origin = null) =>
+            Mutate(value ? "Lock Placement" : "Unlock Placement", ProjectChangeKind.Mapping, null, origin,
+                p => RequireTrack(p, trackId).PlacementLocked = value);
 
         /// <summary>Audio rows' AI-denoise toggle. Structural like <see cref="SetTrackMuted"/>:
         /// the flag decides whether the player decodes the raw stream or its denoise
@@ -1030,72 +1052,24 @@ namespace Prisc.VideoSDK.Editing
                 return strength;
             }, failureValue: 1.0);
 
-        public void SetTrackLocked(Guid trackId, bool value, object origin = null) =>
-            Mutate(value ? "Lock Track" : "Unlock Track", ProjectChangeKind.Structural, null, origin,
-                p => RequireTrack(p, trackId).Locked = value);
-
         /// <summary>
-        /// Duplicates a row: a new track of the same kind and enable state directly above the
-        /// original, carrying a copy of every item on it. The copies are ungrouped — a duplicate is
-        /// its own material, not a new member of the recording's group (a grouped copy would make
-        /// every group move/split apply twice to the same content). The copy is never locked: a
-        /// duplicate exists to be edited. Returns false for an unknown id, or for the speed row —
-        /// playback speed is a single global timeline, and a second speed row cannot validate.
+        /// Duplicates a row: a paste of its clips where they already are. The row is occupied there,
+        /// so the copy gets a new row directly above it, in no group: a duplicate is its own material,
+        /// not a new member of the recording's group (a grouped copy would make every move and cut
+        /// apply twice to the same content). Returns false for an unknown id or an empty row, and for
+        /// the speed row, which is the one place the speed items can go and they are in the way.
         /// </summary>
         public bool DuplicateTrack(Guid trackId, object origin = null) =>
             Mutate("Duplicate Track", ProjectChangeKind.Structural, null, origin, p =>
             {
-                var track = p.Tracks.FirstOrDefault(t => t.Id == trackId);
-                if (track == null || IsSpeedTrack(p, track) || IsInputOverlayTrack(p, trackId))
-                    return false;
-
-                // slot the copy in directly above the original: everything at or past that order
-                // steps down one, exactly as InsertVideoTrackOnTop renumbers.
-                var order = track.Order + 1;
-                foreach (var t in p.Tracks)
-                {
-                    if (t.Order >= order)
-                        t.Order++;
-                }
-
-                var copy = new Track
-                {
-                    Id = Guid.NewGuid(),
-                    Kind = track.Kind,
-                    Name = String.IsNullOrEmpty(track.Name) ? track.Name : track.Name + " copy",
-                    Order = order,
-                    Hidden = track.Hidden,
-                    Muted = track.Muted,
-                    Denoise = track.Denoise,
-                    DenoiseStrength = track.DenoiseStrength,
-                };
-                p.Tracks.Add(copy);
-
-                foreach (var item in p.Items.Where(i => i.TrackId == trackId).ToList())
-                {
-                    p.Items.Add(new Item
-                    {
-                        Id = Guid.NewGuid(),
-                        TrackId = copy.Id,
-                        TimelineStartTicks = item.TimelineStartTicks,
-                        DurationTicks = item.DurationTicks,
-                        Content = item.Content?.Clone(),
-                        Transform = item.Transform?.Clone() ?? new Transform(),
-                        Surround = item.Surround?.Clone(),
-                        Effect = item.Effect?.Clone(),
-                        Entry = item.Entry?.Clone(),
-                        Exit = item.Exit?.Clone(),
-                        Volume = item.Volume,
-                    });
-                }
-
-                return true;
+                var clips = p.Items.Where(i => i.TrackId == trackId).ToList();
+                return clips.Count > 0 && TimelineOps.Paste(p, TimelineOps.Lift(p, clips.Select(i => i.Id)),
+                    clips.Min(i => i.TimelineStartTicks)).Pasted.Count > 0;
             }, failureValue: false);
 
-        /// <summary>Deletes a row and every item on it — no ripple, the span just empties. Link
-        /// group members on <i>other</i> rows are untouched: this is the row's delete, not the
-        /// group's (that is <see cref="RippleDeleteItem"/>/<see cref="DeleteGroup"/>). Returns
-        /// false for an unknown id.</summary>
+        /// <summary>Deletes a row and every item on it — no ripple, the span just empties. Its
+        /// group's <i>other</i> rows are untouched: taking time out of all of them is
+        /// <see cref="RippleDeleteItem"/>. Returns false for an unknown id.</summary>
         public bool DeleteTrack(Guid trackId, object origin = null) =>
             Mutate("Delete Track", ProjectChangeKind.Structural, null, origin, p =>
             {
@@ -1137,10 +1111,6 @@ namespace Prisc.VideoSDK.Editing
         /// in, which is worth arranging. The pinned speed row is excluded from the index space
         /// and never moves. Returns false — changing nothing — for an unknown id, an index
         /// outside its group, or a move that lands where the row already is.</para>
-        ///
-        /// <para>A screen row brings the cursor/keyboard rows pinned above it along, so for it
-        /// <paramref name="index"/> counts among the video rows <i>outside</i> that unit — see
-        /// <see cref="PlanReorder"/>.</para>
         /// </summary>
         public bool MoveTrackToIndex(Guid trackId, int index, object origin = null) =>
             Mutate("Reorder Row", ProjectChangeKind.Structural, null, origin,
@@ -1150,7 +1120,7 @@ namespace Prisc.VideoSDK.Editing
         /// <summary>
         /// The shared body of both moves: lifts the row out of its kind's list, puts it back at
         /// <paramref name="targetOf"/>(current index) and renumbers. See <see cref="PlanReorder"/>
-        /// for the index space and the overlay unit.
+        /// for the index space.
         ///
         /// <para>Because <see cref="Track.Order"/> is neither required to be unique nor contiguous,
         /// this renumbers every row rather than swapping two values: a swap between rows that
@@ -1179,31 +1149,17 @@ namespace Prisc.VideoSDK.Editing
         /// <summary>
         /// Works out the arrangement a move would leave — the three lists in their eventual
         /// ascending <see cref="Track.Order"/> — or null when the move is refused: an unknown id,
-        /// a pinned row, an index outside the group, or a move that lands where the row already
-        /// is. Pure, so <see cref="CanMoveTrackLayer"/> can ask without a speculative mutation.
-        ///
-        /// <para>A screen row travels with the cursor/keyboard rows pinned above it: the three are
-        /// lifted out as one <i>unit</i> (screen first, then its overlays in their current order,
-        /// which also repairs a pair that some other edit left out of order) and put back together,
-        /// so the pin — the overlays composite over their screen frame, never beneath it — holds
-        /// across every move without refusing any. <paramref name="targetOf"/> therefore counts,
-        /// and is given the current index, in the list <b>without the unit</b>: the position the
-        /// unit is inserted at among the rows that stay put. For a row with no overlays that is
-        /// exactly the familiar lift-out-and-insert index; for <see cref="MoveTrackToIndex"/> it is
-        /// what <c>TimelineReorder.TargetLayerIndex</c> sends.</para>
+        /// the speed row, an index outside the group, or a move that lands where the row already
+        /// is. <paramref name="targetOf"/> is given the row's current index in its group and returns
+        /// where it goes once lifted out. Pure, so <see cref="CanMoveTrackLayer"/> can ask without a
+        /// speculative mutation.
         /// </summary>
         private static (List<Track> Video, List<Track> Audio, List<Track> Speed)? PlanReorder(
             Project project, Guid trackId, Func<int, int> targetOf, bool audioMoves)
         {
-            // cursor/keyboard rows are pinned directly above their recording's screen row — they
-            // never reorder themselves; they move when it moves (other video rows may still step
-            // around them).
-            if (IsInputOverlayTrack(project, trackId))
-                return null;
-
             // the speed row is pinned: it never moves, nothing moves past it, and it sits outside
             // the layer-index space entirely (its Order is renumbered above everything below).
-            var speed = project.Tracks.Where(t => IsSpeedTrack(project, t))
+            var speed = project.Tracks.Where(t => TimelineOps.IsSpeedTrack(project, t))
                                       .OrderBy(t => t.Order).ThenBy(t => t.Id).ToList();
             var video = project.Tracks.Where(t => t.Kind != TrackKind.Audio && !speed.Contains(t))
                                       .OrderBy(t => t.Order).ThenBy(t => t.Id).ToList();
@@ -1223,108 +1179,21 @@ namespace Prisc.VideoSDK.Editing
                     return null;
             }
 
-            var moved = group[index];
-            var unit = new List<Track> { moved };
-            if (group == video)
-                unit.AddRange(OverlayTracksOf(project, video, moved));
-
-            var rest = group.Where(t => !unit.Contains(t)).ToList();
-            var indexInRest = group.Take(index).Count(t => !unit.Contains(t));
-
-            var target = targetOf(indexInRest);
-            if (target < 0 || target > rest.Count || target == indexInRest)
+            var target = targetOf(index);
+            if (target < 0 || target >= group.Count || target == index)
                 return null;
 
-            rest.InsertRange(target, unit);
-
-            if (group == video)
-            {
-                video = rest;
-                // the unit keeps the moved row beneath its own overlays by construction, and no
-                // row may land inside another unit — so this guard cannot fire on a project the
-                // session built; it stands for one that arrived with the pin already broken.
-                if (OverlayPinViolated(project, video))
-                    return null;
-            }
-            else
-            {
-                audio = rest;
-            }
-
+            var moved = group[index];
+            group.RemoveAt(index);
+            group.Insert(target, moved);
             return (video, audio, speed);
         }
 
-        /// <summary>The cursor/keyboard rows pinned above <paramref name="screen"/>, in their
-        /// current ascending order — the rows that travel with it when it moves.</summary>
-        private static IEnumerable<Track> OverlayTracksOf(Project project, List<Track> video, Track screen) =>
-            video.Where(t => t != screen && IsInputOverlayTrack(project, t.Id) &&
-                             FindOverlayScreenTrack(project, t)?.Id == screen.Id);
-
         /// <summary>Whether <see cref="MoveTrackLayer"/> would do anything — the enablement the
         /// timeline's context menu needs, without a speculative mutation. Always false for the
-        /// pinned speed row and for a cursor/keyboard row; a screen row steps with its overlays,
-        /// so it is movable whenever any other row stands in the way (the same plan
-        /// <see cref="Reorder"/> applies).</summary>
+        /// pinned speed row (the same plan <see cref="Reorder"/> applies).</summary>
         public bool CanMoveTrackLayer(Guid trackId, bool towardsFront) =>
             PlanReorder(Project, trackId, index => towardsFront ? index + 1 : index - 1, audioMoves: false) != null;
-
-        /// <summary>
-        /// Whether the tentative video arrangement (list index = eventual paint order) buries a
-        /// cursor/keyboard row beneath its own screen row. Only the screen-vs-overlay relation is
-        /// pinned: other rows — the webcam, imports, zoom effect rows — may still step between or
-        /// around the pair.
-        /// </summary>
-        private static bool OverlayPinViolated(Project project, List<Track> video)
-        {
-            for (var i = 0; i < video.Count; i++)
-            {
-                if (!IsInputOverlayTrack(project, video[i].Id))
-                    continue;
-
-                var screen = FindOverlayScreenTrack(project, video[i]);
-                if (screen != null && video.IndexOf(screen) > i)
-                    return true;
-            }
-            return false;
-        }
-
-        /// <summary>The screen row an overlay row is pinned above: the video row of the
-        /// screen-stream media item sharing a group with one of the overlay's items — the
-        /// hard-sync partner <see cref="AddInputOverlayTrack"/> wired. Null when the screen row
-        /// is gone (the overlay then draws nothing and pins to nothing).</summary>
-        private static Track FindOverlayScreenTrack(Project project, Track overlay)
-        {
-            foreach (var item in project.Items)
-            {
-                if (item.TrackId != overlay.Id || item.GroupId == null)
-                    continue;
-
-                Guid sourceId;
-                if (item.Content is CursorContent cursor)
-                    sourceId = cursor.SourceId;
-                else if (item.Content is KeyboardContent keyboard)
-                    sourceId = keyboard.SourceId;
-                else
-                    continue;
-
-                var source = project.Sources.FirstOrDefault(s => s.Id == sourceId);
-                if (source == null)
-                    continue;
-
-                foreach (var partner in project.Items)
-                {
-                    if (partner.GroupId != item.GroupId
-                        || partner.Content is not MediaContent media || media.SourceId != sourceId
-                        || !Composition.FrameComposer.IsScreenStream(source, media.StreamIndex))
-                        continue;
-
-                    var track = project.Tracks.FirstOrDefault(t => t.Id == partner.TrackId);
-                    if (track?.Kind == TrackKind.Video)
-                        return track;
-                }
-            }
-            return null;
-        }
 
         /// <summary>Renames a row. Coalesced per track so typing in the header textbox is one undo
         /// entry, not one per keystroke.</summary>
@@ -1333,8 +1202,9 @@ namespace Prisc.VideoSDK.Editing
                 p => RequireTrack(p, trackId).Name = name);
 
         /// <summary>
-        /// The inspector/gizmo write path: applies <paramref name="edit"/> to the item and runs the
-        /// full pipeline around it. Consecutive calls sharing a non-null
+        /// The write path for one clip's own fields: applies <paramref name="edit"/> to the item and
+        /// runs the full pipeline around it. Not for its place on the canvas, which is
+        /// <see cref="EditPlacement"/>'s. Consecutive calls sharing a non-null
         /// <paramref name="coalesceKey"/> within <see cref="CoalesceWindowMs"/> merge into one undo
         /// entry (spinner mashing). Pass <paramref name="structural"/> when the edit changes what
         /// the player must decode (it rarely does — transforms, volume and transitions are all
@@ -1364,8 +1234,7 @@ namespace Prisc.VideoSDK.Editing
         }
 
         /// <summary>The multi-item form of <see cref="EditItem"/>: every id is edited inside one
-        /// mutation, so a write that fans out over a row (the webcam placement, a multi-select
-        /// inspector edit) costs one pipeline run, one undo entry and one
+        /// mutation, so a write that fans out over a row (the webcam placement) costs one pipeline run, one undo entry and one
         /// <see cref="ProjectChanged"/> — not one per item. Ids not in the project throw, exactly
         /// as they do for a single edit; an empty list is a no-op.</summary>
         public void EditItems(IReadOnlyList<Guid> itemIds, Action<Item> edit, string coalesceKey = null,
@@ -1382,6 +1251,58 @@ namespace Prisc.VideoSDK.Editing
                     foreach (var id in itemIds)
                         edit(RequireItem(p, id));
                 });
+        }
+
+        /// <summary>
+        /// The write for what belongs to a whole feed: applies <paramref name="edit"/> to the item
+        /// and every other segment of its feed on the row, in one mutation. A recording row's items
+        /// are the split segments of one continuous feed, and where that picture sits on the canvas,
+        /// what it is masked or cropped to, and how a cursor or keys overlay is styled, are properties
+        /// of the feed and not of a segment. The same feed is the same source stream on the same row
+        /// (or, for an overlay, the same kind and source), so a clip pasted beside it from another
+        /// recording keeps its own. Anything else is a feed of one.
+        ///
+        /// <para><paramref name="coalesceKey"/> is scoped to the feed, so a selection change inside
+        /// the coalesce window cannot merge edits of two feeds into one undo entry. An id not in the
+        /// project throws, as it does for <see cref="EditItem"/>.</para>
+        /// </summary>
+        public void EditFeed(Guid itemId, Action<Item> edit, string coalesceKey, object origin)
+        {
+            ArgumentNullException.ThrowIfNull(edit);
+
+            var feed = FeedIds(Project, RequireItem(Project, itemId));
+            EditItems(feed, edit, $"{coalesceKey}:{feed[0]}", structural: false, origin: origin);
+        }
+
+        /// <summary>
+        /// <see cref="EditFeed"/> for what says where a clip sits on the canvas: position, size,
+        /// rotation, aspect, crop, a line's endpoints, a text card's font size. The one gate of
+        /// <see cref="Track.PlacementLocked"/>: on a locked row it returns false with no mutation, no
+        /// undo entry and no event, and a caller that already showed the new value has to read the
+        /// model back. Everything else about a locked clip stays editable, and goes through
+        /// <see cref="EditFeed"/> or <see cref="EditItem"/>.
+        /// </summary>
+        public bool EditPlacement(Guid itemId, Action<Item> edit, string coalesceKey, object origin)
+        {
+            if (Project.TrackOf(RequireItem(Project, itemId)) is { PlacementLocked: true })
+                return false;
+
+            EditFeed(itemId, edit, coalesceKey, origin);
+            return true;
+        }
+
+        private static List<Guid> FeedIds(Project project, Item item)
+        {
+            Func<Item, bool> sameFeed = item.Content switch
+            {
+                MediaContent media => i => i.Content is MediaContent m
+                                           && m.SourceId == media.SourceId && m.StreamIndex == media.StreamIndex,
+                InputOverlayContent overlay => i => i.Content is InputOverlayContent o
+                                                    && o.GetType() == overlay.GetType() && o.SourceId == overlay.SourceId,
+                _ => i => i.Id == item.Id,
+            };
+
+            return project.Items.Where(i => i.TrackId == item.TrackId && sameFeed(i)).Select(i => i.Id).ToList();
         }
 
         // -------------------------------------------------------------------------- add / import
@@ -1578,7 +1499,7 @@ namespace Prisc.VideoSDK.Editing
                 created = new Item
                 {
                     Id = Guid.NewGuid(),
-                    TrackId = (FindSpeedTrack(p) ?? InsertSpeedTrack(p)).Id,
+                    TrackId = (TimelineOps.FindSpeedTrack(p) ?? InsertSpeedTrack(p)).Id,
                     TimelineStartTicks = start,
                     DurationTicks = duration,
                     Content = new SpeedContent(),
@@ -1614,7 +1535,7 @@ namespace Prisc.VideoSDK.Editing
 
             at = Math.Clamp(startTicks, 0, gapEnd - TimelineOps.MinSegmentTicks);
 
-            var track = FindSpeedTrack(project);
+            var track = TimelineOps.FindSpeedTrack(project);
             if (track == null)
                 return true;
 
@@ -1622,7 +1543,7 @@ namespace Prisc.VideoSDK.Editing
             {
                 if (other.TrackId != track.Id)
                     continue;
-                if (other.TimelineStartTicks <= at && at < other.TimelineEndTicks)
+                if (other.Covers(at))
                     return false;
                 if (other.TimelineEndTicks <= at)
                     gapStart = Math.Max(gapStart, other.TimelineEndTicks);
@@ -1735,7 +1656,7 @@ namespace Prisc.VideoSDK.Editing
             {
                 if (other.TrackId != track.Id)
                     continue;
-                if (Covers(other, at))
+                if (other.Covers(at))
                     return null;
                 if (other.TimelineEndTicks <= at)
                     gapStart = Math.Max(gapStart, other.TimelineEndTicks);
@@ -1749,17 +1670,17 @@ namespace Prisc.VideoSDK.Editing
         /// <summary>Whether the project already carries the (single) speed row. Not what gates the
         /// add-speed command — the row holds any number of items, so that is
         /// <see cref="CanAddSpeedEffect"/>.</summary>
-        public bool HasSpeedTrack => FindSpeedTrack(Project) != null;
+        public bool HasSpeedTrack => TimelineOps.FindSpeedTrack(Project) != null;
 
         // ------------------------------------------------------------------- input overlay rows
 
         /// <summary>
-        /// Adds the cursor overlay row: a <see cref="TrackKind.Video"/> track named "Cursor"
-        /// directly above the recording's screen row (above the keyboard row when one exists),
-        /// carrying one <see cref="CursorContent"/> item per screen keep-segment — mirroring each
-        /// segment's span and group, which is what hard-syncs the row to the recording's
-        /// trims and cuts. Returns the first live item, or null when refused: no source with
-        /// input-capture data, the row already exists, or the screen row has no segments.
+        /// Adds a cursor overlay row for the first recording that can take one
+        /// (<see cref="CanAddCursorTrack"/>): a <see cref="TrackKind.Video"/> track named "Cursor"
+        /// directly above that recording's screen row (and above its keyboard row when that is what
+        /// sits there) and in its group, carrying one <see cref="CursorContent"/> item per screen
+        /// segment, each with its segment's span and clock. Returns the first live item, or null
+        /// when no recording can.
         /// </summary>
         public Item AddCursorTrack(object origin = null)
         {
@@ -1770,8 +1691,8 @@ namespace Prisc.VideoSDK.Editing
         }
 
         /// <summary>The keyboard counterpart of <see cref="AddCursorTrack"/>: a row named "Keys"
-        /// directly above the screen row but below an existing cursor row, one
-        /// <see cref="KeyboardContent"/> item per screen keep-segment.</summary>
+        /// directly above the screen row, one <see cref="KeyboardContent"/> item per screen
+        /// segment.</summary>
         public Item AddKeyboardTrack(object origin = null)
         {
             Item created = null;
@@ -1785,16 +1706,17 @@ namespace Prisc.VideoSDK.Editing
         /// spinners default to.</summary>
         private const long KeyboardRowTransitionTicks = 300 * TimeSpan.TicksPerMillisecond;
 
-        /// <summary>Whether the project carries a cursor overlay row — by content, like
-        /// <see cref="HasSpeedTrack"/>, so the flag flips off the moment the last item goes.</summary>
-        public bool HasCursorTrack => FindInputOverlayTrack(Project, cursor: true) != null;
+        /// <summary>Whether some recording can take a cursor row: its capture data exists, it has a
+        /// screen clip on the timeline, and it has no cursor clip anywhere — by content, so the flag
+        /// flips back on the moment its last cursor clip goes.</summary>
+        public bool CanAddCursorTrack => OverlaySource(Project, cursor: true) != null;
 
-        /// <summary>Whether the project carries a keyboard overlay row; see
-        /// <see cref="HasCursorTrack"/>.</summary>
-        public bool HasKeyboardTrack => FindInputOverlayTrack(Project, cursor: false) != null;
+        /// <summary>Whether some recording can take a keys row; see
+        /// <see cref="CanAddCursorTrack"/>.</summary>
+        public bool CanAddKeyboardTrack => OverlaySource(Project, cursor: false) != null;
 
         /// <summary>True when any source carries input-capture data whose file exists — what
-        /// gates the add-cursor/add-keyboard commands. The existence probe is cached per path:
+        /// tells the add commands' tips why they are disabled. The existence probe is cached per path:
         /// the flag is polled from CanExecute refreshes, and a sidecar neither appears nor
         /// disappears mid-session.</summary>
         public bool HasInputCapture
@@ -1821,62 +1743,66 @@ namespace Prisc.VideoSDK.Editing
             return exists;
         }
 
-        /// <summary>The shared body of both overlay factories. Returns the first created item, or
-        /// null when the add is refused (see <see cref="AddCursorTrack"/>).</summary>
-        private static Item AddInputOverlayTrack(Project project, bool cursor)
-        {
-            var source = project.Sources.FirstOrDefault(s => !String.IsNullOrEmpty(s.InputCapturePath));
-            if (source == null || FindInputOverlayTrack(project, cursor) != null)
-                return null;
+        /// <summary>The recording an add of this kind goes to: the first with existing capture data
+        /// and a screen clip that has no clip of this kind. A deleted clip counts as a choice, so a
+        /// recording that kept any of its cursor clips is not offered a second row.</summary>
+        private Source OverlaySource(Project project, bool cursor) =>
+            project.Sources.FirstOrDefault(s =>
+                !String.IsNullOrEmpty(s.InputCapturePath) && InputCaptureFileExists(s.InputCapturePath)
+                && ScreenRowOf(project, s) != null
+                && !project.Items.Any(i => IsOverlayOf(i, s, cursor)));
 
-            // the screen row: the backmost video row playing the capture's *screen stream*. The
-            // webcam row plays the same source (a different stream), and the user may have ordered
-            // it behind the screen row — matching by source alone would pin to it there, and an
-            // overlay row inserted behind the screen frame composes invisibly.
-            var screen = project.Tracks
+        private static bool IsOverlayOf(Item item, Source source, bool cursor) =>
+            item.Content is InputOverlayContent overlay && overlay.SourceId == source.Id
+            && overlay is CursorContent == cursor;
+
+        /// <summary>The backmost video row playing the recording's <b>screen stream</b>. The webcam
+        /// row plays the same source (a different stream), and the user may have ordered it behind
+        /// the screen row: an overlay row inserted above that would compose under the screen
+        /// frame, invisibly.</summary>
+        private static Track ScreenRowOf(Project project, Source source) =>
+            project.Tracks
                 .Where(t => t.Kind == TrackKind.Video && project.Items.Any(i =>
-                    i.TrackId == t.Id && i.Content is MediaContent m && m.SourceId == source.Id
-                    && Composition.FrameComposer.IsScreenStream(source, m.StreamIndex)))
+                    i.TrackId == t.Id && Composition.FrameComposer.PlaysScreen(source, i)))
                 .OrderBy(t => t.Order).ThenBy(t => t.Id)
                 .FirstOrDefault();
-            if (screen == null)
+
+        /// <summary>The shared body of both overlay factories. Returns the first created item, or
+        /// null when no recording can take the row (see <see cref="OverlaySource"/>).</summary>
+        private Item AddInputOverlayTrack(Project project, bool cursor)
+        {
+            var source = OverlaySource(project, cursor);
+            if (source == null)
                 return null;
+
+            var screen = ScreenRowOf(project, source);
 
             var segments = project.Items
-                .Where(i => i.TrackId == screen.Id && i.Content is MediaContent)
+                .Where(i => i.TrackId == screen.Id && Composition.FrameComposer.PlaysScreen(source, i))
                 .OrderBy(i => i.TimelineStartTicks).ToList();
-            if (segments.Count == 0)
-                return null;
 
-            // cursor sits above the keyboard row when both exist; the keyboard slots directly
-            // above the screen row, which leaves it below an existing cursor row.
-            var below = screen.Order;
-            if (cursor && FindInputOverlayTrack(project, cursor: false) is { } keys)
-                below = Math.Max(below, keys.Order);
-            var order = below + 1;
-            foreach (var t in project.Tracks)
-            {
-                if (t.Order >= order)
-                    t.Order++;
-            }
-
+            // directly above the screen row, which leaves a keys row below a cursor row already
+            // there. A cursor row goes above this recording's keys row if that is what sits there.
+            var rows = project.Tracks.OrderBy(t => t.Order).ThenBy(t => t.Id).ToList();
+            var next = rows.ElementAtOrDefault(rows.IndexOf(screen) + 1);
+            var below = cursor && next != null && project.Items.Any(i => i.TrackId == next.Id && IsOverlayOf(i, source, cursor: false))
+                ? next
+                : screen;
             var track = new Track
             {
                 Id = Guid.NewGuid(),
                 Kind = TrackKind.Video,
                 Name = cursor ? "Cursor" : "Keys",
-                Order = order,
+                // the overlay joins the screen row's group. A screen row with none gets a fresh
+                // one shared with the overlay: a drag of either starts out bringing the other.
+                GroupId = screen.GroupId ??= Guid.NewGuid(),
             };
-            project.Tracks.Add(track);
+            TimelineOps.InsertTrackAt(project, track, below.Order + 1);
 
             Item first = null;
             foreach (var segment in segments)
             {
-                // hard-sync: the overlay item joins the segment's group. A screen segment
-                // that was ungrouped gets a fresh group shared with its overlay — the overlay
-                // must follow the screen either way.
-                segment.GroupId ??= Guid.NewGuid();
-
+                var clock = (MediaContent)segment.Content;
                 var item = new Item
                 {
                     Id = Guid.NewGuid(),
@@ -1884,8 +1810,8 @@ namespace Prisc.VideoSDK.Editing
                     TimelineStartTicks = segment.TimelineStartTicks,
                     DurationTicks = segment.DurationTicks,
                     Content = cursor
-                        ? new CursorContent { SourceId = source.Id }
-                        : new KeyboardContent { SourceId = source.Id },
+                        ? new CursorContent { SourceId = source.Id, SourceInTicks = clock.SourceInTicks, Speed = clock.Speed, Freeze = clock.Freeze }
+                        : new KeyboardContent { SourceId = source.Id, SourceInTicks = clock.SourceInTicks, Speed = clock.Speed, Freeze = clock.Freeze },
                     // keyboard blocks anchor bottom-center at half canvas width; the cursor's
                     // position is data-driven and ignores the transform entirely.
                     Transform = cursor
@@ -1912,7 +1838,6 @@ namespace Prisc.VideoSDK.Editing
                         DurationTicks = KeyboardRowTransitionTicks,
                         Easing = TransitionEasing.CubicInOut,
                     },
-                    GroupId = segment.GroupId,
                 };
                 project.Items.Add(item);
                 first ??= item;
@@ -1920,25 +1845,12 @@ namespace Prisc.VideoSDK.Editing
             return first;
         }
 
-        /// <summary>The video row carrying cursor (or keyboard) overlay items, or null — by
-        /// content, exactly as <see cref="IsSpeedTrack"/> classifies the speed row, and empty
-        /// rows never survive a commit (see <see cref="PruneEmptyTracks"/>).</summary>
-        private static Track FindInputOverlayTrack(Project project, bool cursor) =>
-            project.Tracks.FirstOrDefault(t => t.Kind == TrackKind.Video && project.Items.Any(i =>
-                i.TrackId == t.Id && (cursor ? i.Content is CursorContent : i.Content is KeyboardContent)));
-
-        /// <summary>Whether the row's items are cursor/keyboard overlays — the rows whose sync,
-        /// reorder and duplicate are refused (their placement and groups are structural, not
-        /// user-arrangeable).</summary>
-        private static bool IsInputOverlayTrack(Project project, Guid trackId) =>
-            project.Items.Any(i => i.TrackId == trackId && i.Content is CursorContent or KeyboardContent);
-
         /// <summary>
         /// Imports an external media file as an overlay: one new <see cref="Source"/> with the
         /// probed streams (mapped exactly as a recording's are), one new track per stream — video
         /// rows stacked above the existing video rows, audio rows at the bottom — and one item per
-        /// stream starting at <paramref name="startTicks"/>. The items share a fresh group
-        /// when there is more than one, so the file's rows move as one; video items default to
+        /// stream starting at <paramref name="startTicks"/>. The rows share a fresh group
+        /// when there is more than one, so the file's streams move as one; video items default to
         /// half canvas width, centered. One undo entry restores all of it. Returns the live items
         /// (empty when the probe had no usable streams or the import was rolled back).
         ///
@@ -1983,29 +1895,28 @@ namespace Prisc.VideoSDK.Editing
                                                       && silentAudioStreams?.Contains(s.Index) != true).ToList();
 
                 // only multi-row imports are grouped: a group of one has nothing to keep in sync.
-                // The UI moves and deletes an import group as a unit (it is a per-file group, not
-                // a recording-segment group — see IsRippleGroup).
-                var linkGroup = videoStreams.Count + audioStreams.Count > 1 ? Guid.NewGuid() : (Guid?)null;
+                var group = videoStreams.Count + audioStreams.Count > 1 ? Guid.NewGuid() : (Guid?)null;
 
                 for (var i = 0; i < videoStreams.Count; i++)
                 {
                     // successive video streams stack upward, the whole file above what was there.
                     var track = InsertVideoTrackOnTop(p,
                         videoStreams.Count == 1 ? baseName : $"{baseName} {i + 1}");
+                    track.GroupId = group;
 
                     // the file that defines the project fills the canvas it just set; anything
                     // imported over existing material is an overlay.
                     var fills = defines && i == 0 && AdoptOutput(p, videoStreams[i], probe);
                     created.Add(NewImportItem(track, source, videoStreams[i], probe, startTicks,
-                        linkGroup, fills ? null : new Transform { Scale = 0.5 }));
+                        fills ? null : new Transform { Scale = 0.5 }));
                 }
 
                 for (var i = 0; i < audioStreams.Count; i++)
                 {
                     var track = InsertAudioTrackBelow(p,
                         audioStreams.Count == 1 ? baseName : $"{baseName} {i + 1}");
-                    created.Add(NewImportItem(track, source, audioStreams[i], probe, startTicks,
-                        linkGroup, null));
+                    track.GroupId = group;
+                    created.Add(NewImportItem(track, source, audioStreams[i], probe, startTicks, null));
                 }
 
                 p.Items.AddRange(created);
@@ -2142,13 +2053,8 @@ namespace Prisc.VideoSDK.Editing
         /// <summary>Whether the item consumes this source's data — media streams, and the input
         /// overlays that read its capture sidecar, so removing a source takes its cursor/keyboard
         /// rows with it rather than stranding items that fail validation.</summary>
-        private static bool PlaysSource(Item item, Guid sourceId) => item.Content switch
-        {
-            MediaContent media => media.SourceId == sourceId,
-            CursorContent cursor => cursor.SourceId == sourceId,
-            KeyboardContent keyboard => keyboard.SourceId == sourceId,
-            _ => false,
-        };
+        private static bool PlaysSource(Item item, Guid sourceId) =>
+            item.Content is SourceClockContent clock && clock.SourceId == sourceId;
 
         // ------------------------------------------------------------------------------ undo/redo
 
@@ -2239,14 +2145,7 @@ namespace Prisc.VideoSDK.Editing
             try
             {
                 result = edit(Project);
-                // every edit that can leave a group with a single row behind — a track
-                // deleted or ungrouped, a row's last items cut — ends with the group dissolved,
-                // inside the same mutation so one undo restores both.
-                TimelineOps.CollapseLoneGroups(Project);
-                // a speed edit moved the output clock under the exempt clips: refit them to
-                // the real time they cover, inside the same mutation so one undo restores both
-                RefitExemptItems(Project, exemptBefore);
-                Project.Normalize();
+                FinishEdit(Project, exemptBefore);
             }
             catch
             {
@@ -2291,6 +2190,19 @@ namespace Prisc.VideoSDK.Editing
             return result;
         }
 
+        /// <summary>What every edit ends with, inside its mutation so one undo restores all of it.
+        /// Shared with <see cref="DryRun"/>, so a menu's answer cannot disagree with the edit.</summary>
+        private void FinishEdit(Project project, ExemptSnapshot exemptBefore)
+        {
+            // every edit that can leave a group with a single row holding clips — a track deleted
+            // or ungrouped, a row's last items cut — ends with the group dissolved.
+            TimelineOps.CollapseLoneGroups(project);
+            // a speed edit moved the output clock under the exempt clips: refit them to the real
+            // time they cover.
+            RefitExemptItems(project, exemptBefore);
+            project.Normalize();
+        }
+
         private void PushUndo(UndoEntry entry)
         {
             _redo.Clear();
@@ -2319,7 +2231,7 @@ namespace Prisc.VideoSDK.Editing
         private void RestoreHistoryState(UndoEntry entry)
         {
             Project = Project.FromJson(entry.BeforeJson);
-            RestoreSelection(entry.BeforeSelection);
+            SelectMany(entry.BeforeSelection);
             _suppressCoalesce = true;
             SchedulePersist(entry.BeforeJson);
             HistoryChanged?.Invoke(this, EventArgs.Empty);
@@ -2368,11 +2280,11 @@ namespace Prisc.VideoSDK.Editing
 
         // ------------------------------------------------------------------- speed warp exemption
 
-        /// <summary>One exempt clip's extent as a snapshot remembers it: where it started on the
-        /// output clock, how many output ticks it covered (its real-time length, the truth the
-        /// re-fit preserves), and the project duration it had (what a drag that returns to its
-        /// starting mapping puts back).</summary>
-        internal readonly record struct ExemptSpan(Guid ItemId, long OutputStart, long OutputSpan, long DurationTicks);
+        /// <summary>One exempt clip's extent as a snapshot remembers it: where it started, how many
+        /// output ticks it covered (its real-time length, the truth the re-fit preserves), and the
+        /// project duration it had (what a drag that returns to its starting mapping puts
+        /// back).</summary>
+        internal readonly record struct ExemptSpan(Guid ItemId, long StartTicks, long OutputSpan, long DurationTicks);
 
         /// <summary>The exempt clips' extents under one warp, captured before a mutation (or a
         /// gesture) so the re-fit after it can tell whether the mapping moved and by how
@@ -2382,6 +2294,19 @@ namespace Prisc.VideoSDK.Editing
             public TimeWarp Warp { get; init; }
 
             public List<ExemptSpan> Spans { get; init; }
+
+            /// <summary>The real-time length the snapshot remembers for the item, or null when it
+            /// was not an exempt clip then.</summary>
+            public long? OutputSpanOf(Item item)
+            {
+                foreach (var span in Spans)
+                {
+                    if (span.ItemId == item.Id)
+                        return span.OutputSpan;
+                }
+
+                return null;
+            }
         }
 
         /// <summary>Snapshots every exempt clip's output-clock extent, or null when the project
@@ -2393,13 +2318,12 @@ namespace Prisc.VideoSDK.Editing
             TimeWarp warp = null;
             foreach (var item in project.Items)
             {
-                if (item.Content is not MediaContent { SpeedWarpExempt: true })
+                if (!TimelineOps.IsExempt(item.Content))
                     continue;
 
                 warp ??= TimeWarp.Build(project);
-                var outputStart = warp.ToOutput(item.TimelineStartTicks);
-                (spans ??= new List<ExemptSpan>()).Add(new ExemptSpan(item.Id, outputStart,
-                    warp.ToOutput(item.TimelineEndTicks) - outputStart, item.DurationTicks));
+                (spans ??= new List<ExemptSpan>()).Add(new ExemptSpan(item.Id, item.TimelineStartTicks,
+                    warp.OutputSpan(item.TimelineStartTicks, item.TimelineEndTicks), item.DurationTicks));
             }
 
             return spans == null ? null : new ExemptSnapshot { Warp = warp, Spans = spans };
@@ -2414,6 +2338,9 @@ namespace Prisc.VideoSDK.Editing
         /// unchanged: a trim of the clip itself, say, must keep the trim. Inside a gesture the
         /// snapshot is the gesture's starting state, so a drag that arrives back at its starting
         /// mapping restores the starting durations rather than leaving an intermediate re-fit.
+        /// A clip a single mutation cut (a ripple leaves it its start and shortens it) re-fits the
+        /// real time it has left, since the rest is gone: only inside a gesture can a shorter clip
+        /// be a step's end-trim instead.
         /// </summary>
         private void RefitExemptItems(Project project, ExemptSnapshot before)
         {
@@ -2429,7 +2356,7 @@ namespace Prisc.VideoSDK.Editing
                 foreach (var span in before.Spans)
                 {
                     var item = project.Items.FirstOrDefault(i => i.Id == span.ItemId);
-                    if (item?.Content is MediaContent { SpeedWarpExempt: true })
+                    if (TimelineOps.IsExempt(item?.Content))
                         item.DurationTicks = span.DurationTicks;
                 }
                 _gesture.ExemptRefitApplied = false;
@@ -2439,22 +2366,17 @@ namespace Prisc.VideoSDK.Editing
             foreach (var span in before.Spans)
             {
                 var item = project.Items.FirstOrDefault(i => i.Id == span.ItemId);
-                if (item?.Content is not MediaContent { SpeedWarpExempt: true })
+                if (!TimelineOps.IsExempt(item?.Content))
                     continue;
 
-                FitExemptItem(project, warp, item, span.OutputSpan);
+                var wasCut = _gesture == null && item.TimelineStartTicks == span.StartTicks
+                                              && item.DurationTicks < span.DurationTicks;
+                TimelineOps.FitExemptItem(project, warp, item, wasCut
+                    ? before.Warp.OutputSpan(span.StartTicks, item.TimelineEndTicks)
+                    : span.OutputSpan);
             }
             if (_gesture != null)
                 _gesture.ExemptRefitApplied = true;
-        }
-
-        /// <summary>Sets an exempt clip's project duration so it covers
-        /// <paramref name="outputSpan"/> output ticks from its start under <paramref name="warp"/>,
-        /// clamped to the row (see <see cref="TimelineOps.ClampDurationToRow"/>).</summary>
-        private static void FitExemptItem(Project project, TimeWarp warp, Item item, long outputSpan)
-        {
-            var duration = warp.ToProject(warp.ToOutput(item.TimelineStartTicks) + outputSpan) - item.TimelineStartTicks;
-            item.DurationTicks = TimelineOps.ClampDurationToRow(project, item, duration);
         }
 
         // ------------------------------------------------------------------------- voice takes
@@ -2679,7 +2601,7 @@ namespace Prisc.VideoSDK.Editing
         /// <summary>The project span a take covers: it records on the output clock, so its
         /// elapsed real time is laid onto the project through the warp from its start.</summary>
         private static long VoiceTakeDuration(TimeWarp warp, long startTicks, long elapsedOutputTicks) =>
-            Math.Max(0, warp.ToProject(warp.ToOutput(startTicks) + Math.Max(0, elapsedOutputTicks)) - startTicks);
+            Math.Max(0, warp.ProjectEndOf(startTicks, Math.Max(0, elapsedOutputTicks)) - startTicks);
 
         /// <summary>The row the last take landed on, when it is still an audio row of the
         /// project and no clip on it covers <paramref name="startTicks"/>; null otherwise (a
@@ -2690,7 +2612,7 @@ namespace Prisc.VideoSDK.Editing
                 return null;
 
             var track = project.Tracks.FirstOrDefault(t => t.Id == id && t.Kind == TrackKind.Audio);
-            if (track == null || project.Items.Any(i => i.TrackId == id && Covers(i, startTicks)))
+            if (track == null || project.Items.Any(i => i.TrackId == id && i.Covers(startTicks)))
                 return null;
 
             return track;
@@ -2767,23 +2689,8 @@ namespace Prisc.VideoSDK.Editing
 
         // -------------------------------------------------------------------- selection internals
 
-        /// <summary>The selection as ids, anchor first — both the public view and what undo
-        /// entries store.</summary>
-        private Guid[] SelectionSnapshot()
-        {
-            if (_selectedIds.Count == 0)
-                return Array.Empty<Guid>();
-
-            var ids = new List<Guid>(_selectedIds.Count);
-            if (_selectionAnchor is Guid anchor && _selectedIds.Contains(anchor))
-                ids.Add(anchor);
-            foreach (var id in _selectedIds)
-            {
-                if (id != _selectionAnchor)
-                    ids.Add(id);
-            }
-            return ids.ToArray();
-        }
+        /// <summary>The selection as ids: both the public view and what undo entries store.</summary>
+        private Guid[] SelectionSnapshot() => _selectedIds.ToArray();
 
         /// <summary>Drops selected ids that no longer resolve to an item — run after every
         /// committed mutation so a delete cannot leave a ghost selection.</summary>
@@ -2792,33 +2699,8 @@ namespace Prisc.VideoSDK.Editing
             if (_selectedIds.Count == 0)
                 return;
 
-            var removed = _selectedIds.RemoveWhere(id => Project.Items.All(i => i.Id != id));
-            if (removed == 0)
-                return;
-
-            if (_selectionAnchor is Guid anchor && !_selectedIds.Contains(anchor))
-                _selectionAnchor = _selectedIds.Count > 0 ? _selectedIds.First() : (Guid?)null;
-            SelectionChanged?.Invoke(this, EventArgs.Empty);
-        }
-
-        /// <summary>Replaces the selection with the given ids (anchor first), filtered to items
-        /// that exist in the current project.</summary>
-        private void RestoreSelection(Guid[] ids)
-        {
-            var live = ids.Where(id => Project.Items.Any(i => i.Id == id)).ToList();
-            var anchor = live.Count > 0 ? live[0] : (Guid?)null;
-
-            var changed = live.Count != _selectedIds.Count ||
-                          !live.All(_selectedIds.Contains) ||
-                          anchor != _selectionAnchor;
-            if (!changed)
-                return;
-
-            _selectedIds.Clear();
-            foreach (var id in live)
-                _selectedIds.Add(id);
-            _selectionAnchor = anchor;
-            SelectionChanged?.Invoke(this, EventArgs.Empty);
+            if (_selectedIds.RemoveWhere(id => Project.Items.All(i => i.Id != id)) > 0)
+                SelectionChanged?.Invoke(this, EventArgs.Empty);
         }
 
         // ----------------------------------------------------------------------- model helpers
@@ -2830,24 +2712,26 @@ namespace Prisc.VideoSDK.Editing
         /// dropping it onto a lower free row instead would put it behind content the user can see,
         /// which reads as an add that did nothing.
         ///
-        /// <para>Hidden and locked rows are never candidates, for the same reason: an item added to
+        /// <para>Hidden rows are never candidates, for the same reason: an item added to
         /// a hidden row is composed by nothing (the webcam row is Hidden on every fresh edit that
-        /// never enabled the overlay). Cursor/keyboard rows are never candidates either — they are
-        /// video rows, but their content is structural (pinned, refuses reorder/duplicate, deleted
-        /// with the row), and a text card must not inherit any of that. Reuse is still the common
-        /// case — a second card at a different time lands on the same overlay row rather than
-        /// stacking up empty ones.</para>
+        /// never enabled the overlay). Cursor/keyboard rows are never candidates either: they hold
+        /// one kind of clip (<see cref="TimelineOps.CanHost"/>). A grouped frontmost row
+        /// gets a fresh row instead, since a card on it would be time-linked to the recording, and so
+        /// does a placement-locked one, since the card could not be put where the user wants it. Those
+        /// checks come after choosing the frontmost row and not before, or a grouped import above a
+        /// free row would put the card behind it. Reuse is still the common case — a second card at
+        /// a different time lands on the same overlay row rather than stacking up empty ones.</para>
         /// </summary>
         private static Track FindOrCreateFreeVideoTrack(Project project, long startTicks, long durationTicks)
         {
             var end = startTicks + durationTicks;
-            var frontmost = project.Tracks.Where(t => t.Kind == TrackKind.Video && !t.Hidden && !t.Locked
-                                                      && !IsInputOverlayTrack(project, t.Id))
+            var frontmost = project.Tracks.Where(t => t.Kind == TrackKind.Video && !t.Hidden
+                                                      && !project.Items.Any(i => i.TrackId == t.Id && i.Content is InputOverlayContent))
                                           .OrderByDescending(t => t.Order)
                                           .ThenByDescending(t => t.Id)
                                           .FirstOrDefault();
 
-            if (frontmost != null && !project.Items.Any(i => i.TrackId == frontmost.Id &&
+            if (frontmost is { GroupId: null, PlacementLocked: false } && !project.Items.Any(i => i.TrackId == frontmost.Id &&
                     i.TimelineStartTicks < end && startTicks < i.TimelineEndTicks))
                 return frontmost;
 
@@ -2861,119 +2745,48 @@ namespace Prisc.VideoSDK.Editing
             var videoOrders = project.Tracks.Where(t => t.Kind == TrackKind.Video)
                                             .Select(t => t.Order).ToList();
             var order = videoOrders.Count > 0 ? videoOrders.Max() + 1 : 0;
-            foreach (var track in project.Tracks)
-            {
-                if (track.Order >= order)
-                    track.Order++;
-            }
-
-            var created = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = name, Order = order };
-            project.Tracks.Add(created);
-            return created;
+            return TimelineOps.InsertTrackAt(project, new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = name }, order);
         }
 
         /// <summary>
-        /// Adds the row a new background lands on: behind every non-background row, and in front
-        /// of every background row already there. The second half of that is the whole reason this
-        /// is not simply "order 0" — a wallpaper covers the canvas, so a second one placed behind
-        /// the first would be completely occluded and the button would read as doing nothing. A
-        /// background row is a video row whose earliest item is a <see cref="BackgroundContent"/>,
-        /// the same predicate the timeline classifies rows by. Only where a row is <i>created</i>:
-        /// nothing pins it there afterwards, and dragging a backdrop in front of the picture is a
-        /// legitimate edit.
+        /// Adds the row a new background lands on (<see cref="TimelineOps.OrderBehindPicture"/>):
+        /// not simply "order 0", because a wallpaper covers the canvas, so a second one placed
+        /// behind the first would be completely occluded and the button would read as doing
+        /// nothing. Only where a row is <i>created</i>: nothing pins it there afterwards, and
+        /// dragging a backdrop in front of the picture is a legitimate edit.
         /// </summary>
-        private static Track InsertBackgroundTrack(Project project)
-        {
-            var backgroundOrders = project.Tracks
-                .Where(t => t.Kind == TrackKind.Video && project.Items
-                    .Where(i => i.TrackId == t.Id)
-                    .OrderBy(i => i.TimelineStartTicks).ThenBy(i => i.Id)
-                    .FirstOrDefault()?.Content is BackgroundContent)
-                .Select(t => t.Order).ToList();
-
-            // no backgrounds yet: the backmost slot of the whole project, which pushes everything
-            // (audio and the speed row included) up one. Shifting every track rather than only the
-            // video ones is InsertVideoTrackOnTop's idiom and the only stable one — Reorder
-            // renumbers the blocks contiguously on the next move, so a negative or fractional
-            // Order would simply be erased.
-            var order = backgroundOrders.Count > 0 ? backgroundOrders.Max() + 1 : 0;
-            foreach (var track in project.Tracks)
-            {
-                if (track.Order >= order)
-                    track.Order++;
-            }
-
-            var created = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Background", Order = order };
-            project.Tracks.Add(created);
-            return created;
-        }
+        private static Track InsertBackgroundTrack(Project project) =>
+            TimelineOps.InsertTrackAt(project, new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Background" },
+                TimelineOps.OrderBehindPicture(project));
 
         /// <summary>Adds an audio row at the bottom of the timeline: above every existing row
         /// except the pinned speed row, which stays on top: that one (and only that one) is
         /// shifted up, as the other insert helpers renumber. Where an imported file's audio and
         /// a voice take both land.</summary>
-        private static Track InsertAudioTrackBelow(Project project, string name)
-        {
-            var belowSpeed = project.Tracks.Where(t => !IsSpeedTrack(project, t))
-                                           .Select(t => t.Order).ToList();
-            var order = belowSpeed.Count > 0 ? belowSpeed.Max() + 1 : 0;
-            foreach (var existing in project.Tracks)
-            {
-                if (existing.Order >= order)
-                    existing.Order++;
-            }
-
-            var created = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = name, Order = order };
-            project.Tracks.Add(created);
-            return created;
-        }
+        private static Track InsertAudioTrackBelow(Project project, string name) =>
+            TimelineOps.InsertTrackAt(project, new Track { Id = Guid.NewGuid(), Kind = TrackKind.Audio, Name = name },
+                TimelineOps.OrderAfterAudioRows(project));
 
         /// <summary>Adds a zoom row composited above the whole video block — video and zoom rows
         /// alike — shifting whatever sits at or above the slot (the audio rows and the speed row)
         /// up one, exactly as <see cref="InsertVideoTrackOnTop"/> renumbers.</summary>
-        private static Track InsertEffectTrackOnTop(Project project, string name)
-        {
-            var blockOrders = project.Tracks.Where(t => t.Kind != TrackKind.Audio && !IsSpeedTrack(project, t))
-                                            .Select(t => t.Order).ToList();
-            var order = blockOrders.Count > 0 ? blockOrders.Max() + 1 : 0;
-            foreach (var track in project.Tracks)
-            {
-                if (track.Order >= order)
-                    track.Order++;
-            }
-
-            var created = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Effect, Name = name, Order = order };
-            project.Tracks.Add(created);
-            return created;
-        }
+        private static Track InsertEffectTrackOnTop(Project project, string name) =>
+            TimelineOps.InsertTrackAt(project, new Track { Id = Guid.NewGuid(), Kind = TrackKind.Effect, Name = name },
+                TimelineOps.OrderAbovePictureRows(project));
 
         /// <summary>Adds <b>the</b> speed row, ordered above every existing row: it is excluded
         /// from z-order and paint entirely, and keeping it on top means the video and audio
         /// blocks never step over it.</summary>
-        private static Track InsertSpeedTrack(Project project)
-        {
-            var order = project.Tracks.Count > 0 ? project.Tracks.Max(t => t.Order) + 1 : 0;
-            var created = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Effect, Name = "Speed", Order = order };
-            project.Tracks.Add(created);
-            return created;
-        }
+        private static Track InsertSpeedTrack(Project project) =>
+            TimelineOps.InsertTrackAt(project, new Track { Id = Guid.NewGuid(), Kind = TrackKind.Effect, Name = "Speed" },
+                TimelineOps.OrderAboveEverything(project));
 
-        /// <summary>The row carrying the project's speed items, or null. Resolved by content, not
-        /// name — <see cref="Project.Validate"/> keeps it unique.</summary>
-        private static Track FindSpeedTrack(Project project) =>
-            project.Tracks.FirstOrDefault(t => IsSpeedTrack(project, t));
-
-        /// <summary>Whether this is the pinned speed row: an effect row is a speed row or a zoom
-        /// row by what its items are, and empty effect rows never survive a commit (see
-        /// <see cref="PruneEmptyTracks"/>).</summary>
-        private static bool IsSpeedTrack(Project project, Track track) =>
-            track.Kind == TrackKind.Effect &&
-            project.Items.Any(i => i.TrackId == track.Id && i.Content is SpeedContent);
 
         /// <summary>Removes tracks that were created during this session (not part of the project
-        /// the session opened with) and no longer carry any item. Effect rows are pruned
-        /// regardless of when they were created: the timeline classifies an effect row by its
-        /// items' content, so an empty one is unclassifiable and must never survive.</summary>
+        /// the session opened with) and no longer carry any item. Effect rows are pruned regardless
+        /// of when they were created: the timeline classifies an effect row by its items' content,
+        /// so an empty one reads only as a zoom row with nothing on it, and only a
+        /// <see cref="CutItems"/> waiting for its paste has a use for that.</summary>
         private void PruneEmptyTracks(Project project) =>
             project.Tracks.RemoveAll(t => (t.Kind == TrackKind.Effect || !_initialTrackIds.Contains(t.Id)) &&
                                           project.Items.All(i => i.TrackId != t.Id));
@@ -3036,7 +2849,7 @@ namespace Prisc.VideoSDK.Editing
         }
 
         private static Item NewImportItem(Track track, Source source, SourceStream stream,
-            MediaProbeResult probe, long startTicks, Guid? linkGroup, Transform transform)
+            MediaProbeResult probe, long startTicks, Transform transform)
         {
             // the stream's own duration, the container's when the stream carries none, and a
             // visible trimmable default when neither is known.
@@ -3057,12 +2870,8 @@ namespace Prisc.VideoSDK.Editing
                     SourceInTicks = 0,
                 },
                 Transform = transform ?? new Transform(),
-                GroupId = linkGroup,
             };
         }
-
-        private static bool Covers(Item item, long timelineTicks) =>
-            timelineTicks >= item.TimelineStartTicks && timelineTicks < item.TimelineEndTicks;
 
         private static Track RequireTrack(Project project, Guid trackId)
         {

@@ -27,7 +27,7 @@ namespace Prisc.VideoSDK.Composition
             ArgumentNullException.ThrowIfNull(item);
             if (item.Content is not ZoomContent zoom)
                 return 1;
-            if (timeTicks < item.TimelineStartTicks || timeTicks >= item.TimelineEndTicks)
+            if (!item.Covers(timeTicks))
                 return 1;
 
             double progress = Math.Min(

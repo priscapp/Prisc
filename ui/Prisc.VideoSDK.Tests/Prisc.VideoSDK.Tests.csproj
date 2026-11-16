@@ -31,6 +31,10 @@
     <ProjectReference Include="..\Prisc.Ui\Prisc.Ui.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <!-- the frozen project files and goldens LegacyFixtures reads from beside the test binary -->
+    <None Update="Fixtures\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- skips (locally) or fails (PRISC_INTEROP_REQUIRED=1) a test that needs prisc_interop -->
     <Compile Include="..\Prisc.Interop\Testing\InteropTestGate.cs" Link="InteropTestGate.cs" />
   </ItemGroup>

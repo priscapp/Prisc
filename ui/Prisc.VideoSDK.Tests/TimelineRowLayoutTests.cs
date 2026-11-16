@@ -89,7 +89,6 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(TimelineRowKind.Background, TimelineRowLayout.KindOf(track, items));
             Assert.Equal(26d, TimelineRowLayout.HeightOf(TimelineRowKind.Background));
             Assert.Equal(TimelineRowBlock.Video, TimelineRowLayout.BlockOf(TimelineRowKind.Background));
-            Assert.False(TimelineRowLayout.IsInputOverlay(TimelineRowKind.Background));
         }
 
         /// <summary>A background added behind everything is the BOTTOM row of the video block: the

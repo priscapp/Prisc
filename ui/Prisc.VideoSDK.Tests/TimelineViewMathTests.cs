@@ -153,6 +153,85 @@ namespace Prisc.VideoSDK.Tests
 
         // --------------------------------------------------------------------- pixel alignment
 
+        /// <summary>A clip on the move is no target, or snapping would chase itself: the frozen set
+        /// of a linked drag is left out whole, while everything else still catches.</summary>
+        [Fact]
+        public void SnapTargets_leave_out_the_clips_on_the_move()
+        {
+            var project = new Project
+            {
+                Items =
+                {
+                    new Item { Id = Guid.NewGuid(), TimelineStartTicks = 100, DurationTicks = 10 },
+                    new Item { Id = Guid.NewGuid(), TimelineStartTicks = 200, DurationTicks = 10 },
+                    new Item { Id = Guid.NewGuid(), TimelineStartTicks = 300, DurationTicks = 10 },
+                },
+            };
+
+            var targets = TimelineViewMath.SnapTargets(project, 50, new[] { project.Items[0].Id, project.Items[1].Id });
+
+            // the origin and the playhead first: the order is the tie-break
+            Assert.Equal(new long[] { 0, 50, 300, 310 }, targets);
+
+            // a trim only leaves out the clip it grabbed
+            Assert.Equal(new long[] { 0, 50, 200, 210, 300, 310 },
+                TimelineViewMath.SnapTargets(project, 50, new[] { project.Items[0].Id }));
+
+            Assert.Equal(new long[] { 0, 50 }, TimelineViewMath.SnapTargets(null, 50, Array.Empty<Guid>()));
+        }
+
+        [Theory]
+        // one clip, nothing with it: nothing to say
+        [InlineData(1, 1, false, null)]
+        [InlineData(4, 1, false, "Moving 4 linked clips. Hold Alt as you press to move only this clip.")]
+        [InlineData(5, 2, false, "Moving 5 linked clips. Hold Alt as you press to move only the selected clips.")]
+        [InlineData(2, 2, false, "Moving 2 selected clips.")]
+        [InlineData(1, 1, true, "Moving only the selected clips.")]
+        [InlineData(3, 3, true, "Moving only the selected clips.")]
+        public void MoveStatus_says_what_the_drag_carries(int moveCount, int selectionCount, bool selectionOnly, string expected) =>
+            Assert.Equal(expected, TimelineViewMath.MoveStatus(moveCount, selectionCount, selectionOnly));
+
+        [Theory]
+        [InlineData(1, "Delete")]
+        [InlineData(3, "Delete 3 Clips")]
+        public void ClipCountLabel_names_a_count_only_past_one(int selected, string expected) =>
+            Assert.Equal(expected, TimelineViewMath.ClipCountLabel("Delete", selected));
+
+        [Theory]
+        [InlineData(0, 0, "Paste", null)]
+        [InlineData(1, 1, "Paste", null)]
+        [InlineData(3, 1, "Paste", null)]
+        [InlineData(3, 2, "Paste 3 Clips at Gap Start", "Clips return to their own tracks, or new tracks if those are occupied.")]
+        public void The_gap_menu_says_when_a_paste_will_not_go_into_the_gap(int clips, int rows, string label, string tip)
+        {
+            Assert.Equal(label, TimelineViewMath.GapPasteLabel(clips, rows));
+            Assert.Equal(tip, TimelineViewMath.GapPasteTip(rows));
+        }
+
+        [Theory]
+        [InlineData(1, "Ungroup Track")]
+        [InlineData(2, "Ungroup 2 Tracks")]
+        public void UngroupLabel_names_a_count_only_past_one(int rows, string expected) =>
+            Assert.Equal(expected, TimelineViewMath.UngroupLabel(rows));
+
+        [Fact]
+        public void The_shortcut_texts_name_cmd_on_macos()
+        {
+            Assert.Equal("Cuts this clip only. Ctrl+K cuts every track, so the two sides can move apart.",
+                TimelineViewMath.SplitClipTip(false));
+            Assert.Equal("Cuts this clip only. Cmd+K cuts every track, so the two sides can move apart.",
+                TimelineViewMath.SplitClipTip(true));
+            Assert.Equal("Not grouped. Ctrl+click a clip on another track, then press Ctrl+G.",
+                TimelineViewMath.NotGroupedCaption(false));
+            Assert.Equal("Not grouped. Cmd+click a clip on another track, then press Cmd+G.",
+                TimelineViewMath.NotGroupedCaption(true));
+            Assert.Equal("Grouped with 3 other tracks, shown in the same colour. Dragging a clip moves the clips overlapping " +
+                         "it on these tracks. Change with Ctrl+G, Ctrl+Shift+G or the track's properties.",
+                TimelineViewMath.GroupBadgeTip(3, false));
+            Assert.Contains("Cmd+G, Cmd+Shift+G", TimelineViewMath.GroupBadgeTip(3, true));
+            Assert.StartsWith("Grouped with 1 other track,", TimelineViewMath.GroupBadgeTip(1, false));
+        }
+
         [Fact]
         public void SnapToPixel_puts_even_strokes_and_fill_edges_on_the_pixel_boundary()
         {
@@ -341,6 +420,30 @@ namespace Prisc.VideoSDK.Tests
                     },
                 },
             };
+        }
+
+        [Theory]
+        [InlineData(60, 1122.0)] // the failure seen in the editor: end x comes out as exactly 1122
+        [InlineData(60, 3296.0)]
+        [InlineData(61, 1122.4)]
+        [InlineData(7, 333.3)]
+        [InlineData(3599, 1919.75)]
+        public void The_ruler_end_is_in_view_when_the_project_is_fitted(int seconds, double width)
+        {
+            var duration = seconds * OneSecond;
+            var endX = TimelineViewMath.TickToX(duration, 0, TimelineViewMath.FitTicksPerPixel(duration, width));
+
+            Assert.True(TimelineViewMath.IsRulerEndInView(endX, width));
+        }
+
+        [Fact]
+        public void The_ruler_end_is_not_in_view_off_either_edge()
+        {
+            Assert.True(TimelineViewMath.IsRulerEndInView(500, 1122));
+            Assert.False(TimelineViewMath.IsRulerEndInView(3000, 1122)); // zoomed in, end still to come
+            Assert.False(TimelineViewMath.IsRulerEndInView(1123, 1122));
+            Assert.False(TimelineViewMath.IsRulerEndInView(0, 1122));
+            Assert.False(TimelineViewMath.IsRulerEndInView(-5, 1122)); // scrolled past: no room to pin
         }
 
         [Fact]

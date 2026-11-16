@@ -193,8 +193,9 @@ namespace Prisc.UI.VideoEditor
         /// for, or null when they canceled. <paramref name="initial"/> is what the rows start on
         /// (the last-used preset, or the last custom values), and
         /// <paramref name="defaultOutputPath"/> the full path the "Save to" box is pre-filled with.
-        /// <paramref name="canDeleteSession"/> offers "Delete session", which needs a session to
-        /// delete (the dev harness edits a bare file).
+        /// <paramref name="canDeleteSession"/> offers "Delete session", which needs a Recents session
+        /// to delete (<c>--video-edit</c> edits a bare file, and <c>--video-edit-session</c> keeps its
+        /// session out of Recents).
         /// </summary>
         public static async Task<RenderRequest> ShowAsync(Window owner, RenderProjectInfo project,
             RenderRequest initial, string defaultOutputPath, bool canDeleteSession)

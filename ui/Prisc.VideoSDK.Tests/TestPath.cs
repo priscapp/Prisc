@@ -14,6 +14,11 @@ namespace Prisc.VideoSDK.Tests
     /// </summary>
     internal static class TestPath
     {
+        /// <summary>A capture sidecar that really is on disk, for a test that adds an overlay row:
+        /// the session offers one only to a recording whose capture data exists.</summary>
+        public static string ExistingCapture { get; } =
+            System.IO.Path.Combine(LegacyFixtures.Directory, LegacyFixtures.CaptureFileName);
+
         /// <summary>The given rooted Windows path, in the running OS's own shape.</summary>
         public static string Native(string windowsPath)
         {

@@ -1,11 +1,16 @@
 using System;
 using System.Collections.Generic;
+using Prisc.VideoSDK.Model;
 
 namespace Prisc.UI.VideoEditor.Timeline
 {
     /// <summary>One mark on an input-overlay item, in item-local pixels: a click (or held drag)
     /// on the cursor row, a keystroke run — or several close together — on the keys row.</summary>
     internal readonly record struct InputMark(double X, double Width, int Count);
+
+    /// <summary>The stretch of its capture an input-overlay item shows: the source time at its left
+    /// edge, how fast time runs across it, and how much source that covers.</summary>
+    internal readonly record struct InputPreviewSpan(long SourceInTicks, double Speed, long SourceDurationTicks);
 
     /// <summary>
     /// The zoom-dependent part of the cursor and keys rows' previews, as pure math: where each
@@ -33,6 +38,18 @@ namespace Prisc.UI.VideoEditor.Timeline
         public const double KeyBlipBaseHeight = 6;
 
         public const double KeyBlipStepHeight = 2.5;
+
+        /// <summary>What the item's preview reads from its capture: its own clock, as the composer
+        /// does. Null for a clip on a freeze, which holds one instant and so has no span to
+        /// draw.</summary>
+        public static InputPreviewSpan? SpanOf(Item item, SourceClockContent clock)
+        {
+            if (clock.Freeze)
+                return null;
+
+            var speed = TimelineOps.SpeedOf(clock);
+            return new InputPreviewSpan(clock.SourceInTicks, speed, TimelineOps.ToSourceTicks(item.DurationTicks, speed));
+        }
 
         /// <summary>The click marks of one item: each press from its down to its up, at least
         /// <see cref="ClickMarkMinWidth"/> wide, with marks that overlap (or touch, to the pixel)

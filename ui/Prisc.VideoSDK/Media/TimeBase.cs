@@ -17,8 +17,8 @@ namespace Prisc.VideoSDK.Media
     /// <c>av_rescale_q</c>. Chosen deliberately so that this code and FFmpeg agree bit-for-bit on
     /// every timestamp that crosses the boundary between them, and so the conversion is symmetric
     /// about zero (negative timestamps exist — a stream <c>start_time</c> can be negative).
-    /// The one exception is <see cref="TicksToFrameIndex"/>, which is a lookup, not a value
-    /// conversion, and therefore floors (see its remarks).
+    /// The exceptions are <see cref="TicksToFrameIndex"/> and <see cref="TicksToStreamTimeFloor"/>,
+    /// which are lookups, not value conversions, and therefore floor (see their remarks).
     /// </para>
     /// </summary>
     public static class TimeBase
@@ -108,6 +108,21 @@ namespace Prisc.VideoSDK.Media
         /// <summary>Converts 100ns ticks to a timestamp in a stream time base (num/den seconds).</summary>
         public static long TicksToStreamTime(long ticks, int timeBaseNum, int timeBaseDen)
             => Rescale(ticks, 1, TicksPerSecond, timeBaseNum, timeBaseDen);
+
+        /// <summary>The stream timestamp to seek to for the instant <paramref name="ticks"/>: the
+        /// nearest one that is not after it, as this class reads timestamps back into ticks.</summary>
+        /// <remarks>
+        /// A backward seek finds the keyframe at or before the timestamp it is given, so a timestamp
+        /// rounded up can land past the instant asked for: a freeze of the frame before a cut holds
+        /// the cut less one tick, which <see cref="TicksToStreamTime"/> rounds onto the cut itself.
+        /// The floor is taken against the rounded read-back, as in <see cref="TicksToFrameIndex"/>, so
+        /// a keyframe's own reported instant still seeks to that keyframe and not the one before it.
+        /// </remarks>
+        public static long TicksToStreamTimeFloor(long ticks, int timeBaseNum, int timeBaseDen)
+        {
+            long nearest = TicksToStreamTime(ticks, timeBaseNum, timeBaseDen);
+            return StreamTimeToTicks(nearest, timeBaseNum, timeBaseDen) > ticks ? nearest - 1 : nearest;
+        }
 
         // -------------------------------------------------------------------------------- 128-bit
 

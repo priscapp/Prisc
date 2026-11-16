@@ -1,0 +1,15 @@
+{
+  "Version": 1,
+  "TrimStartMs": 2000,
+  "TrimEndMs": 50000,
+  "WebcamEnabled": true,
+  "WebcamShape": "RoundedRect",
+  "WebcamCornerRadius": 0.3,
+  "WebcamCenterX": 0.7,
+  "WebcamCenterY": 0.65,
+  "WebcamWidth": 0.25,
+  "Cuts": [
+    { "StartMs": 10000, "EndMs": 15000 },
+    { "StartMs": 30000, "EndMs": 33000 }
+  ]
+}

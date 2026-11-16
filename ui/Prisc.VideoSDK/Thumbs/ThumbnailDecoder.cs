@@ -278,7 +278,7 @@ namespace Prisc.VideoSDK.Thumbs
             bool tbValid = _timeBase.num > 0 && _timeBase.den > 0;
             long target = Math.Max(0, ticks);
             long ts = tbValid
-                ? TimeBase.TicksToStreamTime(target + _startTimeTicks, _timeBase.num, _timeBase.den)
+                ? TimeBase.TicksToStreamTimeFloor(target + _startTimeTicks, _timeBase.num, _timeBase.den)
                 : TimeBase.Rescale(target, 1, TimeBase.TicksPerSecond, 1, ffmpeg.AV_TIME_BASE);
 
             // without a usable stream time base the seek has to go through the container's

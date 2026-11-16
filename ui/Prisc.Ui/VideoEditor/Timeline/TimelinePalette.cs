@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Avalonia;
 using Avalonia.Media;
 using Avalonia.Styling;
@@ -61,7 +62,7 @@ namespace Prisc.UI.VideoEditor.Timeline
 
         public IBrush RowBackgroundAlt { get; private init; }
 
-        /// <summary>The rule between two rows of one block (and between two combined tracks):
+        /// <summary>The rule between two rows of one block:
         /// the bare surface colour, one pixel of the same ground the block gutters show — a dark
         /// seam rather than a light line, so rows read as tiles laid on the surface. (The theme
         /// border, a few levels off the row fills, all but vanished.)</summary>
@@ -117,16 +118,24 @@ namespace Prisc.UI.VideoEditor.Timeline
 
         public IBrush RulerLabelBrush { get; private init; }
 
-        /// <summary>The track headers' group badge — orange, so the "this row moves with the
-        /// recording" mark stands out from the neutral button cluster around it (and from the
-        /// accent, which selection owns).</summary>
-        public IBrush GroupBadgeBrush { get; private init; }
+        /// <summary>The colors that tell groups apart, each lit enough to stand out from the neutral
+        /// button cluster on a row and none of them the accent, which selection owns. A group's
+        /// number (<see cref="TimelineViewMath.GroupNumbers"/>) picks one, for its badge, its linked
+        /// outlines and the inspector's link icon alike.</summary>
+        private IBrush[] GroupBrushes { get; init; }
 
-        /// <summary>Border of every clip in a group being dragged — the badge's orange, so the
-        /// moving set refers back to the mark that says the rows are grouped.</summary>
+        private Pen[] LinkedClipPens { get; init; }
+
+        public IBrush GroupBrush(int groupNumber) => GroupBrushes[groupNumber % TimelineViewMath.GroupColorCount];
+
+        /// <summary>Thin border of a clip a drag of the selection would bring along.</summary>
+        public Pen LinkedClipPen(int groupNumber) => LinkedClipPens[groupNumber % TimelineViewMath.GroupColorCount];
+
+        /// <summary>Border of every clip of a set being dragged — the status line's orange, so the
+        /// moving set and the sentence about it read as one cue.</summary>
         public Pen GroupDragPen { get; private init; }
 
-        /// <summary>Faint wash over those same clips, so a group reads as one thing even where
+        /// <summary>Faint wash over those same clips, so the set reads as one thing even where
         /// its borders are far apart.</summary>
         public IBrush GroupDragFill { get; private init; }
 
@@ -259,7 +268,7 @@ namespace Prisc.UI.VideoEditor.Timeline
         /// <summary>Wash over hidden/muted rows.</summary>
         public IBrush DimFill { get; private init; }
 
-        /// <summary>Diagonal hatch over hidden/muted (and locked) items.</summary>
+        /// <summary>Diagonal hatch over hidden/muted items.</summary>
         public Pen HatchPen { get; private init; }
 
         // ---------------------------------------------------------------- transitions and guides
@@ -392,6 +401,26 @@ namespace Prisc.UI.VideoEditor.Timeline
             // AND from the selection/snap chrome, whatever accent the theme carries.
             var hoverPlayheadColor = dark ? Color.FromRgb(88, 158, 255) : Color.FromRgb(32, 108, 220);
 
+            Color[] groupColors = dark
+                ? new[]
+                {
+                    Color.FromRgb(255, 159, 67), // orange
+                    Color.FromRgb(45, 212, 191), // teal
+                    Color.FromRgb(244, 114, 182), // pink
+                    Color.FromRgb(163, 230, 53), // lime
+                    Color.FromRgb(167, 139, 250), // violet
+                    Color.FromRgb(250, 204, 21), // yellow
+                }
+                : new[]
+                {
+                    Color.FromRgb(224, 113, 22),
+                    Color.FromRgb(13, 148, 136),
+                    Color.FromRgb(219, 39, 119),
+                    Color.FromRgb(101, 163, 13),
+                    Color.FromRgb(124, 58, 237),
+                    Color.FromRgb(180, 137, 0),
+                };
+
             return new TimelinePalette
             {
                 SurfaceBackground = new SolidColorBrush(surfaceColor),
@@ -406,7 +435,8 @@ namespace Prisc.UI.VideoEditor.Timeline
                 RulerMinorTickPen = new Pen(new SolidColorBrush(text2, 0.75), 1),
                 RulerLabelBrush = new SolidColorBrush(text1),
                 LabelBrush = new SolidColorBrush(text3),
-                GroupBadgeBrush = new SolidColorBrush(dark ? Color.FromRgb(255, 159, 67) : Color.FromRgb(224, 113, 22)),
+                GroupBrushes = groupColors.Select(c => (IBrush)new SolidColorBrush(c)).ToArray(),
+                LinkedClipPens = groupColors.Select(c => new Pen(new SolidColorBrush(c), 1)).ToArray(),
                 GroupDragPen = new Pen(new SolidColorBrush(dark ? Color.FromRgb(255, 159, 67) : Color.FromRgb(224, 113, 22)), 2),
                 GroupDragFill = new SolidColorBrush(dark ? Color.FromRgb(255, 159, 67) : Color.FromRgb(224, 113, 22), 0.18),
                 AiBadgeBrush = new SolidColorBrush(accent),

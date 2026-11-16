@@ -127,10 +127,11 @@ namespace Prisc
 
         /// <summary>Whether the command line asks for one of the hidden dev harnesses, each of
         /// which takes over startup ahead of the single-instance mutex.</summary>
-        private static bool IsHarnessLaunch(string[] args) =>
+        internal static bool IsHarnessLaunch(string[] args) =>
             args != null && args.Any(a =>
                 String.Equals(a, UI.VideoEditor.VideoSpikeWindow.ArgName, StringComparison.OrdinalIgnoreCase)
                 || String.Equals(a, UI.VideoEditor.VideoEditorWindow.ArgName, StringComparison.OrdinalIgnoreCase)
+                || String.Equals(a, UI.VideoEditor.VideoEditorWindow.SessionArgName, StringComparison.OrdinalIgnoreCase)
                 || String.Equals(a, UI.TraySpike.ArgName, StringComparison.OrdinalIgnoreCase)
                 || String.Equals(a, UI.Dialogs.ColorPicker.ColorDialogSnapshot.ArgName, StringComparison.OrdinalIgnoreCase)
                 || String.Equals(a, UI.Harness.InteropProbe.ArgName, StringComparison.OrdinalIgnoreCase));
@@ -179,9 +180,10 @@ namespace Prisc
                 if (UI.VideoEditor.VideoSpikeWindow.TryHandleArgs(args))
                     return;
 
-                // hidden editor harness (`--video-edit file.mp4`): opens the video editor on an
-                // arbitrary file with no session (persistence disabled, render output next to the
-                // file). Used by e2e testing; same single-instance rules as the spike above.
+                // hidden editor harnesses (`--video-edit file.mp4`, `--video-edit-session
+                // session.json`): open the video editor on an arbitrary file, or on one session
+                // apart from the session manager. Used by e2e testing; same single-instance rules
+                // as the spike above.
                 if (UI.VideoEditor.VideoEditorWindow.TryHandleArgs(args))
                     return;
 

@@ -7,6 +7,7 @@ using Prisc.VideoSDK.Ai;
 using Prisc.VideoSDK.Audio;
 using Prisc.VideoSDK.Composition;
 using Prisc.VideoSDK.Model;
+using LaneKey = (System.Guid SourceId, int StreamIndex, int Lane);
 
 namespace Prisc.VideoSDK.Playback
 {
@@ -14,8 +15,9 @@ namespace Prisc.VideoSDK.Playback
     /// Plays a <see cref="Project"/> for preview: the generalization of
     /// <see cref="FFmpegVideoPlayer"/> from "one file, skip ranges" to "a timeline of items over N
     /// media streams". One demux/decode pipeline runs per referenced <b>video</b>
-    /// (sourceId, streamIndex) — reusing <see cref="Demuxer"/>/<see cref="VideoDecodeWorker"/>
-    /// unchanged — against ONE shared <see cref="PlaybackClock"/> that runs in <b>output-timeline
+    /// (sourceId, streamIndex, lane) — a lane being what one decoder can serve, see
+    /// <see cref="StreamLanes"/> — reusing <see cref="Demuxer"/>/<see cref="VideoDecodeWorker"/>
+    /// unchanged, against ONE shared <see cref="PlaybackClock"/> that runs in <b>output-timeline
     /// time</b>. Workers pace their source-stamped frames through the project's timeline↔source
     /// mapping (<see cref="ProjectTimelineMap"/>) and, when speed items bend time, the project's
     /// <see cref="TimeWarp"/>: the clock runs linearly in <b>warped output time</b> (scaled only
@@ -37,16 +39,14 @@ namespace Prisc.VideoSDK.Playback
     /// (and acceptable ~100ms hiccup) as <see cref="FFmpegVideoPlayer"/>'s skip ranges, with the
     /// ranges now derived from the project instead of set by the UI. The frame source additionally
     /// filters any cut-source frames presented inside the detection window, so cut material never
-    /// reaches the canvas.
+    /// reaches the canvas. Each pipeline has its own demuxer and watches its own seams, so streams
+    /// of one file can be placed differently, and a pasted clip's edges stall nothing else. A lane
+    /// above 0 decodes only while one of its clips covers the playhead.
     ///
     /// <see cref="UpdateProject"/> applies live edits: as long as the set of referenced streams is
     /// unchanged (every trim/cut/transform/volume edit), the new mapping is swapped in atomically
     /// and no decoder is reopened; only adding/removing/relinking streams rebuilds pipelines,
     /// which happens on a background task (latest update wins) — never on the caller's thread.
-    ///
-    /// Remaining pacing caveat (video streams only): streams are paced correctly when their items
-    /// share the primary stream's timeline placement (true for our recordings, where screen and
-    /// webcam rows are cut as one link group). The timeline-domain audio mix has no such limit.
     /// </summary>
     public sealed class CompositionPlayer : IDisposable
     {
@@ -93,9 +93,6 @@ namespace Prisc.VideoSDK.Playback
         private double _playbackRate = 1.0;
         private bool _audioDetached;
         private int _skipSeekBusy;
-        /// <summary>Source-timeline offset of the primary-stream segment the pipelines were last
-        /// synced to; a differing offset at the playing position means a cut seam was crossed.</summary>
-        private long _activeOffsetTicks = long.MinValue;
         /// <summary>Whether the most recent seek was <see cref="SeekMode.Fast"/> (scrubbing).
         /// Its immediately-presented frame is a keyframe that can sit far before the requested
         /// target, and the preview composes at the clock's instant — adopting that pts would
@@ -110,7 +107,7 @@ namespace Prisc.VideoSDK.Playback
         private readonly object _seekSync = new object();
         private TimeSpan _pendingSeekPos;
         private SeekMode _pendingSeekMode;
-        private bool _pendingSeekFlushAudio;
+        private bool _pendingSeamHop;
         private bool _hasPendingSeek;
         private bool _seekLoopActive;
         private Task _seekTask = Task.CompletedTask;
@@ -134,21 +131,22 @@ namespace Prisc.VideoSDK.Playback
 
         private sealed class VideoPipe
         {
-            public (Guid SourceId, int StreamIndex) Key;
+            public LaneKey Key;
+            public Demuxer Demuxer;
+            public PacketQueue Queue;
             public VideoDecodeWorker Worker;
             public PooledFrameSink Sink;
-        }
 
-        private sealed class FilePipe
-        {
-            public Demuxer Demuxer;
-            public readonly List<PacketQueue> Queues = new List<PacketQueue>();
-            public readonly List<VideoPipe> Video = new List<VideoPipe>();
+            /// <summary>Source-timeline offset of the segment this pipe was last synced to; a
+            /// differing offset at the playing position means it crossed a seam.</summary>
+            public long ActiveOffsetTicks = long.MinValue;
+
+            /// <summary>Container seeks so far (test/diagnostic).</summary>
+            public int SeekCount;
         }
 
         private sealed class PipelineSet
         {
-            public FilePipe[] Files = Array.Empty<FilePipe>();
             public VideoPipe[] AllVideo = Array.Empty<VideoPipe>();
             public VideoPipe Primary;
             public AudioMixWorker MixWorker;
@@ -190,6 +188,33 @@ namespace Prisc.VideoSDK.Playback
         /// current pipeline set. A video cut-seam hop must never move it — the mix decodes
         /// straight through seams, which is what keeps preview audio sample-exact with render.</summary>
         internal int AudioRepositionCount => _pipelines?.MixWorker?.SourceRepositionCount ?? 0;
+
+        /// <summary>Test/diagnostic: container seeks performed by the video pipeline of a stream's
+        /// lane for the current pipeline set, its matte pipe included.</summary>
+        internal int VideoSeekCount(LaneKey key)
+        {
+            int seeks = 0;
+            foreach (var pipe in _pipelines?.AllVideo ?? Array.Empty<VideoPipe>())
+            {
+                if (pipe.Key == key)
+                    seeks += Volatile.Read(ref pipe.SeekCount);
+            }
+
+            return seeks;
+        }
+
+        /// <summary>Test/diagnostic: whether the video pipeline of a stream's lane has read its file
+        /// to the end.</summary>
+        internal bool VideoDemuxAtEof(LaneKey key)
+        {
+            foreach (var pipe in _pipelines?.AllVideo ?? Array.Empty<VideoPipe>())
+            {
+                if (pipe.Key == key && pipe.Demuxer.IsEof)
+                    return true;
+            }
+
+            return false;
+        }
 
         public event EventHandler PositionChanged;
         public event EventHandler<PlayerState> StateChanged;
@@ -335,11 +360,15 @@ namespace Prisc.VideoSDK.Playback
             PrimeAndStart(set, map, positionTicks: 0);
 
             // A long leading trim would decode-discard from the file head; land it with a real
-            // container seek instead (coalesced through the normal seek path).
-            if (map.PrimaryVideo is { } pk && map.TryGetVideo(pk, out var pm)
-                && pm.TimelineToSource(0) > 2 * TimeSpan.TicksPerSecond)
+            // container seek instead (coalesced through the normal seek path). A lane above 0 reads
+            // from wherever its first clip starts, which is usually a long way in.
+            foreach (var stream in map.VideoStreams.Values)
             {
-                _ = SeekAsync(TimeSpan.Zero, SeekMode.Exact);
+                if (stream.TimelineToSource(0) > 2 * TimeSpan.TicksPerSecond)
+                {
+                    _ = SeekAsync(TimeSpan.Zero, SeekMode.Exact);
+                    break;
+                }
             }
 
             _tickThread = new Thread(TickLoop) { Name = "prisc-transport", IsBackground = true };
@@ -356,18 +385,16 @@ namespace Prisc.VideoSDK.Playback
             {
                 pipe.Worker.PrepareSeek(new TimeSpan(VideoSourceTarget(map, pipe.Key, positionTicks)), SeekMode.Exact);
                 pipe.Worker.OnSeeked(0);
+                Volatile.Write(ref pipe.ActiveOffsetTicks, OffsetAt(map, pipe.Key, positionTicks));
             }
 
             // the mix worker runs in timeline time — the position is its seek target directly.
             set.MixWorker?.PrepareSeek(new TimeSpan(positionTicks));
 
-            Volatile.Write(ref _activeOffsetTicks, PrimaryOffsetAt(map, positionTicks));
-
-            foreach (var file in set.Files)
+            foreach (var pipe in set.AllVideo)
             {
-                file.Demuxer.Start();
-                foreach (var pipe in file.Video)
-                    pipe.Worker.Start();
+                pipe.Demuxer.Start();
+                pipe.Worker.Start();
             }
 
             set.MixWorker?.Start();
@@ -389,66 +416,42 @@ namespace Prisc.VideoSDK.Playback
 
             var matteStreams = MatteGenerator.CollectMatteStreams(project);
 
-            // group the needed video streams by source file (audio never rides the demuxers —
-            // the mix worker's per-stream decoders own their files)
-            var bySource = new Dictionary<Guid, List<(Guid SourceId, int StreamIndex)>>();
-            foreach (var key in map.VideoStreams.Keys)
+            // primary first so it lands in stats slot 0 (audio never rides the demuxers — the mix
+            // worker's per-stream decoders own their files)
+            var keys = new List<LaneKey>(map.VideoStreams.Keys);
+            if (map.PrimaryVideo is { } primary)
             {
-                if (!bySource.TryGetValue(key.SourceId, out var list))
-                    bySource[key.SourceId] = list = new List<(Guid, int)>();
-                list.Add(key);
+                keys.Remove(primary);
+                keys.Insert(0, primary);
             }
 
-            var files = new List<FilePipe>();
-            var allVideo = new List<VideoPipe>();
+            var pipes = new List<VideoPipe>();
 
             try
             {
-                foreach (var (sourceId, videoKeys) in bySource)
+                foreach (var key in keys)
                 {
-                    var source = FindSource(project, sourceId)
-                        ?? throw new InvalidOperationException($"Project has no source {sourceId}.");
+                    var source = FindSource(project, key.SourceId)
+                        ?? throw new InvalidOperationException($"Project has no source {key.SourceId}.");
 
-                    // registered in files BEFORE any native open, so a failure part-way through
-                    // the build leaves everything reachable for the catch block's cleanup.
-                    var file = new FilePipe { Demuxer = new Demuxer() };
-                    files.Add(file);
-                    file.Demuxer.Open(source.Path);
-
-                    // primary first so it lands in stats slot 0 (parity with screen-track-first today)
-                    videoKeys.Sort((a, b) =>
+                    var demuxer = new Demuxer();
+                    try
                     {
-                        int pa = map.PrimaryVideo == a ? 0 : 1;
-                        int pb = map.PrimaryVideo == b ? 0 : 1;
-                        return pa != pb ? pa.CompareTo(pb) : a.StreamIndex.CompareTo(b.StreamIndex);
-                    });
-
-                    foreach (var key in videoKeys)
-                    {
-                        var queue = new PacketQueue(32);
-                        file.Queues.Add(queue);
-                        file.Demuxer.AttachQueue(key.StreamIndex, queue);
-
-                        var sink = new PooledFrameSink();
-                        var keyCopy = key;
-                        var worker = new VideoDecodeWorker(
-                            file.Demuxer, key.StreamIndex, queue, _options, _clock,
-                            () => sink,
-                            () => _state == PlayerState.Playing,
-                            OnImmediatePresented,
-                            srcPts => MapVideoPtsToClock(keyCopy, srcPts));
-                        Interlocked.Increment(ref _decoderOpens);
-
-                        var pipe = new VideoPipe { Key = key, Worker = worker, Sink = sink };
-                        file.Video.Add(pipe);
-                        allVideo.Add(pipe);
-                        _frameSource.RegisterStream(key, sink);
-                        if (map.PrimaryVideo == key)
-                            set.Primary = pipe;
-
-                        if (matteStreams.Contains(key))
-                            BuildMattePipe(source, key, files, allVideo);
+                        demuxer.Open(source.Path);
                     }
+                    catch
+                    {
+                        demuxer.Dispose();
+                        throw;
+                    }
+
+                    var pipe = AddVideoPipe(key, demuxer, key.StreamIndex, pipes);
+                    _frameSource.RegisterStream(key, pipe.Sink);
+                    if (map.PrimaryVideo == key)
+                        set.Primary = pipe;
+
+                    if (matteStreams.Contains((key.SourceId, key.StreamIndex)))
+                        BuildMattePipe(source, key, pipes);
                 }
 
                 if (audioStreams.Count > 0)
@@ -473,67 +476,77 @@ namespace Prisc.VideoSDK.Playback
                 // already registered with the frame source would all leak for the process
                 // lifetime. FFmpegVideoPlayer kept partial state reachable in fields; here the
                 // partial build must be torn down eagerly instead, before the throw escapes.
-                set.Files = files.ToArray();
-                set.AllVideo = allVideo.ToArray();
+                set.AllVideo = pipes.ToArray();
                 _frameSource.Clear();
                 _clock?.SetAudioSource(null);
                 DisposePipelineSet(set);
                 throw;
             }
 
-            set.Files = files.ToArray();
-            set.AllVideo = allVideo.ToArray();
-            set.Primary ??= allVideo.Count > 0 ? allVideo[0] : null;
+            set.AllVideo = pipes.ToArray();
+            set.Primary ??= pipes.Count > 0 ? pipes[0] : null;
             return set;
         }
 
+        /// <summary>Builds one decode pipeline over an opened demuxer, which it now owns. The pipe
+        /// joins <paramref name="pipes"/> BEFORE its decoder opens, so a failure part-way through
+        /// the build leaves everything reachable for the caller's cleanup.</summary>
+        private VideoPipe AddVideoPipe(LaneKey key, Demuxer demuxer, int streamIndex, List<VideoPipe> pipes)
+        {
+            var queue = new PacketQueue(32);
+            demuxer.AttachQueue(streamIndex, queue);
+            var sink = new PooledFrameSink();
+            var pipe = new VideoPipe { Key = key, Demuxer = demuxer, Queue = queue, Sink = sink };
+            pipes.Add(pipe);
+
+            pipe.Worker = new VideoDecodeWorker(
+                demuxer, streamIndex, queue, _options, _clock,
+                () => sink,
+                () => IsPipePlaying(key),
+                OnImmediatePresented,
+                srcPts => MapVideoPtsToClock(key, srcPts));
+            Interlocked.Increment(ref _decoderOpens);
+            return pipe;
+        }
+
+        /// <summary>Whether a pipeline presents on the clock right now. A lane above 0 holds its
+        /// frame unless one of its clips covers the playhead, and its queue then blocks, so it does
+        /// not decode on to the end of the file between clips. Entering a clip is a seam, whose hop
+        /// wakes the presenter. Lane 0 keeps running through gaps, as it always has.</summary>
+        private bool IsPipePlaying(LaneKey key)
+        {
+            if (_state != PlayerState.Playing)
+                return false;
+            return key.Lane == 0 || OffsetAt(_map, key, Position.Ticks) != long.MinValue;
+        }
+
         /// <summary>
-        /// Opens the person-matte pipeline for one video stream, when a valid matte sidecar
-        /// exists (see <see cref="AiSidecars"/>). The sidecar is its own container, so it gets its
-        /// own <see cref="FilePipe"/>; the pipe is keyed by the <b>parent</b> stream — the matte
+        /// Opens the person-matte pipeline for one lane of a video stream, when a valid matte sidecar
+        /// exists (see <see cref="AiSidecars"/>). The pipe is keyed by the <b>parent</b> lane — the matte
         /// shares its PTS timeline by contract, so the parent's timeline mapping paces, seeks and
         /// seam-hops both identically — and its sink registers as the stream's mask feed
         /// (<see cref="PlaybackFrameSource.RegisterMaskStream"/>). A sidecar that is missing,
         /// stale or fails to open simply means no mask: the effect degrades in the composer,
         /// never here.
         /// </summary>
-        private void BuildMattePipe(Source source, (Guid SourceId, int StreamIndex) key,
-            List<FilePipe> files, List<VideoPipe> allVideo)
+        private void BuildMattePipe(Source source, LaneKey key, List<VideoPipe> pipes)
         {
             var mattePath = AiSidecars.MattePath(_options.SidecarCacheDir, key.SourceId, key.StreamIndex);
             if (mattePath == null || !AiSidecars.IsValid(mattePath, source.Path))
                 return;
 
-            var file = new FilePipe { Demuxer = new Demuxer() };
+            var demuxer = new Demuxer();
             try
             {
-                file.Demuxer.Open(mattePath);
+                demuxer.Open(mattePath);
             }
             catch
             {
-                file.Demuxer.Dispose();
+                demuxer.Dispose();
                 return; // a corrupt sidecar is a missing matte, not a failed open
             }
 
-            files.Add(file);
-            var queue = new PacketQueue(32);
-            file.Queues.Add(queue);
-            file.Demuxer.AttachQueue(0, queue);
-
-            var sink = new PooledFrameSink();
-            var keyCopy = key;
-            var worker = new VideoDecodeWorker(
-                file.Demuxer, 0, queue, _options, _clock,
-                () => sink,
-                () => _state == PlayerState.Playing,
-                OnImmediatePresented,
-                srcPts => MapVideoPtsToClock(keyCopy, srcPts));
-            Interlocked.Increment(ref _decoderOpens);
-
-            var pipe = new VideoPipe { Key = key, Worker = worker, Sink = sink };
-            file.Video.Add(pipe);
-            allVideo.Add(pipe);
-            _frameSource.RegisterMaskStream(key, sink);
+            _frameSource.RegisterMaskStream(key, AddVideoPipe(key, demuxer, 0, pipes).Sink);
         }
 
         // ------------------------------------------------------------------------- live editing
@@ -625,9 +638,9 @@ namespace Prisc.VideoSDK.Playback
                 if (wasEof || warpChanged)
                     set.MixWorker.PrepareSeek(new TimeSpan(positionTicks));
             }
-            // _activeOffsetTicks intentionally kept: if the current position's segment
+            // each pipe's active offset intentionally kept: if the current position's segment
             // offset changed under the new map (e.g. a cut moved past the playhead), the
-            // next tick's seam check sees the mismatch and hops the pipelines.
+            // next tick's seam check sees the mismatch and hops that pipe.
 
             // a speed edit re-shapes the output timeline under the playhead: keep the project
             // position and re-anchor the clock's output time to it under the new warp — paused
@@ -775,15 +788,7 @@ namespace Prisc.VideoSDK.Playback
         }
 
         /// <summary>Seek in timeline time; concurrent calls coalesce (last position wins).</summary>
-        public Task SeekAsync(TimeSpan position, SeekMode mode) => SeekAsync(position, mode, flushAudio: true);
-
-        /// <summary>Internal seeks can skip the audio flush: the mix runs in timeline time, so a
-        /// video cut-seam hop (which does not move the timeline position) is a semantic no-op for
-        /// audio — flushing there would discard the ring's correct buffered lead (an audible
-        /// dropout at every cut) and force the mix's streams off the decode-discard path that
-        /// keeps preview seams sample-exact with render. Coalescing stays last-wins: a no-flush
-        /// hop targets the playhead itself, where the mix already is.</summary>
-        private Task SeekAsync(TimeSpan position, SeekMode mode, bool flushAudio)
+        public Task SeekAsync(TimeSpan position, SeekMode mode)
         {
             if (_map == null)
                 throw new InvalidOperationException("No project open.");
@@ -798,17 +803,39 @@ namespace Prisc.VideoSDK.Playback
             {
                 _pendingSeekPos = position;
                 _pendingSeekMode = mode;
-                _pendingSeekFlushAudio = flushAudio;
+                _pendingSeamHop = false;
                 _hasPendingSeek = true;
+                return EnsureSeekLoop();
+            }
+        }
 
-                if (!_seekLoopActive)
+        /// <summary>Queues a hop of whichever pipes crossed a seam (see <see cref="HopSeams"/>),
+        /// through the same loop so it never races a seek. It gives way to a queued seek, which
+        /// lands every pipe anyway.</summary>
+        private Task RequestSeamHop()
+        {
+            lock (_seekSync)
+            {
+                if (!_hasPendingSeek)
                 {
-                    _seekLoopActive = true;
-                    _seekTask = Task.Run(SeekLoop);
+                    _pendingSeamHop = true;
+                    _hasPendingSeek = true;
                 }
 
-                return _seekTask;
+                return EnsureSeekLoop();
             }
+        }
+
+        /// <summary>Caller holds <see cref="_seekSync"/>.</summary>
+        private Task EnsureSeekLoop()
+        {
+            if (!_seekLoopActive)
+            {
+                _seekLoopActive = true;
+                _seekTask = Task.Run(SeekLoop);
+            }
+
+            return _seekTask;
         }
 
         private void SeekLoop()
@@ -817,7 +844,7 @@ namespace Prisc.VideoSDK.Playback
             {
                 TimeSpan pos;
                 SeekMode mode;
-                bool flushAudio;
+                bool seamHop;
                 lock (_seekSync)
                 {
                     if (!_hasPendingSeek || _disposed)
@@ -828,7 +855,7 @@ namespace Prisc.VideoSDK.Playback
 
                     pos = _pendingSeekPos;
                     mode = _pendingSeekMode;
-                    flushAudio = _pendingSeekFlushAudio;
+                    seamHop = _pendingSeamHop;
                     _hasPendingSeek = false;
                 }
 
@@ -836,8 +863,12 @@ namespace Prisc.VideoSDK.Playback
                 {
                     lock (_lifecycleSync)
                     {
-                        if (!_disposed)
-                            DoSeek(pos, mode, flushAudio);
+                        if (_disposed)
+                            continue;
+                        if (seamHop)
+                            HopSeams();
+                        else
+                            DoSeek(pos, mode);
                     }
                 }
                 catch
@@ -847,7 +878,7 @@ namespace Prisc.VideoSDK.Playback
             }
         }
 
-        private void DoSeek(TimeSpan target, SeekMode mode, bool flushAudio)
+        private void DoSeek(TimeSpan target, SeekMode mode)
         {
             if (_state == PlayerState.Ended)
                 SetState(PlayerState.Paused);
@@ -860,39 +891,69 @@ namespace Prisc.VideoSDK.Playback
             // present arrives on a decode thread and asks the clock where the playhead is (see
             // OnImmediatePresented), so a clock still holding the pre-seek position would race it.
             _lastSeekWasFast = mode == SeekMode.Fast;
-            Volatile.Write(ref _activeOffsetTicks, PrimaryOffsetAt(map, tl));
             _clock.SetPosition(new TimeSpan(ProjectToClockTicks(tl)));
 
             // the mix worker seeks in timeline time — no source-domain mapping exists for audio.
-            if (flushAudio)
-                set?.MixWorker?.PrepareSeek(target);
+            set?.MixWorker?.PrepareSeek(target);
 
-            if (set != null && set.Files.Length > 0)
-            {
-                // 1. record per-worker post-flush behavior (source-domain targets).
-                foreach (var pipe in set.AllVideo)
-                    pipe.Worker.PrepareSeek(new TimeSpan(VideoSourceTarget(map, pipe.Key, tl)), mode);
-
-                // 2/3. flush + container seek per file, then unblock that file's pipelines.
-                foreach (var file in set.Files)
-                {
-                    int serial = file.Demuxer.SeekAndFlush(new TimeSpan(FileSeekTarget(map, file, tl)));
-                    foreach (var pipe in file.Video)
-                        pipe.Worker.OnSeeked(serial);
-                }
-            }
+            if (set != null)
+                SeekPipes(set.AllVideo, map, tl, mode);
 
             // re-attach the audio master if it was detached at end-of-audio (also for
-            // audio-only projects, which have no file pipes). A no-flush seam hop leaves the
-            // audio state entirely alone — the mix was not re-based, so its timing still
-            // describes wherever it last was, not this target.
-            if (flushAudio && _audioDetached && set?.AudioSink != null)
+            // audio-only projects, which have no video pipes).
+            if (_audioDetached && set?.AudioSink != null)
             {
                 _audioDetached = false;
                 _clock.SetAudioSource(set.AudioSink);
             }
 
             RaisePositionChanged();
+        }
+
+        /// <summary>
+        /// The seam hop: lands only the pipes that crossed a seam on the segment at the playhead,
+        /// leaving the rest decoding through it, so a pasted clip's edges do not stall the stream
+        /// under it. The timeline position does not change across a video seam, so nothing else
+        /// moves: the clock runs on, and the timeline-domain mix is already producing the right
+        /// samples, where a flush would discard the ring's correct buffered lead (an audible dropout
+        /// at every cut) and force the mix's streams off the decode-discard path that keeps preview
+        /// seams sample-exact with render. Reads the playhead here rather than where the tick saw
+        /// it, because a seek may have landed since.
+        /// </summary>
+        private void HopSeams()
+        {
+            var set = _pipelines;
+            var map = _map;
+            if (set == null)
+                return;
+
+            long tl = Position.Ticks;
+            var crossed = new List<VideoPipe>();
+            foreach (var pipe in set.AllVideo)
+            {
+                if (HasCrossedSeam(map, pipe, tl))
+                    crossed.Add(pipe);
+            }
+
+            SeekPipes(crossed, map, tl, SeekMode.Exact);
+        }
+
+        private static void SeekPipes(IReadOnlyList<VideoPipe> pipes, ProjectTimelineMap map, long tl, SeekMode mode)
+        {
+            // 1. record per-worker post-flush behavior (source-domain targets).
+            foreach (var pipe in pipes)
+            {
+                Volatile.Write(ref pipe.ActiveOffsetTicks, OffsetAt(map, pipe.Key, tl));
+                pipe.Worker.PrepareSeek(new TimeSpan(VideoSourceTarget(map, pipe.Key, tl)), mode);
+            }
+
+            // 2/3. flush + container seek, then unblock the pipeline.
+            foreach (var pipe in pipes)
+            {
+                int serial = pipe.Demuxer.SeekAndFlush(new TimeSpan(VideoSourceTarget(map, pipe.Key, tl)));
+                pipe.Worker.OnSeeked(serial);
+                Interlocked.Increment(ref pipe.SeekCount);
+            }
         }
 
         public async Task StepFrameAsync(int direction)
@@ -904,11 +965,12 @@ namespace Prisc.VideoSDK.Playback
             if (_state == PlayerState.Playing)
                 Pause();
 
-            var primary = set.Primary;
+            long from = Position.Ticks;
+            var driver = StepDriver(set, _map, from);
 
             if (direction < 0)
             {
-                var target = Position - primary.Worker.FrameDuration;
+                var target = Position - driver.Worker.FrameDuration;
                 if (target < TimeSpan.Zero)
                     target = TimeSpan.Zero;
                 await SeekAsync(target, SeekMode.Exact);
@@ -916,16 +978,26 @@ namespace Prisc.VideoSDK.Playback
             }
 
             var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            primary.Worker.RequestStep(tcs, pts =>
+            driver.Worker.RequestStep(tcs, pts =>
             {
-                _clock.SetPosition(new TimeSpan(MapVideoPtsToClock(primary.Key, pts.Ticks)));
+                if (_map.TryGetVideo(driver.Key, out var stream))
+                    _clock.SetPosition(new TimeSpan(ProjectToClockTicks(stream.StepForward(pts.Ticks, Position.Ticks))));
                 RaisePositionChanged();
             });
 
             foreach (var pipe in set.AllVideo)
             {
-                if (pipe != primary)
+                if (pipe == driver)
+                    continue;
+
+                // an idle pipe waits: its next clip is what it is parked on, or a place it has yet
+                // to reach, and walking on through it would hand the playhead a frame well inside
+                // that clip once this pipe has to say where the playhead goes. Forgetting its offset
+                // makes the entry a seam, whose hop lands the clip.
+                if (OffsetAt(_map, pipe.Key, from) != long.MinValue)
                     pipe.Worker.RequestStep(null, null);
+                else
+                    Volatile.Write(ref pipe.ActiveOffsetTicks, long.MinValue);
             }
 
             try
@@ -936,11 +1008,34 @@ namespace Prisc.VideoSDK.Playback
             {
             }
 
-            // stepping across a cut seam leaves the pipeline about to decode cut-out source; the
+            // stepping across a cut seam leaves a pipeline about to decode cut-out source; the
             // stepped frame's mapped position already sits in the next segment, so re-sync there.
-            long off = PrimaryOffsetAt(_map, Position.Ticks);
-            if (off != long.MinValue && off != Volatile.Read(ref _activeOffsetTicks))
-                await SeekAsync(Position, SeekMode.Exact);
+            long tl = Position.Ticks;
+            foreach (var pipe in set.AllVideo)
+            {
+                if (HasCrossedSeam(_map, pipe, tl))
+                {
+                    await SeekAsync(Position, SeekMode.Exact);
+                    break;
+                }
+            }
+        }
+
+        /// <summary>The pipe a frame step at the playhead maps through: the first with a clip there.
+        /// Only that pipe's next frame says where the playhead goes, since a lane with nothing at
+        /// the playhead holds a frame from somewhere else on the timeline. <see cref="PipelineSet.AllVideo"/>
+        /// holds the primary first and a matte after its parent, so this is the primary whenever it
+        /// can be and never a matte. Asked per step, so it follows the mapping across a live edit
+        /// that swaps what the pipes play. With no clip at the playhead, the primary walks on.</summary>
+        private static VideoPipe StepDriver(PipelineSet set, ProjectTimelineMap map, long tl)
+        {
+            foreach (var pipe in set.AllVideo)
+            {
+                if (OffsetAt(map, pipe.Key, tl) != long.MinValue)
+                    return pipe;
+            }
+
+            return set.Primary;
         }
 
         // ----------------------------------------------------------------------------- composing
@@ -979,19 +1074,15 @@ namespace Prisc.VideoSDK.Playback
                     return;
             }
 
-            // …but only where the stream actually covers the playhead. Past its last item (or in a
-            // gap) the worker still presents its last kept frame, and adopting that frame's pts
-            // would drag the position back to the end of the video — a seek to the end of a project
-            // whose text or images outlast the footage would land on the last video frame instead.
-            // A freeze frame is the same: its held frame's pts maps back to the neighbor it was
-            // taken from, never to the instant inside the hold the seek asked for.
+            // …but only where the clip at the playhead plays this frame (see TryMapInSegmentAt).
+            // Anywhere else its pts would drag the position off: to the end of the video on a seek
+            // past the footage, to the frame's other home on a seek into a repeat.
             var map = _map;
-            if (map != null && map.TryGetVideo(set.Primary.Key, out var stream)
-                && (stream.OffsetAtTimeline(Position.Ticks) == long.MinValue
-                    || stream.IsFrozenAt(Position.Ticks)))
+            if (map == null || !map.TryGetVideo(set.Primary.Key, out var stream)
+                || !stream.TryMapInSegmentAt(Position.Ticks, pts.Ticks, out long frameTicks))
                 return;
 
-            _clock.SetPosition(new TimeSpan(MapVideoPtsToClock(set.Primary.Key, pts.Ticks)));
+            _clock.SetPosition(new TimeSpan(ProjectToClockTicks(frameTicks)));
             RaisePositionChanged();
         }
 
@@ -1014,19 +1105,13 @@ namespace Prisc.VideoSDK.Playback
                 long tl = pos.Ticks;
 
                 // cut seam crossed: the source-timeline offset at the playhead no longer matches
-                // what the pipelines are decoding — hop them with an internal exact seek. This is
+                // what a pipeline is decoding — hop it with an internal exact seek. This is
                 // FFmpegVideoPlayer's skip-range hop with the discontinuities read straight from
                 // the project.
-                long off = PrimaryOffsetAt(map, tl);
-                if (set != null && set.AllVideo.Length > 0
-                    && off != long.MinValue && off != Volatile.Read(ref _activeOffsetTicks)
+                if (set != null && TickSeams(set, map, tl)
                     && Interlocked.CompareExchange(ref _skipSeekBusy, 1, 0) == 0)
                 {
-                    // flushAudio: false — the timeline position does not change across a video
-                    // seam, so the timeline-domain mix is already producing the right samples;
-                    // flushing it would dump correct buffered lead and reposition its decoders.
-                    SeekAsync(pos, SeekMode.Exact, flushAudio: false)
-                        .ContinueWith(_ => Interlocked.Exchange(ref _skipSeekBusy, 0));
+                    RequestSeamHop().ContinueWith(_ => Interlocked.Exchange(ref _skipSeekBusy, 0));
                 }
 
                 // audio finished before video — hand the clock to the stopwatch so video plays
@@ -1055,17 +1140,14 @@ namespace Prisc.VideoSDK.Playback
                 // out of media is only a fallback for a timeline of unknown length.
                 long dur = map?.DurationTicks ?? 0;
                 bool ended = dur > 0 && tl >= dur;
-                if (dur <= 0 && set != null && set.Files.Length > 0)
+                if (dur <= 0 && set != null && set.AllVideo.Length > 0)
                 {
-                    bool eof = true;
-                    foreach (var file in set.Files)
-                        eof &= file.Demuxer.IsEof;
-                    bool videoDone = set.AllVideo.Length > 0;
+                    bool videoDone = true;
                     foreach (var pipe in set.AllVideo)
-                        videoDone &= pipe.Worker.EofPresented;
+                        videoDone &= pipe.Demuxer.IsEof && pipe.Worker.EofPresented;
                     bool audioDone = set.MixWorker == null
                                      || (set.MixWorker.EofReached && set.AudioRing.Available == 0);
-                    ended = eof && videoDone && audioDone;
+                    ended = videoDone && audioDone;
                 }
 
                 if (ended)
@@ -1081,6 +1163,31 @@ namespace Prisc.VideoSDK.Playback
             {
                 // never let a tick take down the timer thread.
             }
+        }
+
+        /// <summary>The tick's seam watch: whether any pipe crossed a seam at the playhead. A lane
+        /// above 0 forgets its offset on leaving its clips: it stopped decoding there, so the next
+        /// clip enters through a hop even when it continues the same offset.</summary>
+        private static bool TickSeams(PipelineSet set, ProjectTimelineMap map, long tl)
+        {
+            bool crossed = false;
+            foreach (var pipe in set.AllVideo)
+            {
+                if (pipe.Key.Lane > 0 && OffsetAt(map, pipe.Key, tl) == long.MinValue)
+                    Volatile.Write(ref pipe.ActiveOffsetTicks, long.MinValue);
+                else
+                    crossed |= HasCrossedSeam(map, pipe, tl);
+            }
+
+            return crossed;
+        }
+
+        /// <summary>Whether the segment at the playhead is not the one the pipe was last synced to.
+        /// A gap crosses nothing: the pipe hops if it comes out somewhere else.</summary>
+        private static bool HasCrossedSeam(ProjectTimelineMap map, VideoPipe pipe, long tl)
+        {
+            long offset = OffsetAt(map, pipe.Key, tl);
+            return offset != long.MinValue && offset != Volatile.Read(ref pipe.ActiveOffsetTicks);
         }
 
         /// <summary>The tick's audio-master state machine (detach at end-of-audio, re-attach when
@@ -1151,39 +1258,34 @@ namespace Prisc.VideoSDK.Playback
         }
 
         /// <summary>Source pts → the clock's domain (project timeline, then through the warp):
-        /// what the decode workers pace their presentation against.</summary>
-        private long MapVideoPtsToClock((Guid, int) key, long srcTicks)
+        /// what the decode workers pace their presentation against. Asks for the timeline instant
+        /// nearest the playhead, which is where a frame of a repeated span belongs.</summary>
+        private long MapVideoPtsToClock(LaneKey key, long srcTicks)
         {
             var map = _map;
             long tl = map != null && map.TryGetVideo(key, out var sm)
-                ? sm.SourceToTimeline(srcTicks)
+                ? sm.SourceToTimeline(srcTicks, Position.Ticks)
                 : srcTicks;
             return ProjectToClockTicks(tl);
         }
 
-        private static long VideoSourceTarget(ProjectTimelineMap map, (Guid, int) key, long tlTicks)
+        private static long VideoSourceTarget(ProjectTimelineMap map, LaneKey key, long tlTicks)
         {
             if (map != null && map.TryGetVideo(key, out var sm))
                 return sm.TimelineToSource(tlTicks);
             return tlTicks;
         }
 
-        /// <summary>The container seek target for one file, mapped through its first video
-        /// stream's timeline (streams of one recording share their placement; files exist only
-        /// for video streams — audio has its own decoders).</summary>
-        private static long FileSeekTarget(ProjectTimelineMap map, FilePipe file, long tlTicks)
-            => VideoSourceTarget(map, file.Video[0].Key, tlTicks);
-
-        private static long PrimaryOffsetAt(ProjectTimelineMap map, long tlTicks)
+        private static long OffsetAt(ProjectTimelineMap map, LaneKey key, long tlTicks)
         {
-            if (map?.PrimaryVideo is { } pk && map.TryGetVideo(pk, out var sm))
+            if (map != null && map.TryGetVideo(key, out var sm))
                 return sm.OffsetAtTimeline(tlTicks);
             return long.MinValue;
         }
 
-        private static Dictionary<(Guid, int), SkipRangeSchedule> BuildCutSchedules(ProjectTimelineMap map)
+        private static Dictionary<LaneKey, SkipRangeSchedule> BuildCutSchedules(ProjectTimelineMap map)
         {
-            var cuts = new Dictionary<(Guid, int), SkipRangeSchedule>();
+            var cuts = new Dictionary<LaneKey, SkipRangeSchedule>();
             foreach (var (key, stream) in map.VideoStreams)
             {
                 if (stream.SourceCuts.Ranges.Count > 0)
@@ -1243,7 +1345,8 @@ namespace Prisc.VideoSDK.Playback
         }
 
         /// <summary>Identity of the decode-pipeline set: which streams of which files feed it
-        /// (one line per video stream and per referenced audio item stream — a video stream
+        /// (one line per lane of a video stream, so a drag that starts or stops overlapping a clip of
+        /// its stream rebuilds, and one per referenced audio item stream — a video stream
         /// tagged when the project wants its person matte, an audio stream tagged when its
         /// track's denoise sidecar feeds the mix; either toggle changes what is decoded, so it
         /// must rebuild, while the blur/strength dials are per-pixel/per-sample math over the
@@ -1256,12 +1359,8 @@ namespace Prisc.VideoSDK.Playback
         private static string StreamSignature(Project project, ProjectTimelineMap map,
             List<(Guid SourceId, int StreamIndex)> audioStreams, int mixRate, string sidecarCacheDir)
         {
-            var keys = new List<(Guid SourceId, int StreamIndex)>(map.VideoStreams.Keys);
-            keys.Sort((a, b) =>
-            {
-                int bySource = a.SourceId.CompareTo(b.SourceId);
-                return bySource != 0 ? bySource : a.StreamIndex.CompareTo(b.StreamIndex);
-            });
+            var keys = new List<LaneKey>(map.VideoStreams.Keys);
+            keys.Sort();
 
             var mattes = MatteGenerator.CollectMatteStreams(project);
             var denoised = DenoisedAudioSource.CollectDenoisedStreams(project);
@@ -1270,8 +1369,8 @@ namespace Prisc.VideoSDK.Playback
             {
                 var sourcePath = FindSource(project, key.SourceId)?.Path;
                 sb.Append("v:").Append(key.SourceId).Append(':').Append(key.StreamIndex)
-                  .Append(':').Append(sourcePath);
-                if (mattes.Contains(key))
+                  .Append(':').Append(key.Lane).Append(':').Append(sourcePath);
+                if (mattes.Contains((key.SourceId, key.StreamIndex)))
                 {
                     var mattePath = AiSidecars.MattePath(sidecarCacheDir, key.SourceId, key.StreamIndex);
                     sb.Append(AiSidecars.IsValid(mattePath, sourcePath) ? ":mt1" : ":mt0");
@@ -1374,32 +1473,25 @@ namespace Prisc.VideoSDK.Playback
         {
             // stop order matters (see FFmpegVideoPlayer.DisposeCore): demux threads first, then
             // wake every consumer via queue Stop, then join workers, then free queues/contexts.
-            foreach (var file in set.Files)
-                file.Demuxer.Stop();
+            foreach (var pipe in set.AllVideo)
+                pipe.Demuxer.Stop();
 
-            foreach (var file in set.Files)
-            {
-                foreach (var queue in file.Queues)
-                    queue.Stop();
-            }
+            foreach (var pipe in set.AllVideo)
+                pipe.Queue.Stop();
 
-            foreach (var file in set.Files)
+            foreach (var pipe in set.AllVideo)
             {
-                foreach (var pipe in file.Video)
-                {
-                    pipe.Worker.Dispose();
-                    pipe.Sink.Dispose();
-                }
+                pipe.Worker?.Dispose(); // null only when its decoder failed to open
+                pipe.Sink.Dispose();
             }
 
             set.MixWorker?.Dispose(); // joins the mix thread before its sink/ring go away
             set.AudioSink?.Dispose();
 
-            foreach (var file in set.Files)
+            foreach (var pipe in set.AllVideo)
             {
-                foreach (var queue in file.Queues)
-                    queue.Dispose();
-                file.Demuxer.Dispose();
+                pipe.Queue.Dispose();
+                pipe.Demuxer.Dispose();
             }
         }
     }

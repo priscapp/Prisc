@@ -114,6 +114,55 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
+        public void Lanes_of_a_stream_are_cached_independently()
+        {
+            using var factory = new CpuSurfaceFactory();
+            using var pool = new FrameBufferPool();
+            using var cache = new FrameTextureCache(factory);
+
+            cache.Upload(SourceA, 0, 100, RentSolid(pool, 4, 4, 1, 1, 1, 255), 4, 4, 16);
+            cache.Upload(SourceA, 0, 200, RentSolid(pool, 4, 4, 2, 2, 2, 255), 4, 4, 16, lane: 1);
+            cache.UploadMask(SourceA, 0, 300, RentSolid(pool, 4, 4, 3, 3, 3, 255), 4, 4, 16, lane: 1);
+
+            Assert.Equal(2, cache.Count);
+            Assert.True(cache.TryGet(SourceA, 0, out _, out var lane0));
+            Assert.True(cache.TryGet(SourceA, 0, out _, out var lane1, lane: 1));
+            Assert.Equal(100, lane0);
+            Assert.Equal(200, lane1);
+
+            // a matte rides in its own lane, and a lane with no frame yet has none to lend
+            Assert.False(cache.TryGetMask(SourceA, 0, out _, out _));
+            Assert.True(cache.TryGetMask(SourceA, 0, out _, out var mask1, lane: 1));
+            Assert.Equal(300, mask1);
+            Assert.False(cache.TryGet(SourceA, 0, out _, out _, lane: 2));
+
+            // an upload replaces only its own lane
+            cache.Upload(SourceA, 0, 250, RentSolid(pool, 4, 4, 4, 4, 4, 255), 4, 4, 16, lane: 1);
+            Assert.True(cache.TryGet(SourceA, 0, out _, out lane0));
+            Assert.Equal(100, lane0);
+        }
+
+        [Fact]
+        public void Evicting_a_stream_takes_all_of_its_lanes_and_no_other_stream()
+        {
+            using var factory = new CpuSurfaceFactory();
+            using var pool = new FrameBufferPool();
+            using var cache = new FrameTextureCache(factory);
+
+            cache.Upload(SourceA, 0, 100, RentSolid(pool, 4, 4, 1, 1, 1, 255), 4, 4, 16);
+            cache.Upload(SourceA, 0, 200, RentSolid(pool, 4, 4, 2, 2, 2, 255), 4, 4, 16, lane: 1);
+            cache.UploadMask(SourceA, 0, 200, RentSolid(pool, 4, 4, 2, 2, 2, 255), 4, 4, 16, lane: 1);
+            cache.Upload(SourceA, 1, 300, RentSolid(pool, 4, 4, 3, 3, 3, 255), 4, 4, 16, lane: 1);
+
+            cache.Evict(SourceA, 0);
+
+            Assert.False(cache.TryGet(SourceA, 0, out _, out _));
+            Assert.False(cache.TryGet(SourceA, 0, out _, out _, lane: 1));
+            Assert.False(cache.TryGetMask(SourceA, 0, out _, out _, lane: 1));
+            Assert.True(cache.TryGet(SourceA, 1, out _, out _, lane: 1));
+        }
+
+        [Fact]
         public void Upload_recycles_buffer_even_when_it_fails()
         {
             using var factory = new CpuSurfaceFactory();

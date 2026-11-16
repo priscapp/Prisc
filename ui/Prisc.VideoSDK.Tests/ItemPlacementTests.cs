@@ -497,7 +497,6 @@ namespace Prisc.VideoSDK.Tests
                 DurationTicks = 5 * TimeSpan.TicksPerSecond,
                 Content = new CursorContent { SourceId = project.Sources[0].Id },
                 Transform = new ModelTransform(),
-                GroupId = Guid.NewGuid(),
             };
             project.Tracks.Add(track);
             project.Items.Add(cursor);
@@ -1053,7 +1052,6 @@ namespace Prisc.VideoSDK.Tests
                     PauseBreakMs = 10,
                 },
                 Transform = new ModelTransform { X = 0.5, Y = 0.85, Scale = 0.5 },
-                GroupId = Guid.NewGuid(),
             };
 
             project.Tracks.Add(backTrack);

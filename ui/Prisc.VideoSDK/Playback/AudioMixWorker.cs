@@ -855,12 +855,16 @@ namespace Prisc.VideoSDK.Playback
 
             public bool ReadSamples(Guid sourceId, int streamIndex, long sourcePosFrames, float[] dst,
                 int frames, out int framesRead)
+                => ReadSamples(sourceId, streamIndex, 0, sourcePosFrames, dst, frames, out framesRead);
+
+            public bool ReadSamples(Guid sourceId, int streamIndex, int lane, long sourcePosFrames, float[] dst,
+                int frames, out int framesRead)
             {
                 if (_dead == null || !_dead.Contains((sourceId, streamIndex)))
                 {
                     try
                     {
-                        return _owner._denoised.ReadSamples(sourceId, streamIndex, sourcePosFrames,
+                        return _owner._denoised.ReadSamples(sourceId, streamIndex, lane, sourcePosFrames,
                             dst, frames, out framesRead);
                     }
                     catch (Exception ex)

@@ -49,9 +49,9 @@ namespace Prisc.VideoSDK.Tests
                 TimelineRowLayout.KindOf(zoom, new[] { NewItem(zoom, new ZoomContent()) }));
         }
 
-        /// <summary>An empty effect track only exists in a hand-edited file (the session prunes
-        /// them), but the layout must classify it without items to ask — and a row without a
-        /// SpeedContent item cannot be the speed row.</summary>
+        /// <summary>An empty effect track is a zoom row a cut emptied or a hand-edited file, and
+        /// the layout must classify it without items to ask: a row without a SpeedContent item
+        /// cannot be the speed row.</summary>
         [Fact]
         public void KindOf_reads_an_empty_effect_track_as_zoom()
         {
@@ -131,22 +131,15 @@ namespace Prisc.VideoSDK.Tests
         // ------------------------------------------------------------------------------- reorder
 
         /// <summary>Rows as the header panel sees them, stacked from y = 0 with each kind's real
-        /// height. The display here is the exact model reverse, so video-block layer indexes run
-        /// count-1 down to 0, audio indexes 0 upward, and the speed row sits outside both
-        /// spaces — what <c>TimelineRowLayout.Build</c> would stamp on the same shape.</summary>
+        /// height.</summary>
         private static IReadOnlyList<TimelineRow> Rows(params TimelineRowKind[] kinds)
         {
-            var videoLayer = kinds.Count(k => k != TimelineRowKind.Speed && k != TimelineRowKind.Audio);
-            var audioLayer = 0;
             var rows = new List<TimelineRow>();
             double top = 0;
             foreach (var kind in kinds)
             {
                 var height = TimelineRowLayout.HeightOf(kind);
-                var layer = kind == TimelineRowKind.Speed ? -1
-                    : kind == TimelineRowKind.Audio ? audioLayer++
-                    : --videoLayer;
-                rows.Add(new TimelineRow(Guid.NewGuid(), kind, top, height, layer));
+                rows.Add(new TimelineRow(Guid.NewGuid(), kind, top, height));
                 top += height;
             }
 

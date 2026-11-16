@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Prisc.VideoSDK.Model;
 
 namespace Prisc.UI.VideoEditor.Timeline
 {
@@ -59,6 +60,16 @@ namespace Prisc.UI.VideoEditor.Timeline
         /// whole width would be edge, leaving no way to select or move it — so edges are suppressed
         /// and the item is body-only until the user zooms in.</summary>
         public const double MinEdgeGrabWidth = 14.0;
+
+        /// <summary>Where <paramref name="item"/> sits on the surface: its time span through the
+        /// viewport, never narrower than a pixel, across the full height of <paramref name="row"/>.
+        /// The one placement drawing, hit-testing and the E2E state file all use.</summary>
+        public static TimelineItemRect ItemRect(Item item, int rowIndex, TimelineRow row, long scrollTicks,
+            double ticksPerPixel) =>
+            new TimelineItemRect(item.Id, rowIndex,
+                TimelineViewMath.TickToX(item.TimelineStartTicks, scrollTicks, ticksPerPixel),
+                Math.Max(1, item.DurationTicks / ticksPerPixel),
+                row.Top, row.Height);
 
         /// <summary>
         /// Hit-tests a pointer position given in the surface's coordinate space (x from the left of

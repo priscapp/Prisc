@@ -185,12 +185,15 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void Validate_rejects_a_linked_effect_item()
+        public void Validate_accepts_effect_rows_in_a_group()
         {
-            var project = EffectProject(out _, out var zoom, out _);
-            zoom.GroupId = Guid.NewGuid();
+            var project = EffectProject(out var clip, out var zoom, out var speed);
+            var group = Guid.NewGuid();
+            project.TrackOf(clip).GroupId = group;
+            project.TrackOf(zoom).GroupId = group;
+            project.TrackOf(speed).GroupId = group;
 
-            Assert.Contains(project.Validate(), e => e.Contains("carries a group"));
+            Assert.Empty(project.Validate());
         }
 
         [Theory]
@@ -260,7 +263,7 @@ namespace Prisc.VideoSDK.Tests
         {
             var project = EffectProject(out _, out var zoom, out _);
 
-            Assert.Equal(-Ms(2_000), TimelineOps.Move(project, zoom.Id, -Ms(5_000)));
+            Assert.Equal(-Ms(2_000), TimeLinkedMoves.MoveLinked(project, zoom.Id, -Ms(5_000)));
             Assert.Equal(0, zoom.TimelineStartTicks);
         }
 
@@ -287,7 +290,7 @@ namespace Prisc.VideoSDK.Tests
             var project = EffectProject(out _, out var zoom, out _);
             var cut = zoom.TimelineStartTicks + Ms(2_500);
 
-            Assert.True(TimelineOps.Split(project, zoom.Id, cut));
+            Assert.True(TimelineOps.SplitItem(project, zoom.Id, cut));
 
             var halves = project.Items.Where(i => i.Content is ZoomContent)
                                       .OrderBy(i => i.TimelineStartTicks).ToList();
@@ -300,7 +303,6 @@ namespace Prisc.VideoSDK.Tests
             Assert.Null(left.Exit);
             Assert.Null(right.Entry);
             Assert.Equal(TransitionKind.Ramp, right.Exit.Kind);
-            Assert.Null(right.GroupId);
 
             // the halves' content is a clone, not shared state.
             var rightContent = (ZoomContent)right.Content;
@@ -333,16 +335,6 @@ namespace Prisc.VideoSDK.Tests
             Assert.Equal(1.0, TimelineOps.SetSpeed(project, speed.Id, 2.0));
             Assert.Equal(3.0, ((SpeedContent)speed.Content).Factor);
             Assert.Equal(duration, speed.DurationTicks);
-        }
-
-        [Fact]
-        public void TryRelinkTrack_refuses_effect_rows()
-        {
-            var project = EffectProject(out var clip, out var zoom, out _);
-            clip.GroupId = Guid.NewGuid();
-
-            Assert.False(TimelineOps.TryRegroupTrack(project, zoom.TrackId));
-            Assert.Null(zoom.GroupId);
         }
     }
 }

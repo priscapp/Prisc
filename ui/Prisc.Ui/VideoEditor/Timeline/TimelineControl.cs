@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -9,6 +7,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using Prisc.UI.Controls;
 using Prisc.VideoSDK.Editing;
 using Prisc.VideoSDK.Model;
@@ -38,9 +37,10 @@ namespace Prisc.UI.VideoEditor.Timeline
     /// </summary>
     public class TimelineControl : Decorator
     {
-        // just enough for the header rows' grip + kind icon + four-button cluster (and the corner
-        // cell's four buttons above them) — wider only buys blank space between the two.
-        internal const double HeaderWidth = 130;
+        // just enough for the header rows' grip + kind icon + a cluster of five 20 px buttons and
+        // badges (and the corner cell's four buttons above them) — wider only buys blank space
+        // between the two.
+        internal const double HeaderWidth = 144;
 
         private const double FollowMarginPx = 40;
 
@@ -81,13 +81,14 @@ namespace Prisc.UI.VideoEditor.Timeline
         /// <summary>Raised when the scrub drag ends, with the final position in timeline ticks.</summary>
         public event EventHandler<long> ScrubCompleted;
 
-        /// <summary>Passthrough of <see cref="TimelineSurface.GroupDragChanged"/>: the member
-        /// count while a move drag carries a whole group, 0 once it ends.</summary>
-        public event EventHandler<int> GroupDragChanged;
+        /// <summary>What the timeline has to say right now, or null for nothing: the surface's
+        /// drag status for as long as the drag lasts, or an <see cref="EditorSession.StatusRaised"/>
+        /// sentence for <see cref="RaisedStatusDuration"/>.</summary>
+        public event EventHandler<string> StatusChanged;
 
-        /// <summary>Selection passthrough from <see cref="Session"/> — the session owns selection,
-        /// so the timeline, inspector and gizmo cannot disagree about it.</summary>
-        public event EventHandler SelectionChanged;
+        private static readonly TimeSpan RaisedStatusDuration = TimeSpan.FromSeconds(3);
+
+        private readonly DispatcherTimer _statusTimer = new DispatcherTimer { Interval = RaisedStatusDuration };
 
         public TimelineControl()
         {
@@ -101,7 +102,7 @@ namespace Prisc.UI.VideoEditor.Timeline
             // the two escapes from a wheel-zoom that has taken the view somewhere the user cannot
             // find their way back from (fit everything / back to the default scale).
             _snap = NewCornerButton(TimelineIcons.SnapGeometry,
-                "Snap dragged clips to other edges and the playhead (hold Alt to bypass once)",
+                "Snap dragged clips to other edges and the playhead (press Alt during a drag to bypass)",
                 () => { });
             _snap.CanToggle = true;
             _snap.IsChecked = true;
@@ -114,7 +115,7 @@ namespace Prisc.UI.VideoEditor.Timeline
                 _snap.Opacity = on ? 1.0 : 0.4;
             };
             _split = NewCornerButton(TimelineIcons.SplitGeometry,
-                "Split every track at playhead (Ctrl+K) — right-click a clip to split just that one",
+                $"Split every track at playhead ({TimelineSurface.SplitGesture.ForApp()}) — right-click a clip to split just that one",
                 () => SplitAtPlayhead());
             _zoomToFit = NewCornerButton(TimelineIcons.ZoomToFitGeometry,
                 "Fit the whole project in view", ZoomToFit);
@@ -213,10 +214,11 @@ namespace Prisc.UI.VideoEditor.Timeline
             _surface.ScrubStarted += Child_ScrubStarted;
             _surface.Scrubbed += Child_Scrubbed;
             _surface.ScrubCompleted += Child_ScrubCompleted;
-            _surface.GroupDragChanged += (_, count) => GroupDragChanged?.Invoke(this, count);
+            _surface.StatusChanged += (_, text) => SetStatus(text);
+            _statusTimer.Tick += (_, _) => SetStatus(null);
 
             // the row context menu runs the very command the Delete key does, rather than a second
-            // copy of the ripple/group rules. (Its two Split entries do NOT delegate here: they cut
+            // copy of its rules. (Its two Split entries do NOT delegate here: they cut
             // the clicked clip alone, where this one cuts every row at once.)
             _surface.DeleteSelection = DeleteSelection;
             _surface.RippleDeleteSelection = RippleDeleteSelection;
@@ -263,6 +265,7 @@ namespace Prisc.UI.VideoEditor.Timeline
                     _session.ProjectChanged -= Session_ProjectChanged;
                     _session.SelectionChanged -= Session_SelectionChanged;
                     _session.VoiceTakeGhostChanged -= Session_VoiceTakeGhostChanged;
+                    _session.StatusRaised -= Session_StatusRaised;
                 }
 
                 _session = value;
@@ -272,6 +275,7 @@ namespace Prisc.UI.VideoEditor.Timeline
                     _session.ProjectChanged += Session_ProjectChanged;
                     _session.SelectionChanged += Session_SelectionChanged;
                     _session.VoiceTakeGhostChanged += Session_VoiceTakeGhostChanged;
+                    _session.StatusRaised += Session_StatusRaised;
                 }
 
                 _surface.Session = value;
@@ -312,54 +316,43 @@ namespace Prisc.UI.VideoEditor.Timeline
         /// paused, so the timeline never fights the user's own scrolling.</summary>
         public bool FollowPlayhead { get; set; }
 
-        /// <summary>The selected item ids, primary first (delegated to <see cref="Session"/>).</summary>
-        public IReadOnlyList<Guid> SelectedItemIds => _session?.SelectedItemIds ?? Array.Empty<Guid>();
+#if DEBUG
+        /// <summary>The private parts <see cref="EditorStateDump"/> reports on.</summary>
+        internal sealed record DumpSources(TimelineViewport Viewport, Visual Surface, Visual Ruler,
+            Visual RowHeaders, Visual RowsViewport);
 
-        /// <summary>Deletes the primary selected item — just that clip, leaving its span blank.
-        /// The rest of its group (the recording's other rows, the row's other segments) stays
-        /// exactly where it is: deleting the middle of a split audio row silences that stretch and
-        /// moves nothing. The cross-track cut is <see cref="RippleDeleteSelection"/>, offered from
-        /// the context menu. The window forwards the Delete key here. Returns false when nothing
-        /// deletable is selected.</summary>
+        internal DumpSources GetDumpSources() => new DumpSources(_viewport, _surface, _ruler, _headers, _scrollHost);
+#endif
+
+        /// <summary>Deletes exactly the selected clips, leaving their spans blank, in one undo entry.
+        /// Everything else (the recording's other rows, the row's other segments) stays exactly where
+        /// it is: deleting the middle of a split audio row silences that stretch and moves nothing.
+        /// The cross-track cut is <see cref="RippleDeleteSelection"/>, offered from the context menu.
+        /// The window forwards the Delete key here. Returns false when nothing deletable is selected:
+        /// a drag in progress owns the model (a gesture is open), so a delete would ride the gesture
+        /// as an un-undoable preview and be resurrected by the drag's next move.</summary>
         public bool DeleteSelection()
         {
-            var item = DeletableSelection();
-            if (item == null)
+            if (_session is not { IsGestureActive: false } || _session.SelectedItemIds.Count == 0)
                 return false;
 
-            _session.DeleteItem(item.Id, this);
+            _session.DeleteItems(_session.SelectedItemIds, this);
             return true;
         }
 
-        /// <summary>Cuts the selected clip's span out of its group and closes the gap on
+        /// <summary>Cuts the one selected clip's span out of its group's rows and closes the gap on
         /// <b>all</b> tracks (<see cref="EditorSession.RippleDeleteItem"/>) — the "remove this
         /// stretch of the recording" gesture, from the context menu's Ripple Delete. An ungrouped
-        /// item is a group of one: it is removed and everything at or after it slides left.
-        /// Returns false when nothing deletable is selected.</summary>
+        /// row is a group of one: the clip is removed and everything at or after it slides left.
+        /// Returns false when it cannot run: a drag in progress, or anything but one clip
+        /// selected.</summary>
         public bool RippleDeleteSelection()
         {
-            var item = DeletableSelection();
-            if (item == null)
+            if (_session is not { IsGestureActive: false } || _session.SoleSelectedItem is not { } item)
                 return false;
 
             _session.RippleDeleteItem(item.Id, this);
             return true;
-        }
-
-        /// <summary>The primary selected item when a delete may act on it, else null. A drag in
-        /// progress owns the model (a gesture is open): a delete would ride the gesture as an
-        /// un-undoable preview and be resurrected by the drag's next move.</summary>
-        private Item DeletableSelection()
-        {
-            if (_session == null || _session.IsGestureActive)
-                return null;
-
-            var item = _session.PrimarySelectedItem;
-            if (item == null)
-                return null;
-
-            var track = _session.Project.Tracks.FirstOrDefault(t => t.Id == item.TrackId);
-            return track is { Locked: false } ? item : null;
         }
 
         /// <summary>Splits every row that covers the playhead — see
@@ -414,12 +407,11 @@ namespace Prisc.UI.VideoEditor.Timeline
             }
             else if (e.Kind == ProjectChangeKind.Mapping)
             {
-                // ungroup/relink are Mapping and come from the inspector's ungroup button — the
-                // headers' group badges re-read without a rebuild.
-                _headers.RefreshGroupBadges();
+                // a group or lock edit is Mapping — the headers' badges re-read without a rebuild.
+                _headers.RefreshRowBadges();
             }
 
-            _surface.InvalidateVisual();
+            _surface.InvalidateLinkedClips();
         }
 
         /// <summary>How far the timeline reaches: the project's duration, or the end of the voice
@@ -453,10 +445,18 @@ namespace Prisc.UI.VideoEditor.Timeline
         private void UpdateWarp() =>
             _viewport.SetWarp(_session?.Project is Project project ? TimeWarp.Build(project) : null);
 
-        private void Session_SelectionChanged(object sender, EventArgs e)
+        private void Session_SelectionChanged(object sender, EventArgs e) => _surface.InvalidateLinkedClips();
+
+        private void Session_StatusRaised(object sender, string text)
         {
-            _surface.InvalidateVisual();
-            SelectionChanged?.Invoke(this, EventArgs.Empty);
+            SetStatus(text);
+            _statusTimer.Start();
+        }
+
+        private void SetStatus(string text)
+        {
+            _statusTimer.Stop();
+            StatusChanged?.Invoke(this, text);
         }
 
         // ------------------------------------------------------------------------ scrub plumbing

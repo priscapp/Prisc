@@ -298,14 +298,8 @@ namespace Prisc.UI.VideoEditor.Timeline
             // first frame of a reopened project
             foreach (var item in project.Items)
             {
-                var sourceId = item.Content switch
-                {
-                    CursorContent cursor => cursor.SourceId,
-                    KeyboardContent keyboard => keyboard.SourceId,
-                    _ => Guid.Empty,
-                };
-                if (sourceId != Guid.Empty)
-                    CaptureFor(sourceId);
+                if (item.Content is InputOverlayContent overlay)
+                    CaptureFor(overlay.SourceId);
             }
 
             var seen = new HashSet<(Guid SourceId, int StreamIndex)>();

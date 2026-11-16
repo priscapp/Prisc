@@ -24,8 +24,8 @@ namespace Prisc.VideoSDK.Render
     /// source start, which is exactly what the old <c>trim,setpts=PTS-STARTPTS,concat</c> chain
     /// produced.</item>
     /// <item>three tracks — screen video (order 0), webcam video (order 1, so it composites on top),
-    /// audio — all items sharing one <see cref="Item.GroupId"/>: the sync toggle for the rows
-    /// that came from a single recording.</item>
+    /// audio — all rows sharing one <see cref="Track.GroupId"/>, the rows that came from a single
+    /// recording.</item>
     /// <item>webcam rect → <see cref="Transform"/>: the rect is in screen-frame pixels, and the
     /// model's geometry is normalized against the canvas (which <i>is</i> the screen frame), so
     /// <c>X/Y</c> is the rect center over the frame size and <c>Scale</c> is <c>rect.w / frameW</c>.
@@ -243,7 +243,7 @@ namespace Prisc.VideoSDK.Render
                 throw new InvalidOperationException("the edit keeps nothing of the recording");
 
             // The row/item layout is shared with the editor's own import (one recording => three
-            // rows over one source, one link group); only the v1-specific geometry — the pixel
+            // rows over one source, one group); only the v1-specific geometry — the pixel
             // rect and the rasterized mask — is recovered here.
             var keep = new List<KeepSegment>(segments.Count);
             foreach (var (startTicks, durationTicks) in segments)

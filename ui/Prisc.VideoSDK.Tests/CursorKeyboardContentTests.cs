@@ -32,11 +32,11 @@ namespace Prisc.VideoSDK.Tests
                 },
             };
 
-            var screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0 };
-            var keysTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Keys", Order = 1 };
-            var cursorTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Cursor", Order = 2 };
-
             var group = Guid.NewGuid();
+            var screenTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Screen", Order = 0, GroupId = group };
+            var keysTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Keys", Order = 1, GroupId = group };
+            var cursorTrack = new Track { Id = Guid.NewGuid(), Kind = TrackKind.Video, Name = "Cursor", Order = 2, GroupId = group };
+
             screenItem = new Item
             {
                 Id = Guid.NewGuid(),
@@ -44,7 +44,6 @@ namespace Prisc.VideoSDK.Tests
                 TimelineStartTicks = 0,
                 DurationTicks = Ms(20_000),
                 Content = new MediaContent { SourceId = source.Id, StreamIndex = 0 },
-                GroupId = group,
             };
             cursorItem = new Item
             {
@@ -73,7 +72,6 @@ namespace Prisc.VideoSDK.Tests
                     Size = 0.11,
                     Distance = 0, // a glow sits on the glyph; only a shadow falls
                 },
-                GroupId = group,
             };
             keyboardItem = new Item
             {
@@ -97,7 +95,6 @@ namespace Prisc.VideoSDK.Tests
                     },
                 },
                 Transform = new Transform { X = 0.5, Y = 0.85, Scale = 0.5 },
-                GroupId = group,
             };
 
             return new Project
@@ -311,14 +308,13 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Fact]
-        public void Validate_requires_a_link_group_on_overlay_items()
+        public void Validate_accepts_overlay_items_on_ungrouped_rows()
         {
-            var project = OverlayProject(out _, out var cursorItem, out var keyboardItem);
-            cursorItem.GroupId = null;
-            keyboardItem.GroupId = null;
+            var project = OverlayProject(out _, out _, out _);
+            foreach (var track in project.Tracks)
+                track.GroupId = null;
 
-            var errors = project.Validate();
-            Assert.Equal(2, errors.Count(e => e.Contains("carries no group")));
+            Assert.Empty(project.Validate());
         }
 
         [Fact]
@@ -513,16 +509,6 @@ namespace Prisc.VideoSDK.Tests
             var source = RecordingProject.Build(spec).Sources.Single();
 
             Assert.Null(source.InputCapturePath);
-        }
-
-        [Fact]
-        public void RecordingIds_mint_the_overlay_track_ids()
-        {
-            var ids = RecordingIds.New(1);
-
-            Assert.NotEqual(Guid.Empty, ids.CursorTrackId);
-            Assert.NotEqual(Guid.Empty, ids.KeyboardTrackId);
-            Assert.NotEqual(ids.CursorTrackId, ids.KeyboardTrackId);
         }
     }
 }
