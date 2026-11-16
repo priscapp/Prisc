@@ -61,8 +61,6 @@ Requires Windows 10+ or macOS 13+.
 - **On-device AI.** The Speech Enhancer cleans up your voice and background removal cuts out your webcam, on your own GPU.
 - **What you see is what you get.** The preview and the export match frame for frame, and it saves as you go.
 
-<sub>AI effects need Windows or a Mac with Apple Silicon.</sub>
-
 **[Learn more about the video editor →](https://prisc.app/features/video-editor)**
 
 ---
@@ -126,8 +124,6 @@ Requires Windows 10+ or macOS 13+.
 - **One key out.** Copy it, search the web for it or share it as a paste in a single keypress.
 - **Reads the hard stuff.** Small type, dark mode and low contrast.
 
-<sub>Requires Windows or a Mac with Apple Silicon. Latin, Greek, Chinese and Japanese kana; Cyrillic and Korean aren't supported yet.</sub>
-
 **[Learn more about OCR →](https://prisc.app/features/ocr)**
 
 ---
@@ -145,8 +141,6 @@ Requires Windows 10+ or macOS 13+.
 - **Copy it the way you need it.** HEX, RGB, HSL or CSS `oklch()` in one click, or every hex in the palette at once.
 - **Open it from anywhere.** Press <kbd>H</kbd> over any pixel while you capture, pick it from the tray, or set your own hotkey.
 
-<sub>On macOS the eyedropper needs Screen Recording permission.</sub>
-
 **[Learn more about the Color Wheel →](https://prisc.app/features/color-wheel)**
 
 ---
@@ -161,8 +155,6 @@ Requires Windows 10+ or macOS 13+.
 - **Starts from the top.** It winds the page back first, so it doesn't matter where you were scrolled to.
 - **Stops on its own** when it reaches the end of the document.
 - **Take your mouse back whenever you like.** Moving the cursor pauses the capture; let go and it picks up where it left off.
-
-<sub>Scrolls whole windows, not panes inside them. Needs Accessibility permission on macOS.</sub>
 
 **[Learn more about scrolling capture →](https://prisc.app/features/scrolling-capture)**
 
