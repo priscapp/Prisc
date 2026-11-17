@@ -172,13 +172,18 @@ namespace Prisc.VideoSDK.Playback
         /// thread; their stale serial gets them discarded by the present thread on commit. A slot
         /// the present thread holds (Reading) is left alone — its serial check + Release discard
         /// it, and unref'ing it here would free buffers sws_scale may be reading.</summary>
-        public void Flush()
+        public void Flush() => FlushExcept(int.MinValue);
+
+        /// <summary><see cref="Flush"/>, keeping the committed frames of <paramref name="serial"/>:
+        /// those are already post-seek, decoded by a thread that adopted the new serial before the
+        /// flush got here.</summary>
+        public void FlushExcept(int serial)
         {
             lock (_sync)
             {
                 for (int i = 0; i < _slots.Length; i++)
                 {
-                    if (_slots[i].State == SlotState.Ready)
+                    if (_slots[i].State == SlotState.Ready && _slots[i].Serial != serial)
                     {
                         ffmpeg.av_frame_unref(_slots[i].Frame);
                         _slots[i].State = SlotState.Free;

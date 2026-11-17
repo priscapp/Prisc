@@ -288,9 +288,12 @@ namespace Prisc.VideoSDK.Playback
 
             // before the flush, which unblocks a decode thread parked in Reserve(): the pre-seek
             // frame it was holding gets queued before that thread sees the new serial, and has to
-            // read as stale, or a frame step asked for right after this seek would present it
+            // read as stale, or a frame step asked for right after this seek would present it.
+            // The demuxer has already queued the new serial's packets, so the decode thread may
+            // have adopted it and committed post-seek frames by now: they stay, or the next frame
+            // step skips the ones flushed here.
             Interlocked.Exchange(ref _activeSerial, newSerial);
-            _frames.Flush();
+            _frames.FlushExcept(newSerial);
             WakePresent();
         }
 
