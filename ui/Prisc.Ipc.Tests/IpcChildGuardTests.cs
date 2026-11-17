@@ -88,7 +88,13 @@ namespace Prisc.Ipc.Tests
                     IpcChild.ReadCommands(JobCodec.DecodeCommand, _ => { }, _ => { });
                     // ready: the parent quits us (a quit line, or a signal) once it reads this
                     events.Emit(new JobEvent.Progress(1));
-                    quit.Wait();
+                    // Bounded, so a quit that never arrives fails the test instead of hanging it (as a
+                    // signal the process inherited as ignored would: the runtime leaves those alone).
+                    if (!quit.Wait(Generous))
+                    {
+                        Console.Error.WriteLine($"child: no quit within {Generous.TotalSeconds} s");
+                        Environment.Exit(HelperExit.Failed);
+                    }
                     events.Emit(new JobEvent.Done(JobResult.Cancelled, null, null));
                     Environment.Exit(HelperExit.Ok);
                     break;
@@ -216,7 +222,7 @@ namespace Prisc.Ipc.Tests
 
         private static void AssertQuitLikeEnding(ChildRun run)
         {
-            Assert.Equal(HelperExit.Ok, run.ExitCode);
+            Assert.True(run.ExitCode == HelperExit.Ok, $"exit {run.ExitCode}; stderr: {run.Stderr}");
             // The in-process test runner answers SIGINT with a "Cancelling..." line through the
             // console writer it opened before the child claimed stdout: a descriptor of the pipe made
             // before the guard, which no guard can take back (why Open must come first in Main). It
