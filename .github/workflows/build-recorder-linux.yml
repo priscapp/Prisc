@@ -198,7 +198,7 @@ jobs:
           '
 
       - name: Save the recorder build cache
-        if: github.ref == 'refs/heads/master' && steps.cache.outputs.cache-hit != 'true'
+        if: (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/claude/ci-mac-pool') && steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: ${{ steps.cache.outputs.path }}

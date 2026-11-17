@@ -132,7 +132,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/master' || runner.os == 'macOS' }}
+          save-if: ${{ (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/claude/ci-mac-pool') || runner.os == 'macOS' }}
 
       # Covers the whole workspace; the imported recorder crates opt out of formatting through
       # their own rustfmt.toml.
@@ -217,7 +217,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/master' || runner.os == 'macOS' }}
+          save-if: ${{ (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/claude/ci-mac-pool') || runner.os == 'macOS' }}
 
       # One call per crate, for the reason given at lint's Clippy step.
       - name: Tests
@@ -264,7 +264,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/master' || runner.os == 'macOS' }}
+          save-if: ${{ (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/claude/ci-mac-pool') || runner.os == 'macOS' }}
 
       # SDK 10 is required: Avalonia 12's XAML generators target Roslyn 4.14, and older SDKs skip them as CS9057 so the x:Name fields go missing.
       - name: Install .NET SDK
@@ -387,7 +387,7 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/master' || runner.os == 'macOS' }}
+          save-if: ${{ (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/claude/ci-mac-pool') || runner.os == 'macOS' }}
 
       # The interop library is built here (debug, seconds warm) rather than taken from the rust job,
       # so this job does not wait for the release builds and their Sentry upload. PRISC_INTEROP_PATH
