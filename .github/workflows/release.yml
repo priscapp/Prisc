@@ -103,15 +103,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macos-15, not the recorder's macos-26: see build-rust.yml.
           - rid: win-x64
             os: windows-latest
           - rid: win-arm64
             os: windows-latest
           - rid: osx-x64
-            os: macos-15
+            os: csr-mac-arm64-sm
           - rid: osx-arm64
-            os: macos-15
+            os: csr-mac-arm64-sm
     runs-on: ${{ matrix.os }}
     env:
       GH_TOKEN: ${{ github.token }}
@@ -129,7 +128,8 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Install vpk
-        run: dotnet tool install -g vpk
+        # update, not install: it also installs, and does not fail where a runner already has vpk.
+        run: dotnet tool update -g vpk
         shell: bash
 
       - name: Download build artifacts
@@ -287,6 +287,15 @@ jobs:
           --channel "$CHANNEL" -o releases
           --tag "$TAG" --releaseName "$TAG"
           --merge true --publish false --pre ${{ inputs.prerelease }}
+        shell: bash
+
+      # The self-hosted macOS runners may outlive the job: take the signing keychain off the
+      # user's search list and delete it.
+      - name: Remove the signing keychain (macOS)
+        if: always() && runner.os == 'macOS' && env.KEYCHAIN_PATH != ''
+        run: |
+          security delete-keychain "$KEYCHAIN_PATH" || true
+          security list-keychains -d user -s login.keychain-db || true
         shell: bash
 
   # Runs alongside the vpk jobs: vpk only writes a release body when it creates the release,
