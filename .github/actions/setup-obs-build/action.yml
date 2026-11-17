@@ -10,15 +10,8 @@ description: >
   libobs is 20-40 min cold. The key starts with the obs-studio submodule SHA
   and a hash of the OBS build inputs, and the restore key never drops that
   prefix, so a restored CMake tree is always one configured from the same
-  inputs. Only the toolchain, home directory and Cargo.lock part of the key may
-  differ, and cargo rebuilds whatever they invalidated.
-
-  The home directory is in the key because cargo's fingerprints hold the
-  absolute path of every registry crate (under ~/.cargo), so a target dir only
-  stays warm for the home that built it. The self-hosted macOS runners give
-  each slot its own user, so each slot keeps its own entry and falls back to
-  another slot's (the OBS tree and .deps still count) when it has none; on the
-  GitHub-hosted runners the home is always the same.
+  inputs. Only the toolchain and Cargo.lock part of the key may differ, and
+  cargo rebuilds whatever they invalidated.
 
 inputs:
   arch:
@@ -57,17 +50,9 @@ runs:
         sha=$(git -C crates/obs-studio rev-parse HEAD)
         echo "OBS submodule SHA: $sha"
         prefix="recorder-${{ runner.os }}-${{ inputs.arch }}-obs-$sha-${{ hashFiles('crates/prisc_obs_sys/build.rs', 'crates/prisc_obs_sys/cmake/**', 'crates/prisc_build_support/src/**') }}${{ inputs.key-suffix }}-"
-        home=$(printf %s "$HOME" | cksum | cut -d' ' -f1)
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
         # ${prefix}, not $prefix: the toolchain key right after it would extend the variable name.
-        own="${prefix}${{ inputs.toolchain }}-home$home-"
-        echo "key=$own${{ hashFiles('Cargo.lock') }}" >> "$GITHUB_OUTPUT"
-        # This home's latest entry first, then any home's.
-        {
-          echo "restore-keys<<EOF"
-          echo "$own"
-          echo "$prefix"
-          echo "EOF"
-        } >> "$GITHUB_OUTPUT"
+        echo "key=${prefix}${{ inputs.toolchain }}-${{ hashFiles('Cargo.lock') }}" >> "$GITHUB_OUTPUT"
         {
           echo "path<<EOF"
           echo "${{ inputs.path }}"
@@ -84,4 +69,4 @@ runs:
       with:
         path: ${{ steps.key.outputs.path }}
         key: ${{ steps.key.outputs.key }}
-        restore-keys: ${{ steps.key.outputs.restore-keys }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
