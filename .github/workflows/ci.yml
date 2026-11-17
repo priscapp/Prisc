@@ -17,7 +17,9 @@ name: CI
 #   recorder-linux  build-recorder-linux.yml   check only, nothing consumes it
 #   rust            build-rust.yml             -> rust-<rid>, needs version (stamps it)
 #   ui              build-ui.yml               -> ui-<rid>
-#   test                                       Rust gate, native-interop check, Interop/Shared/Drawing/Ipc
+#   lint                                       fmt, clippy, crate boundaries, native-interop check (no needs)
+#   rust-test                                  cargo test of the app crates (no needs)
+#   dotnet-test                                prisc_interop build checks, Interop/Shared/Drawing/Ipc
 #                                              dotnet tests, interop probe (no needs)
 #   test-video      needs recorder             runs even if it fails; the FFmpeg tests then skip;
 #                                              GPU on WARP (Windows) against tools/warp-baseline.txt
@@ -32,6 +34,12 @@ on:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The debug jobs keep line tables only: full debuginfo doubled their caches and link times,
+  # and line numbers in a test backtrace are all CI reads.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   # release.yml downloads this from a completed run and trusts it as that run's version.
@@ -87,83 +95,80 @@ jobs:
   ui:
     uses: ./.github/workflows/build-ui.yml
 
-  test:
-    name: test (${{ matrix.os }})
+  # The Rust gate is three jobs per OS that run side by side: lint (fmt, clippy, the crate
+  # boundaries), rust-test (cargo test) and dotnet-test (the interop library build checks, the
+  # dotnet suites and the probe). Checks whose result does not depend on the OS run on Windows only.
+  #
+  # Every rust-cache in CI saves from master only on the GitHub-hosted runners, which share the
+  # repo's 10 GB Actions cache (branch runs restore master's entries); the self-hosted macOS pool
+  # has a cache of its own, so it saves from any branch.
+  lint:
+    name: lint (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        # macos-15, not the recorder's macos-26: see build-rust.yml.
-        os: [windows-latest, macos-15]
+        os: [windows-latest, csr-mac-arm64-sm]
     runs-on: ${{ matrix.os }}
-    # Three more Rust crates, the Prisc.Ui Release build and the probe run on top of the previous 60.
-    timeout-minutes: 90
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          # nbgv needs full history to compute the version height.
-          fetch-depth: 0
 
       # C# reaches natives only through ui/Prisc.Interop (generated from crates/prisc_interop);
       # every other site is a line in tools/native-interop-allowlist. Cheap, so it runs first.
       - name: Native interop check
+        if: runner.os == 'Windows'
         run: tools/check-native-interop.sh
-        shell: bash
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: ${{ runner.os == 'Windows' && 'x86_64-unknown-linux-gnu' || '' }}
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
-
-      # SDK 10 is required: Avalonia 12's XAML generators target Roslyn 4.14, and older SDKs skip them as CS9057 so the x:Name fields go missing.
-      - name: Install .NET SDK
-        uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          save-if: ${{ github.ref == 'refs/heads/master' || runner.os == 'macOS' }}
+
+      # Covers the whole workspace; the imported recorder crates opt out of formatting through
+      # their own rustfmt.toml.
+      - name: Format
+        if: runner.os == 'Windows'
+        run: cargo fmt --check
 
       # App crates only. The recorder crates build libobs from their build scripts, so they
       # are built and tested in build-recorder.yml (their clippy is not gated yet).
-      # `cargo fmt --check` covers the whole workspace; the imported recorder crates opt out
-      # of formatting through their own rustfmt.toml.
       # One call per crate, never several -p together: that would unify dependency features
       # across them, so a crate that only compiles because a sibling enables a feature would pass.
-      - name: "Rust gate: format + lint + tests"
+      - name: Clippy
         run: |
-          cargo fmt --check
           cargo clippy -p prisc_ipc --all-targets -- -D warnings
-          cargo test -p prisc_ipc
           cargo clippy -p prisc_shared --all-targets -- -D warnings
-          cargo test -p prisc_shared
           cargo clippy -p prisc_desktop --all-targets -- -D warnings
-          cargo test -p prisc_desktop
           cargo clippy -p prisc_telemetry --all-targets -- -D warnings
-          cargo test -p prisc_telemetry
           cargo clippy -p prisc_hotkeys --all-targets -- -D warnings
-          cargo test -p prisc_hotkeys
           # prisc_capture has always been gated without --all-targets; widening that is a change of its own.
           cargo clippy -p prisc_capture -- -D warnings
-          cargo test -p prisc_capture
           cargo clippy -p prisc_scroll_driver --all-targets -- -D warnings
-          cargo test -p prisc_scroll_driver
           cargo clippy -p prisc_ai --all-targets -- -D warnings
-          cargo test -p prisc_ai
           cargo clippy -p prisc_platform --all-targets -- -D warnings
-          cargo test -p prisc_platform
           cargo clippy -p prisc_interop --all-targets -- -D warnings
-          # Includes the harness = false main_thread_* targets, which run on the real main thread on macOS.
-          cargo test -p prisc_interop
           cargo clippy -p prisc_codegen --all-targets -- -D warnings
-          # Fails on a stale, missing or orphaned generated file and on any prisc_interop crate rule.
-          cargo test -p prisc_codegen
-        shell: bash
+
+      # The shell extension is a Windows COM dll and an empty crate elsewhere.
+      - name: Clippy (shell extension)
+        if: runner.os == 'Windows'
+        run: cargo clippy -p prisc_shell_ext -- -D warnings
 
       # The in-process library and the code generator must never link Sentry (prisc_interop only),
-      # prisc_ai or anything from the recorder stack: those run as their own processes. The cheap early signal; build-rust.yml checks
-      # the shipped artifact itself.
-      - name: "Rust gate: crate boundaries"
+      # prisc_ai or anything from the recorder stack: those run as their own processes. The cheap
+      # early signal; build-rust.yml checks the shipped artifact itself.
+      - name: Crate boundaries
+        if: runner.os == 'Windows'
         run: |
           separate='prisc_recorder|prisc_share_region|prisc_obs[a-z0-9_]*|prisc_vid2gif|prisc_ffmpeg_sys|prisc_build_support|prisc_ai'
           # Captured first: inside an `if` condition a failing cargo tree would just read as "no match".
@@ -177,30 +182,95 @@ jobs:
             echo "::error::prisc_codegen depends on prisc_ai or a recorder-stack crate (listed above)"
             exit 1
           fi
-        shell: bash
 
-      # prisc_hotkeys has no Linux backend yet, but Key/Gesture still build there, and this job
-      # has no Linux leg. prisc_platform and prisc_interop prove every unsupported arm compiles;
+      # prisc_hotkeys has no Linux backend yet, but Key/Gesture still build there, and CI has
+      # no Linux app leg. prisc_platform and prisc_interop prove every unsupported arm compiles;
       # prisc_shared and prisc_desktop are what the Linux recorder stack depends on
       # unconditionally. Plain Rust on Linux, so clippy needs no linker. One call per crate.
-      - name: "Rust gate: Linux cross-check"
+      - name: Linux cross-check
         if: runner.os == 'Windows'
         run: |
-          rustup target add x86_64-unknown-linux-gnu
           cargo clippy -p prisc_hotkeys --target x86_64-unknown-linux-gnu -- -D warnings
           cargo clippy -p prisc_platform --target x86_64-unknown-linux-gnu -- -D warnings
           cargo clippy -p prisc_interop --target x86_64-unknown-linux-gnu -- -D warnings
           cargo clippy -p prisc_shared --target x86_64-unknown-linux-gnu -- -D warnings
           cargo clippy -p prisc_desktop --target x86_64-unknown-linux-gnu -- -D warnings
-        shell: bash
 
-      # The shell extension is a Windows COM dll and an empty crate elsewhere.
-      - name: "Rust gate: shell extension (Windows)"
-        if: runner.os == 'Windows'
-        run: |
-          cargo clippy -p prisc_shell_ext -- -D warnings
-          cargo test -p prisc_shell_ext
+  rust-test:
+    name: rust-test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, csr-mac-arm64-sm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
         shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' || runner.os == 'macOS' }}
+
+      # One call per crate, for the reason given at lint's Clippy step.
+      - name: Tests
+        run: |
+          cargo test -p prisc_ipc
+          cargo test -p prisc_shared
+          cargo test -p prisc_desktop
+          cargo test -p prisc_telemetry
+          cargo test -p prisc_hotkeys
+          cargo test -p prisc_capture
+          cargo test -p prisc_scroll_driver
+          cargo test -p prisc_ai
+          cargo test -p prisc_platform
+          # Includes the harness = false main_thread_* targets, which run on the real main thread on macOS.
+          cargo test -p prisc_interop
+          # Fails on a stale, missing or orphaned generated file and on any prisc_interop crate rule.
+          cargo test -p prisc_codegen
+
+      - name: Tests (shell extension)
+        if: runner.os == 'Windows'
+        run: cargo test -p prisc_shell_ext
+
+  dotnet-test:
+    name: dotnet-test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, csr-mac-arm64-sm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # nbgv needs full history to compute the version height.
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' || runner.os == 'macOS' }}
+
+      # SDK 10 is required: Avalonia 12's XAML generators target Roslyn 4.14, and older SDKs skip them as CS9057 so the x:Name fields go missing.
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
 
       # The library the dotnet tests load: the loader finds target/debug by walking up from the
       # test binaries. Fails on cargo's "`default-features` is ignored for X" warning (a dependency
@@ -223,11 +293,10 @@ jobs:
               exit 1
             fi
           fi
-        shell: bash
 
       # Prisc.VideoSDK.Tests runs in test-video, which waits for this run's recorder payload.
       # PRISC_INTEROP_REQUIRED turns a missing or stale library into a failure instead of a skip.
-      - name: "UI gate: dotnet tests"
+      - name: dotnet tests
         env:
           PRISC_INTEROP_REQUIRED: "1"
         run: |
@@ -235,7 +304,6 @@ jobs:
           dotnet test ui/Prisc.Shared.Tests/Prisc.Shared.Tests.csproj -c Release --nologo
           dotnet test ui/Prisc.Drawing.Tests/Prisc.Drawing.Tests.csproj -c Release --nologo
           dotnet test ui/Prisc.Ipc.Tests/Prisc.Ipc.Tests.csproj -c Release --nologo
-        shell: bash
 
       # Runs every kept C# facade and every wrapper once in the real app (a small real window on the
       # UI thread, then again from a thread-pool thread) and writes one JSON result per item. The
@@ -251,7 +319,7 @@ jobs:
           PRISC_INTEROP_REQUIRED: "1"
           PRISC_DISABLE_TELEMETRY: "1"
         run: |
-          # Built here too (a no-op after the step above), so a failure in an earlier gate step
+          # Built here too (a no-op after the step above), so a failure in an earlier step
           # still leaves the probe a library to load instead of a cascade of "not available".
           cargo build -p prisc_interop
           dotnet build ui/Prisc.Ui/Prisc.Ui.csproj -c Release --nologo
@@ -269,7 +337,6 @@ jobs:
             echo "::error::the interop probe reported broken contracts (exit code $status); see the error results above"
             exit 1
           fi
-        shell: bash
 
       - name: Upload interop probe results
         if: ${{ !cancelled() }}
@@ -292,11 +359,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macos-15, not the recorder's macos-26: see build-rust.yml.
           - os: windows-latest
             rid: win-x64
             exe: .exe
-          - os: macos-15
+          - os: csr-mac-arm64-sm
             rid: osx-arm64
             exe: ""
     runs-on: ${{ matrix.os }}
@@ -320,6 +386,8 @@ jobs:
 
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/master' || runner.os == 'macOS' }}
 
       # The interop library is built here (debug, seconds warm) rather than taken from the rust job,
       # so this job does not wait for the release builds and their Sentry upload. PRISC_INTEROP_PATH
@@ -426,7 +494,7 @@ jobs:
 
       # The FFmpeg dylib closure prisc_interop loads ahead of FFmpeg.AutoGen, against the real
       # payload: the closure test and the Mach-O reader's otool parity over every shipped dylib.
-      # The test job runs them too, but without a payload, so there they only cover fixtures.
+      # rust-test runs them too, but without a payload, so there they only cover fixtures.
       - name: FFmpeg closure over the payload (macOS)
         if: ${{ !cancelled() && runner.os == 'macOS' }}
         run: |

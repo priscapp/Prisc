@@ -65,21 +65,11 @@ jobs:
           # See the Windows job: disabled plugin submodule dirs must exist.
           submodules: recursive
 
-      # The image is rebuilt from the Dockerfile every run, with its layers
-      # cached in the GitHub Actions cache, so a Dockerfile edit takes effect
-      # immediately and an unchanged one costs only the cache restore.
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
+      # The image is rebuilt from the Dockerfile every run, uncached: its layers
+      # took ~2.5 GB of the repo's 10 GB Actions cache, and nothing waits on
+      # this workflow.
       - name: Build the Linux build image
-        uses: docker/build-push-action@v6
-        with:
-          context: tools/linux-build
-          build-args: BASE=${{ matrix.base }}
-          tags: ${{ env.IMAGE }}
-          load: true
-          cache-from: type=gha,scope=recorder-linux-build-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=recorder-linux-build-${{ matrix.arch }}
+        run: docker build --build-arg BASE=${{ matrix.base }} -t "$IMAGE" tools/linux-build
 
       - name: Toolchain diagnostics
         run: |
@@ -124,21 +114,21 @@ jobs:
           echo "SIMDe:   $simde"
           echo "Image:   $image"
 
-      # As on Windows, the OBS build (target/obs-<arch>, prisc_obs_sys's default
-      # build dir) and .deps (FFmpeg bundle, x264 / Mbed TLS prefixes, SIMDe)
-      # are cached together. The build runs as root in the image; the cache
-      # steps run on the host and only need to read those files.
-      # rust-cache (in setup-obs-build) keys on and prunes with the host's
-      # cargo, which nothing else in this job uses, so install it explicitly
-      # rather than rely on the runner image shipping one.
-      - name: Install host Rust toolchain (for the cargo cache)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Set up the OBS build caches
+      # The OBS build (target/obs-<arch>, prisc_obs_sys's default build dir),
+      # .deps (FFmpeg bundle, x264 / Mbed TLS prefixes, SIMDe) and the cargo
+      # registry are cached together; the rest of target/ is not (the Rust
+      # build is under a minute here, and the cache budget goes to the jobs
+      # that gate the package). The build runs as root in the image; the cache
+      # steps run on the host and only need to read those files. Saved from
+      # master only.
+      - name: Restore the recorder build cache
+        id: cache
         uses: ./.github/actions/setup-obs-build
         with:
           arch: ${{ matrix.arch }}
-          obs-build-path: target/obs-${{ matrix.arch }}
+          path: target/obs-${{ matrix.arch }}
+          # The image installs the current stable whenever it is built, which is every run.
+          toolchain: stable
           key-suffix: -manylinux-${{ steps.pins.outputs.key }}
 
       # prisc_share_region is not built on Linux at all (no Linux UI; see its
@@ -207,6 +197,13 @@ jobs:
             cp crates/obs-studio/.deps/ffmpeg-*/bin/ffprobe dist/test-tools/
           '
 
+      - name: Save the recorder build cache
+        if: github.ref == 'refs/heads/master' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.cache.outputs.path }}
+          key: ${{ steps.cache.outputs.key }}
+
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
@@ -224,12 +221,6 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # cargo wrote the mounted ~/.cargo/registry and git as root in the image.
-      # rust-cache's post step prunes them with host-side cargo, so hand them
-      # back to the runner user first or its cleanup and save can fail.
-      - name: Return the cargo caches to the runner user
-        if: always()
-        run: sudo chown -R "$(id -u):$(id -g)" "$HOME/.cargo/registry" "$HOME/.cargo/git"
 
   # ---------------------------------------------------------------------------
   # Linux portability: the bundle tarball, unpacked on stock Ubuntu runners

@@ -37,10 +37,8 @@ jobs:
           # What each leg builds and ships (prisc_ai only where ONNX Runtime
           # exists, the shell extension only on Windows) comes from
           # tools/staging/shipped.sh, the list build.sh uses too.
-          # The app jobs (here, build-ui.yml, ci.yml's tests and release.yml)
-          # stay on macos-15, where they were pinned on purpose. Only the
-          # recorder runs on macos-26, because OBS 32.2.2 needs Xcode 26.5
-          # (build-recorder.yml). Moving the app jobs over is untested.
+          # Every macOS job runs on the self-hosted arm64 pool; osx-x64 is a
+          # cross target there.
           - rid: win-x64
             os: windows-latest
             target: x86_64-pc-windows-msvc
@@ -50,10 +48,10 @@ jobs:
             target: aarch64-pc-windows-msvc
             msix-arch: arm64
           - rid: osx-x64
-            os: macos-15
+            os: csr-mac-arm64-sm
             target: x86_64-apple-darwin
           - rid: osx-arm64
-            os: macos-15
+            os: csr-mac-arm64-sm
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     # Lifted to the job so the Sentry step can test the token in an `if:`, where secrets are unavailable but env is; no SENTRY_ORG because an org token carries the slug itself.
@@ -73,11 +71,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # rust-cache already hashes Cargo.toml, but .cargo/config.toml is named explicitly so a rustflags-only edit cannot restore a cache built with the previous flags.
+      # Keyed per leg (the Windows legs share a runner OS). rust-cache already hashes every
+      # Cargo.toml, Cargo.lock and .cargo/config.toml into its key and falls back to the previous
+      # entry when one changes, so none of them belong in `key` (there they made a manifest edit a
+      # cold build). Saved from master only on the GitHub-hosted runners, which share the repo's
+      # 10 GB cache; the self-hosted macOS pool has a cache of its own.
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.rid }}-${{ hashFiles('Cargo.toml', '.cargo/config.toml') }}
+          key: ${{ matrix.rid }}
+          save-if: ${{ github.ref == 'refs/heads/master' || runner.os == 'macOS' }}
 
       # One invocation rather than one per crate, so codegen and the LTO links overlap instead of leaving the runner idle.
       # Explicit packages: the workspace also holds the recorder crates, which build-recorder.yml builds.
@@ -120,9 +123,11 @@ jobs:
         if: env.SENTRY_AUTH_TOKEN != ''
         shell: bash
         run: |
-          npm install -g @sentry/cli
+          # Into the job's temp dir, not -g: the self-hosted macOS runners have no admin rights.
+          npm install --no-save --no-fund --no-audit --prefix "$RUNNER_TEMP/sentry-cli" @sentry/cli
+          sentry="$RUNNER_TEMP/sentry-cli/node_modules/.bin/sentry-cli"
           tools/staging/stage-app.sh debug-files ${{ matrix.rid }} "$OUT" | while IFS=$'\t' read -r dif bin; do
-            sentry-cli debug-files upload "$dif" "$bin"
+            "$sentry" debug-files upload "$dif" "$bin"
           done
 
       # stage/ unpacks into the package directory beside Prisc.Ui: the overlay, the scrolling

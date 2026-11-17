@@ -16,8 +16,11 @@ name: Build recorder
 # tools/staging/stage-recorder.sh, the same script build.sh runs.
 #
 # These and build-recorder-linux.yml are the only CI jobs that check out the
-# submodules. libobs is 20-40 min cold, so the OBS build tree is cached per OS
-# and arch (see .github/actions/setup-obs-build).
+# submodules. libobs is 20-40 min cold, so each leg caches its whole target dir
+# (the OBS build tree and the recorder's Rust deps) per OS and arch (see
+# .github/actions/setup-obs-build). Saved from master only on the GitHub-hosted
+# runners, which share the repo's 10 GB cache; the self-hosted macOS pool has a
+# cache of its own, so the macOS legs save from any branch.
 #
 # No step tags the tagless obs-studio checkout for OBS's `git describe --tags`
 # version discovery: the top-level configure gets -DOBS_VERSION_OVERRIDE, and
@@ -69,6 +72,7 @@ jobs:
           submodules: recursive
 
       - name: Install Rust toolchain
+        id: toolchain
         uses: dtolnay/rust-toolchain@stable
 
       - name: Toolchain diagnostics
@@ -84,11 +88,12 @@ jobs:
             Write-Host "::warning::libclang.dll not found at LIBCLANG_PATH ($env:LIBCLANG_PATH) - bindgen may fail"
           }
 
-      - name: Set up the OBS build caches
+      - name: Restore the recorder build cache
+        id: cache
         uses: ./.github/actions/setup-obs-build
         with:
           arch: ${{ matrix.arch }}
-          obs-build-path: target/obs-${{ matrix.arch }}
+          toolchain: ${{ steps.toolchain.outputs.cachekey }}
 
       - name: Build (release)
         run: cargo build --release -p prisc_recorder -p prisc_share_region -p prisc_vid2gif
@@ -113,6 +118,13 @@ jobs:
         shell: bash
         run: tools/staging/stage-recorder.sh "${{ matrix.rid }}" target/release "dist/recorder-${{ matrix.rid }}"
 
+      - name: Save the recorder build cache
+        if: github.ref == 'refs/heads/master' && steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.cache.outputs.path }}
+          key: ${{ steps.cache.outputs.key }}
+
       # Archive in the build job so the artifact is one file with the members at
       # the archive root; ci.yml expands it into publish/recorder.
       - name: Archive bundle
@@ -132,7 +144,7 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # macOS: Xcode generator, prisc_obs_sys builds libobs.framework. Both slices
-  # run on the arm64 macos-26 runner; the x64 slice is cross-compiled via
+  # run on the self-hosted arm64 pool; the x64 slice is cross-compiled via
   # `--target x86_64-apple-darwin` (build.rs forwards the arch to
   # CMAKE_OSX_ARCHITECTURES; OBS's macOS prebuilt deps are universal). The Stage
   # step (stage-recorder.sh) assembles a self-contained, relocatable bundle
@@ -143,11 +155,11 @@ jobs:
   # ---------------------------------------------------------------------------
   macos:
     name: recorder (${{ matrix.rid }})
-    # macos-26, not the macos-15 the app jobs use (see build-rust.yml): OBS
-    # 32.2.2's CMake requires the macOS 26.5 SDK (Xcode 26.5+). Pinned rather
-    # than macos-latest so the image only changes on purpose. Both the arm64
-    # (native) and x64 (cross) slices run on this arm64 runner.
-    runs-on: macos-26
+    # The self-hosted arm64 pool, like every macOS job. OBS 32.2.2's CMake
+    # requires the macOS 26.5 SDK, so its image must select Xcode 26.5+ (checked
+    # below; the runners have no sudo to switch it). Both the arm64 (native) and
+    # x64 (cross) slices run on it.
+    runs-on: csr-mac-arm64-sm
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -172,21 +184,20 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Select full Xcode
+      # build.rs uses the Xcode generator + enable_language(Swift); the CLT
+      # alone are not enough. Both come from the runner image.
+      - name: Check Xcode and cmake
         run: |
-          # build.rs uses the Xcode generator + enable_language(Swift); the CLT
-          # alone are not enough. The image's default Xcode.app is current.
-          sudo xcode-select -switch /Applications/Xcode.app/Contents/Developer
           xcode-select -p
           xcodebuild -version
-
-      - name: Ensure cmake (>= 3.28)
-        run: |
-          cmake --version || brew install cmake
-          cmake --version
+          case "$(xcode-select -p)" in
+            *CommandLineTools*) echo "::error::the runner image selects the Command Line Tools; select a full Xcode 26.5+"; exit 1 ;;
+          esac
+          cmake --version || { echo "::error::cmake (>= 3.28) is missing from the runner image"; exit 1; }
 
       # The x64 slice cross-compiles, so its target must be installed.
       - name: Install Rust toolchain
+        id: toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.triple }}
@@ -199,12 +210,13 @@ jobs:
           echo "Target: ${{ matrix.triple }}"
 
       # prisc_obs_sys has no build-dir override on macOS; the OBS build lands in
-      # its OUT_DIR, under the per-target output dir.
-      - name: Set up the OBS build caches
+      # its OUT_DIR, under the target dir with the rest.
+      - name: Restore the recorder build cache
+        id: cache
         uses: ./.github/actions/setup-obs-build
         with:
           arch: ${{ matrix.arch }}
-          obs-build-path: ${{ matrix.outdir }}/build/prisc_obs_sys/*/out
+          toolchain: ${{ steps.toolchain.outputs.cachekey }}
 
       - name: Build (release)
         run: cargo build --release -p prisc_recorder -p prisc_share_region -p prisc_vid2gif ${{ matrix.target_flag }}
@@ -226,6 +238,13 @@ jobs:
       # the dep dylibs; the cross-compiled x64 slice cannot execute here.
       - name: Stage artifact (self-contained bundle)
         run: tools/staging/stage-recorder.sh "${{ matrix.rid }}" "${{ matrix.outdir }}" "dist/recorder-${{ matrix.rid }}"
+
+      - name: Save the recorder build cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.cache.outputs.path }}
+          key: ${{ steps.cache.outputs.key }}
 
       # The staged tree is correct (755 executables, symlinked dylib aliases,
       # a symlinked libobs.framework), but actions/upload-artifact does not
