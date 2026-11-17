@@ -51,7 +51,8 @@ runs:
         echo "OBS submodule SHA: $sha"
         prefix="recorder-${{ runner.os }}-${{ inputs.arch }}-obs-$sha-${{ hashFiles('crates/prisc_obs_sys/build.rs', 'crates/prisc_obs_sys/cmake/**', 'crates/prisc_build_support/src/**') }}${{ inputs.key-suffix }}-"
         echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
-        echo "key=$prefix${{ inputs.toolchain }}-${{ hashFiles('Cargo.lock') }}" >> "$GITHUB_OUTPUT"
+        # ${prefix}, not $prefix: the toolchain key right after it would extend the variable name.
+        echo "key=${prefix}${{ inputs.toolchain }}-${{ hashFiles('Cargo.lock') }}" >> "$GITHUB_OUTPUT"
         {
           echo "path<<EOF"
           echo "${{ inputs.path }}"
