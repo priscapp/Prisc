@@ -11,8 +11,6 @@ namespace Prisc.Interop.Tests
     /// Status, refusals, a stop that drains and closes, and a dispose racing a blocked
     /// <see cref="GlobalKeyboardHook.NextEvent"/> (README R19). On macOS without Accessibility the hook
     /// starts down and says so, which these tests accept; they register only gestures nobody presses.
-    /// The ones that start a hook are in the Gui category: on macOS they need a WindowServer session,
-    /// so CI runs them in a job of its own.
     /// </summary>
     public sealed class HotkeysTests
     {
@@ -46,7 +44,6 @@ namespace Prisc.Interop.Tests
         }
 
         [Fact]
-        [Trait("Category", "Gui")]
         public void A_hook_reports_its_state_refuses_bad_gestures_and_closes_after_stop()
         {
             InteropTestGate.Require();
@@ -95,7 +92,6 @@ namespace Prisc.Interop.Tests
         }
 
         [Fact]
-        [Trait("Category", "Gui")]
         public void Disposing_while_another_thread_waits_for_an_event_is_safe()
         {
             InteropTestGate.Require();

@@ -1133,6 +1133,141 @@ mod tests {
     }
 
     #[test]
+    fn tap_list_shows_our_new_tap_and_its_mask() {
+        let (core, _, _rx) = core::tests::harness();
+        let ctx = Box::new(Ctx::new(core, Arc::default()));
+        let before = tap_list().expect("the tap list");
+        // SAFETY: `ctx` outlives the tap, which is invalidated below and never runs a callback.
+        let tap = unsafe { create_tap(&TABLET, ptr::from_ref(&*ctx).cast_mut()) }.expect("a listen-only tap");
+        let after = tap_list().expect("the tap list");
+        tap.invalidate();
+        assert_eq!(tap_granted(&before, &after, std::process::id() as i32, &TABLET), Some(true));
+        // A bit the tap never asked for reads as not granted.
+        let wider = TapConfig {
+            required: TABLET.required | KEY_MASK,
+            ..TABLET
+        };
+        assert_eq!(tap_granted(&before, &after, std::process::id() as i32, &wider), Some(false));
+    }
+
+    #[test]
+    fn pump_notices_a_tap_invalidated_off_its_thread() {
+        struct TapPtr(NonNull<CFMachPort>);
+        // SAFETY: only CFMachPortInvalidate is called through it off the hook thread, and CF itself
+        // invalidates ports from other threads; the hook thread keeps the tap retained.
+        unsafe impl Send for TapPtr {}
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let hook = thread::spawn({
+            let stop = stop.clone();
+            move || {
+                let (core, _, _rx) = core::tests::harness();
+                let ctx = Box::new(Ctx::new(core, Arc::default()));
+                // SAFETY: `ctx` outlives the tap, which is invalidated before this thread ends.
+                let tap = unsafe { create_tap(&TABLET, ptr::from_ref(&*ctx).cast_mut()) }.expect("a listen-only tap");
+                ctx.tap.set(Some(NonNull::from(&*tap)));
+                let source = CFMachPort::new_run_loop_source(None, Some(&tap), 0).unwrap();
+                let run_loop = CFRunLoop::current().unwrap();
+                // SAFETY: an immutable framework constant.
+                run_loop.add_source(Some(&source), unsafe { kCFRunLoopCommonModes });
+                started_tx
+                    .send((RunLoopRef(run_loop.clone()), TapPtr(NonNull::from(&*tap))))
+                    .unwrap();
+                let reason = pump(&stop, TICK, || check(&ctx, &tap));
+                tap.invalidate();
+                let _ = done_tx.send(reason);
+            }
+        });
+        let (run_loop, tap) = started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("the hook thread started");
+        thread::sleep(Duration::from_millis(100));
+        // SAFETY: the hook thread keeps the tap retained until pump returns.
+        unsafe { tap.0.as_ref() }.invalidate();
+        let reason = done_rx.recv_timeout(2 * TICK);
+        if reason.is_err() {
+            // Unstick the thread so a failure does not leave it running.
+            stop.store(true, Ordering::Release);
+            run_loop.stop();
+        }
+        hook.join().unwrap();
+        assert_eq!(reason, Ok(Some("the event tap was invalidated")));
+    }
+
+    #[test]
+    fn a_revoked_permission_stops_the_hook() {
+        static CALLS: AtomicU32 = AtomicU32::new(0);
+        // Granted when the tap is created, gone by the first tick.
+        let config = TapConfig {
+            permitted: || CALLS.fetch_add(1, Ordering::Relaxed) == 0,
+            tick: Duration::from_millis(200),
+            ..TABLET
+        };
+        let shared = Arc::new(Shared::new());
+        let (tx, rx) = mpsc::channel();
+        let backend = spawn_with(shared.clone(), tx, config).expect("the hook started");
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(3)),
+            Ok(Event::Stopped("the Accessibility permission was revoked".into()))
+        );
+        assert_eq!(rx.recv_timeout(Duration::from_secs(1)), Err(mpsc::RecvTimeoutError::Disconnected));
+        assert!(!shared.alive.load(Ordering::Acquire));
+        assert_eq!(shared.register(Gesture::new(Key::A, Modifiers::NONE)), Err(Error::Stopped));
+        drop(backend);
+    }
+
+    #[test]
+    fn a_revocation_stops_the_hook_as_soon_as_the_watcher_sees_it() {
+        static CALLS: AtomicU32 = AtomicU32::new(0);
+        static SAID_NO: Mutex<Option<Instant>> = Mutex::new(None);
+        // Granted when the tap is created, refused from the watcher's first poll on.
+        fn perm() -> bool {
+            if CALLS.fetch_add(1, Ordering::Relaxed) == 0 {
+                return true;
+            }
+            SAID_NO
+                .lock()
+                .unwrap()
+                .get_or_insert_with(Instant::now);
+            false
+        }
+        // The real tick, then shorter ones so the watcher's poll lands at other phases of the
+        // hook's tick.
+        for tick in [
+            TICK,
+            Duration::from_millis(300),
+            Duration::from_millis(300),
+            Duration::from_millis(300),
+        ] {
+            CALLS.store(0, Ordering::Relaxed);
+            *SAID_NO.lock().unwrap() = None;
+            let config = TapConfig {
+                permitted: perm,
+                tick,
+                ..TABLET
+            };
+            let (tx, rx) = mpsc::channel();
+            let backend = spawn_with(Arc::new(Shared::new()), tx, config).expect("the hook started");
+            assert_eq!(
+                rx.recv_timeout(4 * tick),
+                Ok(Event::Stopped("the Accessibility permission was revoked".into()))
+            );
+            let late = SAID_NO
+                .lock()
+                .unwrap()
+                .expect("the watcher asked")
+                .elapsed();
+            assert!(
+                late < Duration::from_millis(250),
+                "stopped {late:?} after the refusal (tick {tick:?})"
+            );
+            drop(backend);
+        }
+    }
+
+    #[test]
     fn a_revoked_tap_is_not_reenabled() {
         let (core, _, _rx) = core::tests::harness();
         let ctx = Ctx::new(core, Arc::new(AtomicBool::new(true)));
@@ -1140,235 +1275,87 @@ mod tests {
         assert_eq!(ctx.gave_up.get(), Some(REVOKED));
     }
 
-    /// The tests that create a real event tap or hook. They need a WindowServer session and the
-    /// Accessibility and Input Monitoring grants, so CI runs them in a job of their own (it
-    /// filters on `session` in the test path).
-    mod session {
-        use super::*;
-
-        #[test]
-        fn tap_list_shows_our_new_tap_and_its_mask() {
-            let (core, _, _rx) = core::tests::harness();
-            let ctx = Box::new(Ctx::new(core, Arc::default()));
-            let before = tap_list().expect("the tap list");
-            // SAFETY: `ctx` outlives the tap, which is invalidated below and never runs a callback.
-            let tap = unsafe { create_tap(&TABLET, ptr::from_ref(&*ctx).cast_mut()) }.expect("a listen-only tap");
-            let after = tap_list().expect("the tap list");
-            tap.invalidate();
-            assert_eq!(tap_granted(&before, &after, std::process::id() as i32, &TABLET), Some(true));
-            // A bit the tap never asked for reads as not granted.
-            let wider = TapConfig {
-                required: TABLET.required | KEY_MASK,
-                ..TABLET
-            };
-            assert_eq!(tap_granted(&before, &after, std::process::id() as i32, &wider), Some(false));
-        }
-
-        #[test]
-        fn pump_notices_a_tap_invalidated_off_its_thread() {
-            struct TapPtr(NonNull<CFMachPort>);
-            // SAFETY: only CFMachPortInvalidate is called through it off the hook thread, and CF itself
-            // invalidates ports from other threads; the hook thread keeps the tap retained.
-            unsafe impl Send for TapPtr {}
-
-            let stop = Arc::new(AtomicBool::new(false));
-            let (started_tx, started_rx) = mpsc::channel();
-            let (done_tx, done_rx) = mpsc::channel();
-            let hook = thread::spawn({
-                let stop = stop.clone();
-                move || {
-                    let (core, _, _rx) = core::tests::harness();
-                    let ctx = Box::new(Ctx::new(core, Arc::default()));
-                    // SAFETY: `ctx` outlives the tap, which is invalidated before this thread ends.
-                    let tap = unsafe { create_tap(&TABLET, ptr::from_ref(&*ctx).cast_mut()) }.expect("a listen-only tap");
-                    ctx.tap.set(Some(NonNull::from(&*tap)));
-                    let source = CFMachPort::new_run_loop_source(None, Some(&tap), 0).unwrap();
-                    let run_loop = CFRunLoop::current().unwrap();
-                    // SAFETY: an immutable framework constant.
-                    run_loop.add_source(Some(&source), unsafe { kCFRunLoopCommonModes });
-                    started_tx
-                        .send((RunLoopRef(run_loop.clone()), TapPtr(NonNull::from(&*tap))))
-                        .unwrap();
-                    let reason = pump(&stop, TICK, || check(&ctx, &tap));
-                    tap.invalidate();
-                    let _ = done_tx.send(reason);
-                }
-            });
-            let (run_loop, tap) = started_rx
-                .recv_timeout(Duration::from_secs(2))
-                .expect("the hook thread started");
-            thread::sleep(Duration::from_millis(100));
-            // SAFETY: the hook thread keeps the tap retained until pump returns.
-            unsafe { tap.0.as_ref() }.invalidate();
-            let reason = done_rx.recv_timeout(2 * TICK);
-            if reason.is_err() {
-                // Unstick the thread so a failure does not leave it running.
-                stop.store(true, Ordering::Release);
-                run_loop.stop();
-            }
-            hook.join().unwrap();
-            assert_eq!(reason, Ok(Some("the event tap was invalidated")));
-        }
-
-        #[test]
-        fn a_revoked_permission_stops_the_hook() {
-            static CALLS: AtomicU32 = AtomicU32::new(0);
-            // Granted when the tap is created, gone by the first tick.
-            let config = TapConfig {
-                permitted: || CALLS.fetch_add(1, Ordering::Relaxed) == 0,
-                tick: Duration::from_millis(200),
-                ..TABLET
-            };
-            let shared = Arc::new(Shared::new());
-            let (tx, rx) = mpsc::channel();
-            let backend = spawn_with(shared.clone(), tx, config).expect("the hook started");
-            assert_eq!(
-                rx.recv_timeout(Duration::from_secs(3)),
-                Ok(Event::Stopped("the Accessibility permission was revoked".into()))
-            );
-            assert_eq!(rx.recv_timeout(Duration::from_secs(1)), Err(mpsc::RecvTimeoutError::Disconnected));
-            assert!(!shared.alive.load(Ordering::Acquire));
-            assert_eq!(shared.register(Gesture::new(Key::A, Modifiers::NONE)), Err(Error::Stopped));
-            drop(backend);
-        }
-
-        #[test]
-        fn a_revocation_stops_the_hook_as_soon_as_the_watcher_sees_it() {
-            static CALLS: AtomicU32 = AtomicU32::new(0);
-            static SAID_NO: Mutex<Option<Instant>> = Mutex::new(None);
-            // Granted when the tap is created, refused from the watcher's first poll on.
-            fn perm() -> bool {
-                if CALLS.fetch_add(1, Ordering::Relaxed) == 0 {
-                    return true;
-                }
-                SAID_NO
-                    .lock()
-                    .unwrap()
-                    .get_or_insert_with(Instant::now);
-                false
-            }
-            // The real tick, then shorter ones so the watcher's poll lands at other phases of the
-            // hook's tick.
-            for tick in [
-                TICK,
-                Duration::from_millis(300),
-                Duration::from_millis(300),
-                Duration::from_millis(300),
-            ] {
-                CALLS.store(0, Ordering::Relaxed);
-                *SAID_NO.lock().unwrap() = None;
-                let config = TapConfig {
-                    permitted: perm,
-                    tick,
-                    ..TABLET
-                };
-                let (tx, rx) = mpsc::channel();
-                let backend = spawn_with(Arc::new(Shared::new()), tx, config).expect("the hook started");
-                assert_eq!(
-                    rx.recv_timeout(4 * tick),
-                    Ok(Event::Stopped("the Accessibility permission was revoked".into()))
-                );
-                let late = SAID_NO
-                    .lock()
-                    .unwrap()
-                    .expect("the watcher asked")
-                    .elapsed();
-                assert!(
-                    late < Duration::from_millis(250),
-                    "stopped {late:?} after the refusal (tick {tick:?})"
-                );
-                drop(backend);
-            }
-        }
-
-        #[test]
-        fn a_disable_the_tick_already_handled_is_not_counted_twice() {
-            const SPACE: u16 = 0x31; // kVK_Space
-            let (core, shared, _rx) = core::tests::harness();
-            shared
-                .register(Gesture::new(Key::Space, Modifiers::NONE))
-                .unwrap();
-            let ctx = Box::new(Ctx::new(core, Arc::default()));
-            // SAFETY: `ctx` outlives the tap, which is never on a run loop and is invalidated below.
-            let tap = unsafe { create_tap(&TABLET, ptr::from_ref(&*ctx).cast_mut()) }.expect("a listen-only tap");
-            ctx.tap.set(Some(NonNull::from(&*tap)));
-            // Never posted: only its type matters to the disable notices.
-            let notice = CGEvent::new(None).expect("an event");
-            // WindowServer disables the tap, the tick re-enables it, then the queued notice arrives.
-            for cycle in 0..MAX_REENABLES {
-                CGEvent::tap_enable(&tap, false);
-                assert_eq!(check(&ctx, &tap), None, "cycle {cycle}");
-                assert!(CGEvent::tap_is_enabled(&tap));
-                // A press swallowed between the two survives the stale notice.
-                assert_eq!(handle(&ctx, CGEventType::KeyDown, &key_event(SPACE, true, 40)), Verdict::Swallow);
-                assert_eq!(handle(&ctx, CGEventType::TapDisabledByTimeout, &notice), Verdict::Pass);
-                assert_eq!(ctx.gave_up.get(), None, "cycle {cycle}");
-                assert_eq!(
-                    handle(&ctx, CGEventType::KeyUp, &key_event(SPACE, false, 40)),
-                    Verdict::Swallow,
-                    "cycle {cycle}"
-                );
-            }
-            // The budget still caps disables that are real: it is spent, so the next one gives up.
+    #[test]
+    fn a_disable_the_tick_already_handled_is_not_counted_twice() {
+        const SPACE: u16 = 0x31; // kVK_Space
+        let (core, shared, _rx) = core::tests::harness();
+        shared
+            .register(Gesture::new(Key::Space, Modifiers::NONE))
+            .unwrap();
+        let ctx = Box::new(Ctx::new(core, Arc::default()));
+        // SAFETY: `ctx` outlives the tap, which is never on a run loop and is invalidated below.
+        let tap = unsafe { create_tap(&TABLET, ptr::from_ref(&*ctx).cast_mut()) }.expect("a listen-only tap");
+        ctx.tap.set(Some(NonNull::from(&*tap)));
+        // Never posted: only its type matters to the disable notices.
+        let notice = CGEvent::new(None).expect("an event");
+        // WindowServer disables the tap, the tick re-enables it, then the queued notice arrives.
+        for cycle in 0..MAX_REENABLES {
             CGEvent::tap_enable(&tap, false);
-            assert_eq!(handle(&ctx, CGEventType::TapDisabledByTimeout, &notice), Verdict::Pass);
-            assert_eq!(ctx.gave_up.get(), Some("the event tap kept timing out"));
-            tap.invalidate();
-        }
-
-        #[test]
-        fn dropping_the_hook_stops_it_without_a_stopped_event() {
-            let shared = Arc::new(Shared::new());
-            let (tx, rx) = mpsc::channel();
-            let backend = spawn_with(shared.clone(), tx, TABLET).expect("the hook started");
-            assert_eq!(rx.recv_timeout(Duration::from_millis(1500)), Err(mpsc::RecvTimeoutError::Timeout));
-            assert!(shared.alive.load(Ordering::Acquire));
-            drop(backend);
-            assert_eq!(rx.recv_timeout(Duration::from_secs(1)), Err(mpsc::RecvTimeoutError::Disconnected));
-            assert!(!shared.alive.load(Ordering::Acquire));
-        }
-
-        /// Documents that polling CGEventTapIsEnabled does not leak Mach ports (vouchers would show
-        /// up as port names). Ignored: other tests create and drop ports in parallel; run it alone.
-        #[test]
-        #[ignore]
-        fn tap_is_enabled_leaks_no_ports() {
-            extern "C" {
-                static mach_task_self_: u32;
-                fn mach_port_names(
-                    task: u32,
-                    names: *mut *mut u32,
-                    names_count: *mut u32,
-                    types: *mut *mut u32,
-                    types_count: *mut u32,
-                ) -> i32;
-                fn vm_deallocate(task: u32, address: usize, size: usize) -> i32;
-            }
-            fn port_count() -> u32 {
-                let (mut names, mut types, mut count, mut types_count) = (ptr::null_mut(), ptr::null_mut(), 0, 0);
-                // SAFETY: the out-pointers are valid; the arrays it allocates are freed right after.
-                unsafe {
-                    assert_eq!(
-                        mach_port_names(mach_task_self_, &mut names, &mut count, &mut types, &mut types_count),
-                        0
-                    );
-                    vm_deallocate(mach_task_self_, names as usize, count as usize * 4);
-                    vm_deallocate(mach_task_self_, types as usize, types_count as usize * 4);
-                }
-                count
-            }
-            let (core, _, _rx) = core::tests::harness();
-            let ctx = Box::new(Ctx::new(core, Arc::default()));
-            // SAFETY: `ctx` outlives the tap, which is invalidated below and never runs a callback.
-            let tap = unsafe { create_tap(&TABLET, ptr::from_ref(&*ctx).cast_mut()) }.expect("a listen-only tap");
+            assert_eq!(check(&ctx, &tap), None, "cycle {cycle}");
             assert!(CGEvent::tap_is_enabled(&tap));
-            let before = port_count();
-            for _ in 0..10_000 {
-                assert!(CGEvent::tap_is_enabled(&tap));
-            }
-            let after = port_count();
-            tap.invalidate();
-            assert!(after <= before + 2, "ports {before} -> {after}");
+            // A press swallowed between the two survives the stale notice.
+            assert_eq!(handle(&ctx, CGEventType::KeyDown, &key_event(SPACE, true, 40)), Verdict::Swallow);
+            assert_eq!(handle(&ctx, CGEventType::TapDisabledByTimeout, &notice), Verdict::Pass);
+            assert_eq!(ctx.gave_up.get(), None, "cycle {cycle}");
+            assert_eq!(
+                handle(&ctx, CGEventType::KeyUp, &key_event(SPACE, false, 40)),
+                Verdict::Swallow,
+                "cycle {cycle}"
+            );
         }
+        // The budget still caps disables that are real: it is spent, so the next one gives up.
+        CGEvent::tap_enable(&tap, false);
+        assert_eq!(handle(&ctx, CGEventType::TapDisabledByTimeout, &notice), Verdict::Pass);
+        assert_eq!(ctx.gave_up.get(), Some("the event tap kept timing out"));
+        tap.invalidate();
+    }
+
+    #[test]
+    fn dropping_the_hook_stops_it_without_a_stopped_event() {
+        let shared = Arc::new(Shared::new());
+        let (tx, rx) = mpsc::channel();
+        let backend = spawn_with(shared.clone(), tx, TABLET).expect("the hook started");
+        assert_eq!(rx.recv_timeout(Duration::from_millis(1500)), Err(mpsc::RecvTimeoutError::Timeout));
+        assert!(shared.alive.load(Ordering::Acquire));
+        drop(backend);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(1)), Err(mpsc::RecvTimeoutError::Disconnected));
+        assert!(!shared.alive.load(Ordering::Acquire));
+    }
+
+    /// Documents that polling CGEventTapIsEnabled does not leak Mach ports (vouchers would show
+    /// up as port names). Ignored: other tests create and drop ports in parallel; run it alone.
+    #[test]
+    #[ignore]
+    fn tap_is_enabled_leaks_no_ports() {
+        extern "C" {
+            static mach_task_self_: u32;
+            fn mach_port_names(task: u32, names: *mut *mut u32, names_count: *mut u32, types: *mut *mut u32, types_count: *mut u32) -> i32;
+            fn vm_deallocate(task: u32, address: usize, size: usize) -> i32;
+        }
+        fn port_count() -> u32 {
+            let (mut names, mut types, mut count, mut types_count) = (ptr::null_mut(), ptr::null_mut(), 0, 0);
+            // SAFETY: the out-pointers are valid; the arrays it allocates are freed right after.
+            unsafe {
+                assert_eq!(
+                    mach_port_names(mach_task_self_, &mut names, &mut count, &mut types, &mut types_count),
+                    0
+                );
+                vm_deallocate(mach_task_self_, names as usize, count as usize * 4);
+                vm_deallocate(mach_task_self_, types as usize, types_count as usize * 4);
+            }
+            count
+        }
+        let (core, _, _rx) = core::tests::harness();
+        let ctx = Box::new(Ctx::new(core, Arc::default()));
+        // SAFETY: `ctx` outlives the tap, which is invalidated below and never runs a callback.
+        let tap = unsafe { create_tap(&TABLET, ptr::from_ref(&*ctx).cast_mut()) }.expect("a listen-only tap");
+        assert!(CGEvent::tap_is_enabled(&tap));
+        let before = port_count();
+        for _ in 0..10_000 {
+            assert!(CGEvent::tap_is_enabled(&tap));
+        }
+        let after = port_count();
+        tap.invalidate();
+        assert!(after <= before + 2, "ports {before} -> {after}");
     }
 }

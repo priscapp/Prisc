@@ -93,7 +93,7 @@ jobs:
   # The Rust gate is three jobs per OS that run side by side: lint (fmt, clippy, the crate
   # boundaries), rust-test (cargo test) and dotnet-test (the interop library build checks, the
   # dotnet suites and the probe). Checks whose result does not depend on the OS run on Windows only.
-  # The self-hosted macOS runners have no desktop session, so the tests that need one (event taps,
+  # The self-hosted macOS runners have no desktop session, so the tests that need one (hooks,
   # windows) run in gui-test on a GitHub-hosted mac instead.
   #
   # Every rust-cache in CI saves from master only on the GitHub-hosted runners, which share the
@@ -227,16 +227,19 @@ jobs:
           cargo test -p prisc_shared
           cargo test -p prisc_desktop
           cargo test -p prisc_telemetry
-          # The event-tap tests need a desktop session: gui-test runs them.
-          cargo test -p prisc_hotkeys -- --skip macos::tests::session::
           cargo test -p prisc_capture
           cargo test -p prisc_scroll_driver
           cargo test -p prisc_ai
           cargo test -p prisc_platform
-          # Includes the harness = false main_thread_* targets, which run on the real main thread on macOS.
-          cargo test -p prisc_interop
           # Fails on a stale, missing or orphaned generated file and on any prisc_interop crate rule.
           cargo test -p prisc_codegen
+
+      # Real hooks and windows: on macOS these need a desktop session, so gui-test runs them there.
+      - name: Tests (desktop session)
+        if: runner.os == 'Windows'
+        run: |
+          cargo test -p prisc_hotkeys
+          cargo test -p prisc_interop
 
       - name: Tests (shell extension)
         if: runner.os == 'Windows'
@@ -300,12 +303,14 @@ jobs:
 
       # Prisc.VideoSDK.Tests runs in test-video, which waits for this run's recorder payload.
       # PRISC_INTEROP_REQUIRED turns a missing or stale library into a failure instead of a skip.
-      # On macOS the Gui category (tests that start a hook) runs in gui-test.
+      # Prisc.Interop.Tests starts real hooks, so on macOS it runs in gui-test.
       - name: dotnet tests
         env:
           PRISC_INTEROP_REQUIRED: "1"
         run: |
-          dotnet test ui/Prisc.Interop.Tests/Prisc.Interop.Tests.csproj -c Release --nologo ${{ runner.os == 'macOS' && '--filter "Category!=Gui"' || '' }}
+          if [ "$RUNNER_OS" = Windows ]; then
+            dotnet test ui/Prisc.Interop.Tests/Prisc.Interop.Tests.csproj -c Release --nologo
+          fi
           dotnet test ui/Prisc.Shared.Tests/Prisc.Shared.Tests.csproj -c Release --nologo
           dotnet test ui/Prisc.Drawing.Tests/Prisc.Drawing.Tests.csproj -c Release --nologo
           dotnet test ui/Prisc.Ipc.Tests/Prisc.Ipc.Tests.csproj -c Release --nologo
@@ -329,9 +334,10 @@ jobs:
           if-no-files-found: warn
 
   # The macOS tests that need a desktop session (a WindowServer connection, Accessibility and
-  # Input Monitoring), which the self-hosted pool has not got: prisc_hotkeys' event-tap tests,
-  # the Gui category of Prisc.Interop.Tests and the interop probe. A GitHub-hosted mac has all
-  # three. Windows runs the same tests in rust-test and dotnet-test.
+  # Input Monitoring), which the self-hosted pool has not got: prisc_hotkeys' event taps,
+  # prisc_interop's hooks and main-thread AppKit windows, Prisc.Interop.Tests and the interop
+  # probe. A GitHub-hosted mac has all of it. Windows runs the same tests in rust-test and
+  # dotnet-test.
   gui-test:
     name: gui-test (macos)
     runs-on: macos-15
@@ -362,13 +368,16 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
-      - name: prisc_hotkeys event-tap tests
-        run: cargo test -p prisc_hotkeys "macos::tests::session::"
+      # Includes prisc_interop's harness = false main_thread_* targets, which run on the real main thread.
+      - name: Rust tests
+        run: |
+          cargo test -p prisc_hotkeys
+          cargo test -p prisc_interop
 
-      - name: dotnet tests (Gui category)
+      - name: dotnet tests
         run: |
           cargo build -p prisc_interop
-          dotnet test ui/Prisc.Interop.Tests/Prisc.Interop.Tests.csproj -c Release --nologo --filter "Category=Gui"
+          dotnet test ui/Prisc.Interop.Tests/Prisc.Interop.Tests.csproj -c Release --nologo
 
       - name: Interop probe smoke
         if: ${{ !cancelled() }}
