@@ -165,6 +165,21 @@ namespace Prisc
             }
         }
 
+        /// <summary>Loads (or finds, if the watcher got there first) a session the capturer just
+        /// wrote, and makes it <see cref="LastCreated"/> — it is a new capture, so it is the entry
+        /// the Recent page should land on, exactly as for a session this process created itself.
+        /// Null when the session could not be loaded.</summary>
+        public SessionInfo RegisterCapturedSession(string jsonPath)
+        {
+            lock (_lock)
+            {
+                var session = GetSessionFromPath(jsonPath);
+                if (session != null)
+                    LastCreated = session;
+                return session;
+            }
+        }
+
         public void OpenSession(SessionInfo session)
         {
             EditorWindow.ShowSession(session);
