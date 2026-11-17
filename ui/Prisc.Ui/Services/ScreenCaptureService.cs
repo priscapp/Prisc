@@ -25,8 +25,9 @@ namespace Prisc.UI
     /// cropped.png, no session) is looked up with a reverse image search; an OCR-UPLOAD capture
     /// (an "ocr-upload" marker plus an ocr.txt sidecar, no image) uploads the recognized text as
     /// a paste; a canceled
-    /// capture (neither file) deletes the pre-created session directory. COPY/SAVE are handled
-    /// inside the capturer itself and never produce a session.
+    /// capture (neither file) deletes the pre-created session directory. COPY/SAVE are carried out
+    /// inside the capturer itself, which then writes the same session as EDIT under a "copy" /
+    /// "save" marker, so the capture is recorded in Recents and nothing more is opened.
     /// </summary>
     internal sealed class ScreenCapturePage : IScreenCapturePage
     {
@@ -211,6 +212,11 @@ namespace Prisc.UI
                     break;
                 case CaptureAction.Upload:
                     await UploadManager.UploadSession(result.Session);
+                    break;
+                case CaptureAction.Copy:
+                case CaptureAction.Save:
+                    // done inside the capturer; registering the session for Recents was all
+                    // that was left, and ProcessFinishedSession has already done it.
                     break;
                 case CaptureAction.SelectColor:
                     NiceDialog.ShowColorViewer(result.Color);
@@ -507,6 +513,10 @@ namespace Prisc.UI
     {
         Edit,
         Upload,
+        /// <summary>The capturer already copied the image; the session is only recorded.</summary>
+        Copy,
+        /// <summary>The capturer already saved the image; the session is only recorded.</summary>
+        Save,
         SelectColor,
         Video,
         Share,
@@ -516,7 +526,7 @@ namespace Prisc.UI
     }
 
     /// <summary>A finished, non-canceled capture. <see cref="Session"/> is set for
-    /// Edit/Upload; <see cref="Color"/> for SelectColor; <see cref="Region"/> and
+    /// Edit/Upload/Copy/Save; <see cref="Color"/> for SelectColor; <see cref="Region"/> and
     /// <see cref="SessionDir"/> for Video and Scroll, which additionally carry
     /// <see cref="ScrollPoint"/> and <see cref="TargetHwnd"/>; <see cref="Region"/> alone for
     /// Share, whose directory is already deleted; <see cref="Text"/> for OcrUpload, which carries
@@ -562,8 +572,8 @@ namespace Prisc.UI
         /// <summary>
         /// Inspects <paramref name="sessionDir"/> after the capture process has exited.
         /// If session.json exists the capture succeeded: the session is loaded (and registered
-        /// with <see cref="SessionManager"/>), renamed to "Screenshot" and returned with the
-        /// action from the action.txt marker (missing marker = Edit). An action.txt of
+        /// with <see cref="SessionManager"/> as its newest entry), renamed to "Screenshot" and
+        /// returned with the action from the action.txt marker (missing marker = Edit). An action.txt of
         /// "select-color #RRGGBB" without a session carries just the picked color; the
         /// directory is deleted. A "share x,y,w,h" marker carries just the region to mirror, and
         /// its directory is deleted too — a share writes no files. A "search-image" marker carries
@@ -591,15 +601,15 @@ namespace Prisc.UI
             var jsonPath = Path.Combine(sessionDir, "session.json");
             if (File.Exists(jsonPath))
             {
-                var session = SessionManager.Current.GetSessionFromPath(jsonPath);
+                // registered as the newest entry, so Recents selects it — whatever the action:
+                // COPY and SAVE finish inside the capturer, but the capture still belongs in
+                // Recents (issue #142).
+                var session = SessionManager.Current.RegisterCapturedSession(jsonPath);
                 if (session != null)
                 {
                     // the legacy C# shell named sessions after the capture callback fired.
                     session.Name = "Screenshot";
-                    var kind = String.Equals(action, "upload", StringComparison.OrdinalIgnoreCase)
-                        ? CaptureAction.Upload
-                        : CaptureAction.Edit;
-                    return new CaptureResult { Action = kind, Session = session };
+                    return new CaptureResult { Action = ParseSessionAction(action), Session = session };
                 }
 
                 Debug.WriteLine("session.json exists but the session could not be loaded: " + jsonPath);
@@ -773,6 +783,19 @@ namespace Prisc.UI
             }
 
             return null;
+        }
+
+        /// <summary>The action a session payload's marker asks for: "upload", "copy" and "save"
+        /// name theirs, and no marker at all is the historical Edit.</summary>
+        public static CaptureAction ParseSessionAction(string action)
+        {
+            if (String.Equals(action, "upload", StringComparison.OrdinalIgnoreCase))
+                return CaptureAction.Upload;
+            if (String.Equals(action, "copy", StringComparison.OrdinalIgnoreCase))
+                return CaptureAction.Copy;
+            if (String.Equals(action, "save", StringComparison.OrdinalIgnoreCase))
+                return CaptureAction.Save;
+            return CaptureAction.Edit;
         }
 
         /// <summary>

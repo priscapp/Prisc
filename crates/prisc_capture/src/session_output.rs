@@ -36,11 +36,30 @@ const OCR_TEXT_FILE: &str = "ocr.txt";
 
 /// Which shell action a session payload is for. `Edit` is the default
 /// and writes no marker, so shells that pre-date `action.txt` behave
-/// unchanged; `Upload` writes the marker alongside the payload.
+/// unchanged; the others write their marker alongside the payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionAction {
     Edit,
     Upload,
+    /// COPY already put the image on the clipboard: the shell only records
+    /// the capture in Recents.
+    Copy,
+    /// SAVE already wrote the image to disk: the shell only records the
+    /// capture in Recents.
+    Save,
+}
+
+impl SessionAction {
+    /// The `action.txt` line for this action, or `None` for EDIT (no
+    /// marker — any stale one is removed).
+    fn marker(self) -> Option<&'static str> {
+        match self {
+            SessionAction::Edit => None,
+            SessionAction::Upload => Some("upload\n"),
+            SessionAction::Copy => Some("copy\n"),
+            SessionAction::Save => Some("save\n"),
+        }
+    }
 }
 
 /// Write the full session payload into `session_dir`. Returns
@@ -682,9 +701,9 @@ fn write_session_inner(
     // action.txt — routing marker, written before session.json so the
     // payload stays the last file to appear. Edit removes any marker a
     // previously failed-and-retried action left behind.
-    match action {
-        SessionAction::Upload => std::fs::write(session_dir.join(ACTION_FILE), "upload\n")?,
-        SessionAction::Edit => match std::fs::remove_file(session_dir.join(ACTION_FILE)) {
+    match action.marker() {
+        Some(marker) => std::fs::write(session_dir.join(ACTION_FILE), marker)?,
+        None => match std::fs::remove_file(session_dir.join(ACTION_FILE)) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
@@ -767,6 +786,16 @@ mod tests {
     fn video_action_radius_caps_at_half_the_shorter_side() {
         let sel = ScreenRect::from_xy_size(0, 0, 10, 4);
         assert_eq!(video_action_radius(16.0, sel, 10, 4), 2.0);
+    }
+
+    /// The session markers are a wire contract with `CaptureSessionDispatcher`:
+    /// EDIT writes none, every other action one line with a trailing newline.
+    #[test]
+    fn session_action_markers() {
+        assert_eq!(SessionAction::Edit.marker(), None);
+        assert_eq!(SessionAction::Upload.marker(), Some("upload\n"));
+        assert_eq!(SessionAction::Copy.marker(), Some("copy\n"));
+        assert_eq!(SessionAction::Save.marker(), Some("save\n"));
     }
 
     #[test]
