@@ -134,7 +134,7 @@ dropped settings cannot be lost.
 | SHARE | `action.txt` only | `share X,Y,W,H` |
 | SEARCH-IMAGE | `cropped.png`, `action.txt` | `search-image` |
 | OCR-UPLOAD | `ocr.txt`, `action.txt` | `ocr-upload` |
-| COPY / SAVE | none — handled inside the capturer (clipboard / save dialog, named per `--filename-pattern`) | — |
+| COPY / SAVE | same as EDIT + `action.txt`, written after the clipboard / save dialog (named per `--filename-pattern`) has succeeded — the shell only records the capture in Recents. A failure writing it is logged, not shown: the copy or save itself already worked | `copy` / `save` |
 | OCR-COPY / OCR-SEARCH | none — handled inside the capturer (clipboard / browser launch) | — |
 | Canceled (Escape / close) | none | — |
 
@@ -155,8 +155,8 @@ File contents:
 completion signal, so readers must wait for process exit and then key off
 these files:
 
-1. EDIT/UPLOAD: the three PNGs are written first (in parallel), then
-   `action.txt` is written (upload) or removed (edit), then **`session.json`
+1. EDIT/UPLOAD/COPY/SAVE: the three PNGs are written first (in parallel), then
+   `action.txt` is written (upload/copy/save) or removed (edit), then **`session.json`
    strictly last**. `session.json` present = capture succeeded.
 2. VIDEO: `cropped.png` first, then **`action.txt` last**. Its appearance is
    the completion signal; no `desktop.png`, no `session.json` (the session is

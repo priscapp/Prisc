@@ -208,6 +208,29 @@ pub enum CycleAction {
 // Plain functions (not methods) so callers holding a `&mut CaptureCycle`
 // split off `self.cycle` can still use them alongside the `App` fields.
 
+/// COPY and SAVE finish inside the capturer, but the shell still lists the
+/// capture in Recents: write the same session payload EDIT does, marked so
+/// the shell only registers it. Called after the copy/save has succeeded,
+/// so the user's image is already where they asked for it — a failure here
+/// is logged, never put in front of them. Without a --session-dir there is
+/// no shell to record it.
+fn record_session_for_shell(
+    session_dir: Option<&std::path::Path>,
+    selection: Option<ScreenRect>,
+    corner_radius: f32,
+    buffer: Option<&CapturedDesktop>,
+    peek: Option<&WindowPeekImage>,
+    cursor_visible: bool,
+    action: SessionAction,
+) {
+    let (Some(session_dir), Some(sel), Some(buf)) = (session_dir, selection, buffer) else {
+        return;
+    };
+    if let ActionResult::Failed(msg) = write_session(session_dir, sel, corner_radius, buf, peek, cursor_visible, action) {
+        log::warn!("{:?} succeeded but its session for Recents was not written: {msg}", action);
+    }
+}
+
 fn broadcast_mouse_state(windows: &WindowSet, input: &InteractionState) {
     for h in windows.values() {
         h.update_mouse_state(
@@ -1481,7 +1504,18 @@ impl App {
                     _ => ActionResult::Failed("No selection or buffer".into()),
                 };
                 match result {
-                    ActionResult::Success => self.finish_cycle(event_loop, CycleAction::Copy),
+                    ActionResult::Success => {
+                        record_session_for_shell(
+                            cycle.settings.session_dir.as_deref(),
+                            cycle.input.selection,
+                            cycle.input.selection_radius,
+                            cycle.desktop_buffer.as_deref(),
+                            active_peek_image,
+                            cursor_visible,
+                            SessionAction::Copy,
+                        );
+                        self.finish_cycle(event_loop, CycleAction::Copy)
+                    }
                     ActionResult::Canceled => self.show_all_windows(),
                     ActionResult::Failed(msg) => {
                         if xdialog::show_message_retry_cancel("Prisc Capture", "Copy to Clipboard Failed", &msg, ErrorIcon).unwrap_or(false)
@@ -1511,7 +1545,18 @@ impl App {
                     _ => ActionResult::Failed("No selection or buffer".into()),
                 };
                 match result {
-                    ActionResult::Success => self.finish_cycle(event_loop, CycleAction::Save),
+                    ActionResult::Success => {
+                        record_session_for_shell(
+                            cycle.settings.session_dir.as_deref(),
+                            cycle.input.selection,
+                            cycle.input.selection_radius,
+                            cycle.desktop_buffer.as_deref(),
+                            active_peek_image,
+                            cursor_visible,
+                            SessionAction::Save,
+                        );
+                        self.finish_cycle(event_loop, CycleAction::Save)
+                    }
                     ActionResult::Canceled => self.show_all_windows(),
                     ActionResult::Failed(msg) => {
                         if xdialog::show_message_retry_cancel("Prisc Capture", "Save Failed", &msg, ErrorIcon).unwrap_or(false) {
