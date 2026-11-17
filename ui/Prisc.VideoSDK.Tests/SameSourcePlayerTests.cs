@@ -1145,11 +1145,13 @@ namespace Prisc.VideoSDK.Tests
             // two clips of one lane on one line of source: the lane stopped at the end of the first,
             // so the second enters through a hop and does not wait for a decoder to catch up
             var project = NewProject();
+            // the clips are long enough that a loaded machine's late tick still lands inside them:
+            // a hop that only runs once the playhead has left its clip has nothing to land
             var sourceId = AddSource(project, EncodeFixture(10));
-            AddClip(project, AddRow(project), sourceId, 0, 4, 0);
+            AddClip(project, AddRow(project), sourceId, 0, 6, 0);
             var row = AddRow(project);
-            AddClip(project, row, sourceId, 0.5, 0.5, 4.5);
-            AddClip(project, row, sourceId, 2, 0.5, 6);
+            AddClip(project, row, sourceId, 0.5, 1.5, 4.5);
+            AddClip(project, row, sourceId, 3, 1, 7);
             (Guid, int, int) lane1 = (sourceId, 0, 1);
 
             using var factory = new CpuSurfaceFactory();
@@ -1161,13 +1163,12 @@ namespace Prisc.VideoSDK.Tests
             int seeks = player.VideoSeekCount(lane1);
 
             player.Play();
-            Assert.True(WaitUntil(() => player.Position.Ticks >= Ticks(1.5)), $"pos={player.Position}");
-            int afterFirst = player.VideoSeekCount(lane1);
-            Assert.True(afterFirst > seeks, "entering the first clip did not hop");
+            Assert.True(WaitUntil(() => player.VideoSeekCount(lane1) > seeks), "entering the first clip did not hop");
 
-            Assert.True(WaitUntil(() => player.Position.Ticks >= Ticks(2.3)), $"pos={player.Position}");
-            Assert.True(player.VideoSeekCount(lane1) > afterFirst, "entering the second clip did not hop");
-            Assert.True(WaitUntil(() => LanePts(player, cache, sourceId, 1) >= Ticks(6)),
+            Assert.True(WaitUntil(() => player.Position.Ticks >= Ticks(2.5)), $"pos={player.Position}");
+            int afterFirst = player.VideoSeekCount(lane1);
+            Assert.True(WaitUntil(() => player.VideoSeekCount(lane1) > afterFirst), "entering the second clip did not hop");
+            Assert.True(WaitUntil(() => LanePts(player, cache, sourceId, 1) >= Ticks(7)),
                 $"pts={LanePts(player, cache, sourceId, 1)}");
         }
 
