@@ -176,7 +176,7 @@ any view that formats a gesture or reads an OS value, so build it before preview
 ## Recording stack (libobs)
 
 Screen recording runs in a separate process, `prisc_recorder`, a Rust front end over libobs.
-libobs is compiled from the `crates/obs-studio` submodule (pinned to **33.0.1**),
+libobs is compiled from the `crates/obs-studio` submodule (pinned to **33.0.3**),
 so this part needs a full native toolchain:
 
 - the submodule, recursively: `git submodule update --init --recursive` (or clone with
@@ -217,7 +217,7 @@ cargo recr                        # the same, --release
 
 The first build compiles libobs and takes 20–40 minutes; later builds reuse it. OBS derives its
 version from `git describe --tags`, and a submodule checkout usually has no tags, so the build
-passes the version itself (`OBS_VERSION_OVERRIDE`, default the pinned 33.0.1, sets it). On
+passes the version itself (`OBS_VERSION_OVERRIDE`, default the pinned 33.0.3, sets it). On
 Windows, OBS's child configures for the 32-bit helpers ignore that and still run `git describe`,
 so before configuring, the build script gives HEAD a local lightweight tag of that version when it
 has none. No manual tagging is needed, in CI or locally.
