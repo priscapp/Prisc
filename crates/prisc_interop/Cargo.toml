@@ -44,7 +44,7 @@ prisc_ipc.workspace = true
 # serde_derive.
 proc-macro2 = "1"
 quote = "1"
-syn = { version = "2", features = ["full", "extra-traits"] }
+syn = { version = "3", features = ["full", "extra-traits"] }
 
 [dev-dependencies]
 # tests/infra.rs opens the built cdylib to read the hash the C# loader reads.
