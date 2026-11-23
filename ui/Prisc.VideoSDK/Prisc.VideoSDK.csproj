@@ -41,7 +41,7 @@
     <PackageReference Include="FFmpeg.AutoGen.Abstractions" Version="8.1.0" />
     <PackageReference Include="FFmpeg.AutoGen.Bindings.DynamicallyLoaded" Version="8.1.0" />
     <!-- WASAPI output for the audio master clock; all call sites are Windows-only today. -->
-    <PackageReference Include="NAudio.Wasapi" Version="2.4.0" />
+    <PackageReference Include="NAudio.Wasapi" Version="3.3.0" />
     <!-- Pinned (via Directory.Build.props) to the exact version Avalonia resolves — a mismatch
          would mean the SDK compiles against a different Skia than the one Avalonia loads in
          the Prisc.Ui process. Prisc.Ui's VerifySkiaSharpMatchesAvalonia target enforces it. -->
