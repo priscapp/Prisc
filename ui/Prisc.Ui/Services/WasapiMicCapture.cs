@@ -4,29 +4,29 @@ using System.Runtime.Versioning;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
-// NAudio 3 marks WasapiCapture [Obsolete] in favour of WasapiRecorder. The legacy class still
-// ships and captures the same shared-mode mix format, so it stays until capture is moved over
-// deliberately.
-#pragma warning disable CS0618
-
 namespace Prisc.UI.Services
 {
     /// <summary>
     /// The Windows <see cref="MicCapture"/>: WASAPI shared mode through NAudio's
-    /// <see cref="WasapiCapture"/>, which hands us buffers in the endpoint's mix format. The
+    /// <see cref="WasapiRecorder"/>, which hands us buffers in the endpoint's mix format. The
     /// recorder converts from there; nothing here resamples.
     /// </summary>
+    /// <remarks>The recorder raises one <see cref="MicCapture.DataAvailable"/> per WASAPI packet
+    /// (one engine period, a few milliseconds), whatever the buffer length; the length only sets
+    /// how much the endpoint can hold before the capture thread drains it. RecordingStopped is
+    /// posted to the SynchronizationContext of the thread that called <see cref="Create"/>, if
+    /// it has one, and raised on the capture thread otherwise.</remarks>
     [SupportedOSPlatform("windows")]
     internal sealed class WasapiMicCapture : MicCapture
     {
         private readonly MMDevice _device;
-        private readonly WasapiCapture _capture;
+        private readonly WasapiRecorder _capture;
         private readonly string _name;
         private readonly int _channels;
         private readonly int _sampleRate;
         private readonly MicSampleFormat _format;
 
-        private WasapiMicCapture(MMDevice device, WasapiCapture capture, int channels, int sampleRate,
+        private WasapiMicCapture(MMDevice device, WasapiRecorder capture, int channels, int sampleRate,
             MicSampleFormat format)
         {
             _device = device;
@@ -49,10 +49,14 @@ namespace Prisc.UI.Services
         public static WasapiMicCapture Create(string deviceId, int bufferMs)
         {
             var device = ResolveDevice(deviceId);
-            WasapiCapture capture = null;
+            WasapiRecorder capture = null;
             try
             {
-                capture = new WasapiCapture(device, false, bufferMs);
+                capture = new WasapiRecorderBuilder()
+                    .WithDevice(device)
+                    .WithSharedMode()
+                    .WithBufferLength(bufferMs)
+                    .Build();
 
                 if (!TryResolveFormat(capture.WaveFormat, out var channels, out var sampleRate, out var format))
                     throw new NotSupportedException("Unsupported microphone format " + capture.WaveFormat);
@@ -100,7 +104,10 @@ namespace Prisc.UI.Services
             }
         }
 
-        private void Capture_DataAvailable(object sender, WaveInEventArgs e) => RaiseDataAvailable(e.Buffer, e.BytesRecorded);
+        /// <summary>The span is WASAPI's own packet (or zeros for a silent one), valid only for
+        /// this call; the positions are unused.</summary>
+        private void Capture_DataAvailable(ReadOnlySpan<byte> buffer, AudioClientBufferFlags flags, long devicePosition,
+            long qpcPosition) => RaiseDataAvailable(buffer);
 
         private void Capture_RecordingStopped(object sender, StoppedEventArgs e) => RaiseStopped(e.Exception);
 

@@ -305,7 +305,7 @@ namespace Prisc.UI.Services
         /// (the writer has its own gate, and a stop that races it simply closes the file after
         /// or before this buffer). Nothing is allowed to escape as an exception on this
         /// thread.</summary>
-        private void OnDataAvailable(MicCapture sender, byte[] buffer, int bytesRecorded)
+        private void OnDataAvailable(MicCapture sender, ReadOnlySpan<byte> buffer)
         {
             double? level = null;
             var haveLevel = false;
@@ -322,7 +322,7 @@ namespace Prisc.UI.Services
                         return;
 
                     var frameBytes = _sourceBytesPerSample * _sourceChannels;
-                    var frames = frameBytes == 0 ? 0 : bytesRecorded / frameBytes;
+                    var frames = frameBytes == 0 ? 0 : buffer.Length / frameBytes;
                     if (frames <= 0)
                         return;
 
@@ -376,7 +376,7 @@ namespace Prisc.UI.Services
         /// across all channels rather than of the downmix, so one loud channel is not diluted by
         /// the quiet ones.
         /// </summary>
-        private float DownmixToMono(byte[] buffer, int frames)
+        private float DownmixToMono(ReadOnlySpan<byte> buffer, int frames)
         {
             var channels = _sourceChannels;
             var bytesPerSample = _sourceBytesPerSample;
@@ -405,19 +405,19 @@ namespace Prisc.UI.Services
 
         /// <summary>One sample of the capture format as a float in -1..1 (give or take: float
         /// formats are allowed to exceed it).</summary>
-        private float ReadSample(byte[] buffer, int offset)
+        private float ReadSample(ReadOnlySpan<byte> buffer, int offset)
         {
             switch (_sourceFormat)
             {
                 case MicSampleFormat.Float32:
-                    return BitConverter.ToSingle(buffer, offset);
+                    return BitConverter.ToSingle(buffer.Slice(offset));
                 case MicSampleFormat.Pcm16:
-                    return BitConverter.ToInt16(buffer, offset) / 32768f;
+                    return BitConverter.ToInt16(buffer.Slice(offset)) / 32768f;
                 case MicSampleFormat.Pcm24:
                     var packed = buffer[offset] | (buffer[offset + 1] << 8) | ((sbyte)buffer[offset + 2] << 16);
                     return packed / 8388608f;
                 case MicSampleFormat.Pcm32:
-                    return BitConverter.ToInt32(buffer, offset) / 2147483648f;
+                    return BitConverter.ToInt32(buffer.Slice(offset)) / 2147483648f;
                 default:
                     return 0f;
             }

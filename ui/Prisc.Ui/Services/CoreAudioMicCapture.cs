@@ -35,7 +35,6 @@ namespace Prisc.UI.Services
         private readonly object _gate = new object();
 
         private readonly CoreAudioInput _input;
-        private byte[] _managed = Array.Empty<byte>();
         private bool _started;
         private bool _stopped;      // Stopped has been signalled, or a dispose has begun
         private bool _disposed;
@@ -142,15 +141,9 @@ namespace Prisc.UI.Services
                         return false;
                 }
 
-                // Copied out rather than handed over as a span: the handler is the recorder's
-                // conversion loop, which reads a byte[] like the WASAPI path gives it.
-                if (_managed.Length < data.Length)
-                    _managed = new byte[data.Length];
-                data.CopyTo(_managed);
-
                 try
                 {
-                    RaiseDataAvailable(_managed, data.Length);
+                    RaiseDataAvailable(data);
                 }
                 catch (Exception ex)
                 {
