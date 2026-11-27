@@ -142,6 +142,13 @@ namespace Prisc.VideoSDK.Playback
         public int SourceHeight { get; private set; }
         public TimeSpan FrameDuration => new TimeSpan(_frameDurTicks);
 
+        /// <summary>One line of decode/present state for a failing test to print (diagnostic).</summary>
+        internal string Describe()
+            => $"worker(decodeAlive={_decodeThread?.IsAlive}, presentAlive={_presentThread?.IsAlive}, " +
+               $"decodeSerial={_decodeSerial}, activeSerial={Volatile.Read(ref _activeSerial)}, " +
+               $"immediateReq={Volatile.Read(ref _presentImmediateOnce)}, immediateMinSerial={Volatile.Read(ref _immediateMinSerial)}, " +
+               $"decoded={Interlocked.Read(ref _decodedCount)}, dropped={Interlocked.Read(ref _droppedTotal)}, eofPresented={_eofPresented})";
+
         private void OpenDecoder(bool tryHardware)
         {
             var st = _demuxer.GetStream(_streamIndex);

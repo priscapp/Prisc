@@ -124,6 +124,16 @@ namespace Prisc.VideoSDK.Tests
 
         // ------------------------------------------------------------------------------ helpers
 
+        /// <summary><see cref="WaitUntil"/> on a player: a timeout fails with the transport's
+        /// state, because these waits only time out on CI, and the state is the one thing that says
+        /// which thread stopped.</summary>
+        private static void Eventually(CompositionPlayer player, Func<bool> condition, Func<string> message,
+            int timeoutMs = 15000)
+        {
+            if (!WaitUntil(condition, timeoutMs))
+                Assert.Fail($"{message()}\n{player.DescribeTransport()}");
+        }
+
         private static bool WaitUntil(Func<bool> condition, int timeoutMs = 15000)
         {
             var sw = Stopwatch.StartNew();
@@ -212,8 +222,8 @@ namespace Prisc.VideoSDK.Tests
 
             // source 2 s, and the frame's adoption must not drag the playhead back to t=2, which
             // is where that frame first plays
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 0), 2)),
-                $"the seek did not land: pts={LanePts(player, cache, sourceId, 0)}");
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 0), 2),
+                () => $"the seek did not land: pts={LanePts(player, cache, sourceId, 0)}");
             Thread.Sleep(100); // let the adoption, which runs after the frame arrives, have its say
             Assert.True(Math.Abs(player.Position.Ticks - Ticks(4)) <= OneFrame,
                 $"the playhead left the paste: {player.Position}");
@@ -238,8 +248,8 @@ namespace Prisc.VideoSDK.Tests
 
             await player.SeekAsync(new TimeSpan(Ticks(3)), SeekMode.Exact);
 
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 0), 1)),
-                $"pts={LanePts(player, cache, sourceId, 0)}");
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 0), 1),
+                () => $"pts={LanePts(player, cache, sourceId, 0)}");
             Thread.Sleep(100);
             Assert.Equal(new TimeSpan(Ticks(3)), player.Position);
         }
@@ -257,7 +267,7 @@ namespace Prisc.VideoSDK.Tests
 
             await player.SeekAsync(new TimeSpan(Ticks(2)), SeekMode.Exact);
 
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 0), 2)));
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 0), 2), () => "timed out");
             Thread.Sleep(100);
             Assert.True(Math.Abs(player.Position.Ticks - Ticks(2)) <= OneFrame, $"playhead at {player.Position}");
         }
@@ -274,14 +284,14 @@ namespace Prisc.VideoSDK.Tests
             await player.OpenAsync(project, Options());
 
             await player.SeekAsync(new TimeSpan(Ticks(2.7)), SeekMode.Exact);
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 0), 2.7)));
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 0), 2.7), () => "timed out");
             player.Play();
 
             // while the playhead is well inside the paste, frames must move through source [1, 3):
             // mapped to the original they would be 2 s late and dropped, freezing the clip
             var inPaste = new HashSet<long>();
             var all = new List<long>();
-            Assert.True(WaitUntil(() =>
+            Eventually(player, () =>
             {
                 var pts = LanePts(player, cache, sourceId, 0);
                 long at = player.Position.Ticks;
@@ -293,7 +303,7 @@ namespace Prisc.VideoSDK.Tests
                 }
 
                 return at >= Ticks(5.3);
-            }), $"never reached the last clip: pos={player.Position}");
+            }, () => $"never reached the last clip: pos={player.Position}");
 
             Assert.True(inPaste.Count >= 8, $"the paste barely played: {inPaste.Count} distinct frames");
             foreach (long p in inPaste)
@@ -313,7 +323,7 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
             await player.SeekAsync(new TimeSpan(Ticks(4)), SeekMode.Exact);
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 0), 2)));
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 0), 2), () => "timed out");
 
             await player.StepFrameAsync(1);
 
@@ -332,7 +342,7 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
             await player.SeekAsync(new TimeSpan(Ticks(5) - 2 * FrameTicks), SeekMode.Exact);
-            Assert.True(WaitUntil(() => LanePts(player, cache, sourceId, 0) >= Ticks(2.9)));
+            Eventually(player, () => LanePts(player, cache, sourceId, 0) >= Ticks(2.9), () => "timed out");
 
             for (int step = 0; step < 3; step++)
             {
@@ -342,8 +352,8 @@ namespace Prisc.VideoSDK.Tests
             }
 
             Assert.True(player.Position.Ticks >= Ticks(5) - FrameTicks, $"playhead at {player.Position}");
-            Assert.True(WaitUntil(() => LanePts(player, cache, sourceId, 0) >= Ticks(4)),
-                $"the next clip's frame never landed: pts={LanePts(player, cache, sourceId, 0)}");
+            Eventually(player, () => LanePts(player, cache, sourceId, 0) >= Ticks(4),
+                () => $"the next clip's frame never landed: pts={LanePts(player, cache, sourceId, 0)}");
         }
 
         [Fact]
@@ -362,7 +372,7 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
             await player.SeekAsync(new TimeSpan(Ticks(10) - 2 * FrameTicks), SeekMode.Exact);
-            Assert.True(WaitUntil(() => LanePts(player, cache, sourceId, 0) >= Ticks(2.9)));
+            Eventually(player, () => LanePts(player, cache, sourceId, 0) >= Ticks(2.9), () => "timed out");
 
             for (int step = 0; step < 6; step++)
             {
@@ -427,13 +437,13 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
             await player.SeekAsync(new TimeSpan(Ticks(1.5)), SeekMode.Fast);
-            Assert.True(WaitUntil(() => LanePts(player, cache, sourceId, 0) < Ticks(1.5)));
+            Eventually(player, () => LanePts(player, cache, sourceId, 0) < Ticks(1.5), () => "timed out");
 
             await player.StepFrameAsync(1);
 
             Assert.True(player.Position.Ticks < Ticks(1.5), $"playhead at {player.Position}");
-            Assert.True(WaitUntil(() => Math.Abs((LanePts(player, cache, sourceId, 0) ?? 0) - player.Position.Ticks) <= OneFrame),
-                $"pos={player.Position} pts={LanePts(player, cache, sourceId, 0)}");
+            Eventually(player, () => Math.Abs((LanePts(player, cache, sourceId, 0) ?? 0) - player.Position.Ticks) <= OneFrame,
+                () => $"pos={player.Position} pts={LanePts(player, cache, sourceId, 0)}");
         }
 
         [Fact]
@@ -454,7 +464,7 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
             await player.SeekAsync(new TimeSpan(Ticks(0.5)), SeekMode.Exact);
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 0), 0.5)));
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 0), 0.5), () => "timed out");
 
             player.Play();
 
@@ -501,11 +511,11 @@ namespace Prisc.VideoSDK.Tests
             await player.SeekAsync(new TimeSpan(Ticks(2)), SeekMode.Exact);
 
             List<(int Lane, long Requested, long Pts)> requests = null;
-            Assert.True(WaitUntil(() =>
+            Eventually(player, () =>
             {
                 requests = ComposeOnce(player, project, cache, surface, out _);
                 return requests.Count == 2 && requests.TrueForAll(r => Math.Abs(r.Pts - r.Requested) <= OneFrame);
-            }), "the composer's requests: " + string.Join(", ", requests ?? new()));
+            }, () => "the composer's requests: " + string.Join(", ", requests ?? new()));
 
             Assert.Equal(0, requests[0].Lane);
             Assert.Equal(1, requests[1].Lane);
@@ -537,12 +547,12 @@ namespace Prisc.VideoSDK.Tests
             await player.SeekAsync(new TimeSpan(Ticks(1)), SeekMode.Exact);
 
             List<(int Lane, long Requested, long Pts)> requests = null;
-            Assert.True(WaitUntil(() =>
+            Eventually(player, () =>
             {
                 requests = ComposeOnce(player, project, cache, surface, out _);
                 return requests.Count == StreamLanes.MaxLanes + 1
                     && requests.Take(StreamLanes.MaxLanes - 1).All(r => Math.Abs(r.Pts - r.Requested) <= OneFrame);
-            }), "the composer's requests: " + string.Join(", ", requests ?? new()));
+            }, () => "the composer's requests: " + string.Join(", ", requests ?? new()));
 
             Assert.Equal(new[] { 0, 1, 2, StreamLanes.MaxLanes - 1, StreamLanes.MaxLanes - 1 }, requests.Select(r => r.Lane));
 
@@ -567,13 +577,13 @@ namespace Prisc.VideoSDK.Tests
             await player.OpenAsync(project, Options());
 
             await player.SeekAsync(new TimeSpan(Ticks(0.8)), SeekMode.Exact);
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 0), 0.8)));
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 0), 0.8), () => "timed out");
             player.Play();
 
             // in the overlap's settled middle, each composed frame reads two different moments
             var lane0 = new HashSet<long>();
             var lane1 = new HashSet<long>();
-            Assert.True(WaitUntil(() =>
+            Eventually(player, () =>
             {
                 var requests = ComposeOnce(player, project, cache, surface, out long at);
                 if (at >= Ticks(1.5) && at < Ticks(2.9) && requests.Count == 2)
@@ -586,7 +596,7 @@ namespace Prisc.VideoSDK.Tests
                 }
 
                 return at >= Ticks(3.2);
-            }));
+            }, () => "timed out");
 
             Assert.True(lane0.Count >= 8, $"lane 0 barely moved: {lane0.Count} frames");
             Assert.True(lane1.Count >= 8, $"lane 1 barely moved: {lane1.Count} frames");
@@ -604,14 +614,14 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
             await player.SeekAsync(new TimeSpan(Ticks(0.6)), SeekMode.Exact);
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 0), 0.6)));
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 0), 0.6), () => "timed out");
 
             int primarySeeks = player.VideoSeekCount(primary);
             int laneSeeks = player.VideoSeekCount(lane1);
 
             player.Play();
-            Assert.True(WaitUntil(() => player.Position.Ticks >= Ticks(1.5)), $"pos={player.Position}");
-            Assert.True(WaitUntil(() => player.VideoSeekCount(lane1) > laneSeeks), "entering the clip did not hop its lane");
+            Eventually(player, () => player.Position.Ticks >= Ticks(1.5), () => $"pos={player.Position}");
+            Eventually(player, () => player.VideoSeekCount(lane1) > laneSeeks, () => "entering the clip did not hop its lane");
             Assert.Equal(primarySeeks, player.VideoSeekCount(primary));
         }
 
@@ -635,27 +645,27 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
             await player.SeekAsync(new TimeSpan(Ticks(0.5)), SeekMode.Exact);
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, otherId, 0), 0.5)));
+            Eventually(player, () => Lands(LanePts(player, cache, otherId, 0), 0.5), () => "timed out");
 
             int primarySeeks = player.VideoSeekCount(primary);
             int otherSeeks = player.VideoSeekCount(other);
 
             player.Play();
             long last = 0;
-            Assert.True(WaitUntil(() =>
+            Eventually(player, () =>
             {
                 long at = player.Position.Ticks;
                 Assert.True(at >= last, $"the clock went back across the seam: {last} -> {at}");
                 last = at;
                 return at >= Ticks(1.5);
-            }), $"pos={player.Position}");
+            }, () => $"pos={player.Position}");
 
             // the hop is counted when its pipe runs it, which can trail the clock under load
-            Assert.True(WaitUntil(() => player.VideoSeekCount(other) > otherSeeks), "the seam never hopped its stream");
+            Eventually(player, () => player.VideoSeekCount(other) > otherSeeks, () => "the seam never hopped its stream");
             Assert.Equal(primarySeeks, player.VideoSeekCount(primary));
             Assert.Equal(otherSeeks + 1, player.VideoSeekCount(other));
-            Assert.True(WaitUntil(() => LanePts(player, cache, otherId, 0) is >= 30_000_000),
-                $"the second clip's frames never arrived: pts={LanePts(player, cache, otherId, 0)}");
+            Eventually(player, () => LanePts(player, cache, otherId, 0) is >= 30_000_000,
+                () => $"the second clip's frames never arrived: pts={LanePts(player, cache, otherId, 0)}");
         }
 
         [Fact]
@@ -676,13 +686,13 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
             await player.SeekAsync(new TimeSpan(Ticks(0.5)), SeekMode.Exact);
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, primaryId, 0), 0.5)));
+            Eventually(player, () => Lands(LanePts(player, cache, primaryId, 0), 0.5), () => "timed out");
 
             int primarySeeks = player.VideoSeekCount(primary);
             int otherSeeks = player.VideoSeekCount(other);
 
             player.Play();
-            Assert.True(WaitUntil(() => player.Position.Ticks >= Ticks(1.5)));
+            Eventually(player, () => player.Position.Ticks >= Ticks(1.5), () => "timed out");
 
             Assert.Equal(primarySeeks + 1, player.VideoSeekCount(primary));
             Assert.Equal(otherSeeks, player.VideoSeekCount(other));
@@ -706,15 +716,15 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
             await player.SeekAsync(new TimeSpan(Ticks(1) - FrameTicks), SeekMode.Exact);
-            Assert.True(WaitUntil(() => LanePts(player, cache, otherId, 0) >= Ticks(0.9)));
+            Eventually(player, () => LanePts(player, cache, otherId, 0) >= Ticks(0.9), () => "timed out");
             int seeks = player.VideoSeekCount(other);
 
             await player.StepFrameAsync(1);
 
             Assert.True(player.Position.Ticks >= Ticks(1), $"playhead at {player.Position}");
             Assert.True(player.VideoSeekCount(other) > seeks, "the step crossed the seam and did not land it");
-            Assert.True(WaitUntil(() => LanePts(player, cache, otherId, 0) >= Ticks(3)),
-                $"pts={LanePts(player, cache, otherId, 0)}");
+            Eventually(player, () => LanePts(player, cache, otherId, 0) >= Ticks(3),
+                () => $"pts={LanePts(player, cache, otherId, 0)}");
         }
 
         /// <summary>Exact seek, then waits for the lane to hold the source instant.</summary>
@@ -722,8 +732,8 @@ namespace Prisc.VideoSDK.Tests
             double at, int lane, double source)
         {
             await player.SeekAsync(new TimeSpan(Ticks(at)), SeekMode.Exact);
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, lane), source)),
-                $"the seek to t={at} did not land: lane {lane} pts={LanePts(player, cache, sourceId, lane)}");
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, lane), source),
+                () => $"the seek to t={at} did not land: lane {lane} pts={LanePts(player, cache, sourceId, lane)}");
         }
 
         /// <summary>Asserts a run of forward steps walks the playhead one frame each, while the lane
@@ -739,8 +749,8 @@ namespace Prisc.VideoSDK.Tests
                 Assert.True(Math.Abs(player.Position.Ticks - Ticks(expected)) <= OneFrame,
                     $"step {step}: playhead at {player.Position}, expected t={expected}");
                 double shown = source + (double)step / Fps;
-                Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, lane), shown)),
-                    $"step {step}: lane {lane} pts={LanePts(player, cache, sourceId, lane)}, expected s{shown}");
+                Eventually(player, () => Lands(LanePts(player, cache, sourceId, lane), shown),
+                    () => $"step {step}: lane {lane} pts={LanePts(player, cache, sourceId, lane)}, expected s{shown}");
             }
         }
 
@@ -822,8 +832,8 @@ namespace Prisc.VideoSDK.Tests
                 await player.StepFrameAsync(1);
 
             Assert.True(Math.Abs(player.Position.Ticks - Ticks(5 + 2.0 / Fps)) <= OneFrame, $"playhead at {player.Position}");
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 1), 2.0 / Fps)),
-                $"lane 1 pts={LanePts(player, cache, sourceId, 1)}");
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 1), 2.0 / Fps),
+                () => $"lane 1 pts={LanePts(player, cache, sourceId, 1)}");
         }
 
         [Fact]
@@ -855,8 +865,8 @@ namespace Prisc.VideoSDK.Tests
 
             Assert.True(player.Position.Ticks >= Ticks(10) && player.Position.Ticks <= Ticks(10) + 2 * OneFrame,
                 $"playhead at {player.Position}");
-            Assert.True(WaitUntil(() => Math.Abs((LanePts(player, cache, sourceId, 0) ?? 0) - player.Position.Ticks) <= OneFrame),
-                $"pos={player.Position} pts={LanePts(player, cache, sourceId, 0)}");
+            Eventually(player, () => Math.Abs((LanePts(player, cache, sourceId, 0) ?? 0) - player.Position.Ticks) <= OneFrame,
+                () => $"pos={player.Position} pts={LanePts(player, cache, sourceId, 0)}");
         }
 
         [Fact]
@@ -881,8 +891,8 @@ namespace Prisc.VideoSDK.Tests
             for (int step = 0; step < 40 && player.Position.Ticks < Ticks(1.5); step++)
                 await player.StepFrameAsync(1);
 
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 0), 1.5)),
-                $"pos={player.Position} pts={LanePts(player, cache, sourceId, 0)}");
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 0), 1.5),
+                () => $"pos={player.Position} pts={LanePts(player, cache, sourceId, 0)}");
             await AssertStepsFrameByFrame(player, cache, sourceId, 0, 1.5, 1.5, 3);
         }
 
@@ -897,7 +907,7 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
             await SeekAndLand(player, cache, sourceId, 2, 1, 6);
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 0), 2)));
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 0), 2), () => "timed out");
             int seeks = player.VideoSeekCount((sourceId, 0, 0)) + player.VideoSeekCount((sourceId, 0, 1));
 
             for (int step = 1; step <= 3; step++)
@@ -905,10 +915,10 @@ namespace Prisc.VideoSDK.Tests
                 await player.StepFrameAsync(1);
 
                 double along = (double)step / Fps;
-                Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 0), 2 + along)),
-                    $"step {step}: lane 0 pts={LanePts(player, cache, sourceId, 0)}");
-                Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 1), 6 + along)),
-                    $"step {step}: lane 1 pts={LanePts(player, cache, sourceId, 1)}");
+                Eventually(player, () => Lands(LanePts(player, cache, sourceId, 0), 2 + along),
+                    () => $"step {step}: lane 0 pts={LanePts(player, cache, sourceId, 0)}");
+                Eventually(player, () => Lands(LanePts(player, cache, sourceId, 1), 6 + along),
+                    () => $"step {step}: lane 1 pts={LanePts(player, cache, sourceId, 1)}");
             }
 
             // walked there on its own frames, with no seam to hop
@@ -931,7 +941,7 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
             await SeekAndLand(player, cache, primaryId, 1, 0, 1);
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, otherId, 0), 1)));
+            Eventually(player, () => Lands(LanePts(player, cache, otherId, 0), 1), () => "timed out");
 
             await AssertStepsFrameByFrame(player, cache, primaryId, 0, 1, 1, 5);
         }
@@ -963,8 +973,8 @@ namespace Prisc.VideoSDK.Tests
 
                 Assert.True(Math.Abs(player.Position.Ticks - Ticks(to + 1.0 / Fps)) <= OneFrame,
                     $"trial {trial}: playhead at {player.Position}, expected t={to + 1.0 / Fps}");
-                Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 0), to + 1.0 / Fps)),
-                    $"trial {trial}: pts={LanePts(player, cache, sourceId, 0)}, expected s{to + 1.0 / Fps}");
+                Eventually(player, () => Lands(LanePts(player, cache, sourceId, 0), to + 1.0 / Fps),
+                    () => $"trial {trial}: pts={LanePts(player, cache, sourceId, 0)}, expected s{to + 1.0 / Fps}");
             }
         }
 
@@ -1014,7 +1024,7 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
             await player.SeekAsync(new TimeSpan(Ticks(7)), SeekMode.Exact);
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 1), 32)));
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 1), 32), () => "timed out");
 
             // on its own the copy has one clip showing at the instant, so it would be lane 0: the
             // original's moment under the crop being drawn
@@ -1046,7 +1056,7 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
 
-            Assert.True(WaitUntil(() => player.VideoSeekCount((sourceId, 0, 1)) > 0), "the open never seeked the lane");
+            Eventually(player, () => player.VideoSeekCount((sourceId, 0, 1)) > 0, () => "the open never seeked the lane");
         }
 
         [Fact]
@@ -1065,7 +1075,7 @@ namespace Prisc.VideoSDK.Tests
             await player.OpenAsync(project, Options());
 
             player.Play();
-            Assert.True(WaitUntil(() => player.Position.Ticks >= Ticks(1)), $"pos={player.Position}");
+            Eventually(player, () => player.Position.Ticks >= Ticks(1), () => $"pos={player.Position}");
 
             Assert.Equal(0, player.VideoSeekCount(lane0));
             Assert.Equal(0, player.VideoSeekCount(lane1));
@@ -1089,7 +1099,7 @@ namespace Prisc.VideoSDK.Tests
             await player.OpenAsync(project, Options());
 
             player.Play();
-            Assert.True(WaitUntil(() => player.Position.Ticks >= Ticks(2.5)), $"pos={player.Position}");
+            Eventually(player, () => player.Position.Ticks >= Ticks(2.5), () => $"pos={player.Position}");
 
             Assert.False(player.VideoDemuxAtEof(lane1), "the idle lane read on to the end of the file");
 
@@ -1120,21 +1130,21 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
             await player.SeekAsync(new TimeSpan(Ticks(0.2)), SeekMode.Exact);
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 0), 0.2)));
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 0), 0.2), () => "timed out");
             int seeks = player.VideoSeekCount(lane0);
 
             player.Play();
-            Assert.True(WaitUntil(() => player.Position.Ticks >= Ticks(0.95)), $"pos={player.Position}");
+            Eventually(player, () => player.Position.Ticks >= Ticks(0.95), () => $"pos={player.Position}");
             player.GetStatistics(); // restarts the interval
 
-            Assert.True(WaitUntil(() => player.Position.Ticks >= Ticks(1.7)), $"pos={player.Position}");
+            Eventually(player, () => player.Position.Ticks >= Ticks(1.7), () => $"pos={player.Position}");
             long decoded = player.GetStatistics().Video[0].DecodedInInterval;
             Assert.True(decoded >= 15, $"lane 0 stood still in the gap: {decoded} frames decoded");
 
-            Assert.True(WaitUntil(() => player.Position.Ticks >= Ticks(2.5)), $"pos={player.Position}");
+            Eventually(player, () => player.Position.Ticks >= Ticks(2.5), () => $"pos={player.Position}");
             Assert.Equal(seeks, player.VideoSeekCount(lane0));
-            Assert.True(WaitUntil(() => LanePts(player, cache, sourceId, 0) >= Ticks(2)),
-                $"pts={LanePts(player, cache, sourceId, 0)}");
+            Eventually(player, () => LanePts(player, cache, sourceId, 0) >= Ticks(2),
+                () => $"pts={LanePts(player, cache, sourceId, 0)}");
         }
 
         [Fact]
@@ -1159,17 +1169,17 @@ namespace Prisc.VideoSDK.Tests
             using var player = new CompositionPlayer();
             await player.OpenAsync(project, Options());
 
-            Assert.True(WaitUntil(() => LanePts(player, cache, sourceId, 1) is not null));
+            Eventually(player, () => LanePts(player, cache, sourceId, 1) is not null, () => "timed out");
             int seeks = player.VideoSeekCount(lane1);
 
             player.Play();
-            Assert.True(WaitUntil(() => player.VideoSeekCount(lane1) > seeks), "entering the first clip did not hop");
+            Eventually(player, () => player.VideoSeekCount(lane1) > seeks, () => "entering the first clip did not hop");
 
-            Assert.True(WaitUntil(() => player.Position.Ticks >= Ticks(2.5)), $"pos={player.Position}");
+            Eventually(player, () => player.Position.Ticks >= Ticks(2.5), () => $"pos={player.Position}");
             int afterFirst = player.VideoSeekCount(lane1);
-            Assert.True(WaitUntil(() => player.VideoSeekCount(lane1) > afterFirst), "entering the second clip did not hop");
-            Assert.True(WaitUntil(() => LanePts(player, cache, sourceId, 1) >= Ticks(7)),
-                $"pts={LanePts(player, cache, sourceId, 1)}");
+            Eventually(player, () => player.VideoSeekCount(lane1) > afterFirst, () => "entering the second clip did not hop");
+            Eventually(player, () => LanePts(player, cache, sourceId, 1) >= Ticks(7),
+                () => $"pts={LanePts(player, cache, sourceId, 1)}");
         }
 
         // -------------------------------------------------------------------------- live edits
@@ -1193,8 +1203,8 @@ namespace Prisc.VideoSDK.Tests
             paste.TimelineStartTicks = Ticks(1);
             await player.UpdateProject(project);
             Assert.Equal(3, player.DecoderOpenCount);
-            Assert.True(WaitUntil(() => Lands(LanePts(player, cache, sourceId, 1), 6)),
-                $"the new lane presented nothing: pts={LanePts(player, cache, sourceId, 1)}");
+            Eventually(player, () => Lands(LanePts(player, cache, sourceId, 1), 6),
+                () => $"the new lane presented nothing: pts={LanePts(player, cache, sourceId, 1)}");
 
             // moving within the overlap keeps the same lanes: the mapping swaps, synchronously
             paste.TimelineStartTicks = Ticks(1.5);
@@ -1232,14 +1242,14 @@ namespace Prisc.VideoSDK.Tests
                 await player.OpenAsync(project, new VideoOpenOptions { EnableHardwareDecode = false, SidecarCacheDir = cacheDir });
                 Assert.Equal(4, player.DecoderOpenCount); // a frame pipe and a matte pipe per lane
 
-                Assert.True(WaitUntil(() =>
+                Eventually(player, () =>
                 {
                     player.TryGetFrameSource(out var source, out _);
                     source.Pump(cache);
                     return cache.TryGetMask(sourceId, 0, out _, out long mask0)
                         && cache.TryGetMask(sourceId, 0, out _, out long mask1, lane: 1)
                         && mask0 != mask1; // the lane 1 matte tracks its own clip's source time
-                }), "each lane should hold a matte of its own");
+                }, () => "each lane should hold a matte of its own");
             }
             finally
             {
@@ -1306,14 +1316,14 @@ namespace Prisc.VideoSDK.Tests
             await player.OpenAsync(project, Options());
             await player.SeekAsync(new TimeSpan(Ticks(at)), SeekMode.Exact);
             (byte Left, byte Right) previewed = default;
-            Assert.True(WaitUntil(() =>
+            Eventually(player, () =>
             {
                 player.TryGetFrameSource(out var source, out _);
                 source.Pump(previewCache);
                 FrameComposer.Compose(project, Ticks(at), source, previewSurface.Canvas, W, H);
                 previewed = GraysOf(factory, previewSurface);
                 return Math.Abs(previewed.Left - rendered.Left) <= 6 && Math.Abs(previewed.Right - rendered.Right) <= 6;
-            }, 8000), $"at t={at}: rendered {rendered}, previewed {previewed}");
+            }, () => $"at t={at}: rendered {rendered}, previewed {previewed}", timeoutMs: 8000);
         }
     }
 }

@@ -57,6 +57,10 @@ namespace Prisc.VideoSDK.Playback
 
         public bool IsEof => _eofReached;
 
+        /// <summary>One line of read-thread state for a failing test to print (diagnostic).</summary>
+        internal string Describe()
+            => $"demux(alive={_thread?.IsAlive}, running={_running}, seekRequested={_seekRequested}, eof={_eofReached})";
+
         public MediaInfo Open(string path)
         {
             FFmpegLoader.EnsureInitialized();
