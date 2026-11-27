@@ -44,8 +44,9 @@ namespace Prisc.UI.Services
         /// until <see cref="Start"/>.
         /// </summary>
         /// <param name="deviceId">The device to open.</param>
-        /// <param name="bufferMs">How much audio each <see cref="DataAvailable"/> buffer should
-        /// hold, roughly; a backend may round it to what the device does.</param>
+        /// <param name="bufferMs">The backend's buffer length. On macOS each
+        /// <see cref="DataAvailable"/> buffer holds roughly this much audio; WASAPI delivers one
+        /// device packet at a time, usually much less.</param>
         /// <exception cref="Exception">The device could not be opened or its format cannot be
         /// decoded. Nothing is left open when this throws.</exception>
         public static MicCapture Open(string deviceId, int bufferMs)
@@ -79,9 +80,10 @@ namespace Prisc.UI.Services
             _ => 4,
         };
 
-        /// <summary>A captured buffer: this capture, the bytes, and how many of them are
-        /// valid. Raised on the capture thread.</summary>
-        public event Action<MicCapture, byte[], int> DataAvailable;
+        /// <summary>A captured buffer: this capture and its bytes, interleaved in the format above.
+        /// Raised on the capture thread; the span is the backend's own buffer and is only valid
+        /// until the handler returns.</summary>
+        public event Action<MicCapture, ReadOnlySpan<byte>> DataAvailable;
 
         /// <summary>Capture ended on its own (see the class remarks). The exception is the
         /// backend's, or null when a caller asked for the stop.</summary>
@@ -101,7 +103,7 @@ namespace Prisc.UI.Services
         /// returns.</summary>
         public abstract void Dispose();
 
-        protected void RaiseDataAvailable(byte[] buffer, int bytes) => DataAvailable?.Invoke(this, buffer, bytes);
+        protected void RaiseDataAvailable(ReadOnlySpan<byte> buffer) => DataAvailable?.Invoke(this, buffer);
 
         protected void RaiseStopped(Exception error) => Stopped?.Invoke(this, error);
     }
