@@ -110,18 +110,16 @@ namespace Prisc
         }
 
         /// <summary>
-        /// Reconciles both halves of the "Upload with Prisc" shell entry — the classic Explorer
-        /// verb and the Win11 sparse package — with the settings that decide whether it should
-        /// exist (<see cref="SettingsRoot.ShouldRegisterExplorerContextMenu"/>: the checkbox on the
+        /// Reconciles the "Upload with Prisc" shell entry — the Win11 sparse package, the only kind
+        /// Prisc registers — with the settings that decide whether it should exist (<see cref="SettingsRoot.ShouldRegisterExplorerContextMenu"/>: the checkbox on the
         /// Uploads page, and uploads being on at all).
         /// </summary>
-        /// <remarks>Sync rather than TrySetEnabled on both, so a call that changes nothing (uploads
-        /// switched off while the entry was never registered) does no work; the sparse half shells
-        /// out to PowerShell (seconds, not milliseconds) and so always runs off the UI thread.</remarks>
+        /// <remarks>Sync rather than TrySetEnabled, so a call that changes nothing (uploads switched
+        /// off while the entry was never registered) does no work; it shells out to PowerShell
+        /// (seconds, not milliseconds) and so always runs off the UI thread.</remarks>
         private static void SyncExplorerContextMenu()
         {
             var enabled = SettingsRoot.Current.ShouldRegisterExplorerContextMenu;
-            ExplorerContextMenuManager.Sync(enabled);
             _ = Task.Run(() => SparsePackageManager.Sync(enabled));
         }
 
@@ -242,6 +240,7 @@ namespace Prisc
                 // the saved settings are the source of truth for the shell registrations; reconcile
                 // them with the OS once at startup, then follow whenever the user toggles a checkbox.
                 AutoStartManager.Sync(SettingsRoot.Current.General.RegisterAutoStart);
+                ClassicContextMenuCleanup.Run();
                 SyncExplorerContextMenu();
 
                 // warm the camera list so the first picker to open has one without waiting. Cheap

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -11,10 +11,11 @@ namespace Prisc.UI.Legacy;
 
 /// <summary>
 /// Removes the OS registrations a pre-rename install left behind: on Windows the Run value, the
-/// classic Explorer verbs, the Task Manager startup state (carried over to the new name), the
-/// sparse MSIX package and its extension DLLs; on macOS the LaunchAgent plist. Every name comes
+/// Task Manager startup state (carried over to the new name), the sparse MSIX package and its
+/// extension DLLs; on macOS the LaunchAgent plist. (Its classic Explorer verbs go with every other
+/// classic verb, in <see cref="ClassicContextMenuCleanup"/>.) Every name comes
 /// from <see cref="LegacyClowd"/>. Release builds touch only the release names and Debug builds
-/// only the <c>.DEBUG</c> ones, the same split as <see cref="AutoStartManager"/>.
+/// only the <c>.DEBUG</c> ones, the same split as <c>SettingsService.FilePath</c>.
 ///
 /// Nothing here runs while another install still lives under the old name beside this one, not
 /// yet updated or upgraded in place (<see cref="HasSeparateLegacyInstall"/>): the legacy
@@ -25,7 +26,6 @@ public static class LegacyClowdShellCleanup
 {
     private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string StartupApprovedRunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
-    private static readonly string[] VerbShellPaths = { @"Software\Classes\*\shell", @"Software\Classes\Directory\shell" };
 
 #if DEBUG
     private const string LegacyRegistryName = LegacyClowd.RegistryNameDebug;
@@ -76,7 +76,7 @@ public static class LegacyClowdShellCleanup
     }
 
     /// <summary>
-    /// Windows: deletes the legacy Run value and Explorer verb keys, and moves the legacy Task
+    /// Windows: deletes the legacy Run value, and moves the legacy Task
     /// Manager startup state (<c>StartupApproved\Run</c>, keyed by the Run value name) to the new
     /// name unless the new name already has one, so a user who disabled the old app in Task
     /// Manager does not find the new one starting at login. Fast; call it synchronously before
@@ -118,23 +118,6 @@ public static class LegacyClowdShellCleanup
         catch (Exception ex)
         {
             Log("could not remove the legacy Run value: " + ex.Message);
-        }
-
-        foreach (var shellPath in VerbShellPaths)
-        {
-            try
-            {
-                using var shell = Registry.CurrentUser.OpenSubKey(shellPath, writable: true);
-                if (shell != null && shell.GetSubKeyNames().Contains(LegacyRegistryName, StringComparer.OrdinalIgnoreCase))
-                {
-                    shell.DeleteSubKeyTree(LegacyRegistryName, throwOnMissingSubKey: false);
-                    Log("removed the legacy verb under " + shellPath);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log("could not remove the legacy verb under " + shellPath + ": " + ex.Message);
-            }
         }
 
         try

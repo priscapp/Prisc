@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.Versioning;
@@ -24,20 +24,24 @@ namespace Prisc.UI
     /// defaults to off and registration happens after the fact when the user ticks the box. Writing
     /// (or deleting) the plist takes effect at the next login; we deliberately don't
     /// <c>launchctl load</c> it, since RunAtLoad would immediately spawn a second Prisc.
+    ///
+    /// Only a Release build that is installed (<see cref="IsSupported"/>) registers anything, so a
+    /// dev or portable build can never touch the login item an installed copy owns. Earlier Debug
+    /// builds registered their own under a <c>.DEBUG</c> name; every build removes those
+    /// (<see cref="RemoveDebugLeftovers"/>).
     /// </summary>
     internal static class AutoStartManager
     {
         private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        private const string StartupApprovedRunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
 
-        // debug builds register under their own name so running from the IDE cannot overwrite (or
-        // delete) the login item belonging to a real install — same split as SettingsService.FilePath.
-#if DEBUG
-        private const string RunValueName = Constants.PriscAppName + ".DEBUG";
-        private const string LaunchAgentLabel = "com.prisc.Prisc.DEBUG";
-#else
         private const string RunValueName = Constants.PriscAppName;
         private const string LaunchAgentLabel = "com.prisc.Prisc";
-#endif
+
+        /// <summary>The Run value names and LaunchAgent labels Debug builds registered, before and
+        /// after the rename.</summary>
+        private static readonly string[] DebugRunValueNames = { Constants.PriscAppName + ".DEBUG", Prisc.Legacy.LegacyClowd.RegistryNameDebug };
+        private static readonly string[] DebugLaunchAgentLabels = { LaunchAgentLabel + ".DEBUG", Prisc.Legacy.LegacyClowd.LaunchAgentLabelDebug };
 
         /// <summary>Raised after every <see cref="TrySetEnabled"/>, so the settings page can show
         /// <see cref="LastError"/> when registration failed.</summary>
@@ -46,7 +50,15 @@ namespace Prisc.UI
         /// <summary>The error from the most recent failed apply, or null if the last one worked.</summary>
         public static string LastError { get; private set; }
 
-        public static bool IsSupported => OperatingSystem.IsWindows() || OperatingSystem.IsMacOS();
+        /// <summary>Windows or macOS, a Release build, and installed (a Velopack install root, on
+        /// macOS the <c>.app</c> bundle). A dev or portable build has nothing that should start at
+        /// login, and must leave the installed copy's login item alone.</summary>
+        public static bool IsSupported =>
+#if DEBUG
+            false;
+#else
+            (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()) && PathConstants.VelopackInstallRoot != null;
+#endif
 
         /// <summary>Whether the OS is currently configured to launch Prisc at login. Returns false
         /// (rather than throwing) if the state can't be read.</summary>
@@ -77,7 +89,7 @@ namespace Prisc.UI
             try
             {
                 if (!IsSupported)
-                    throw new PlatformNotSupportedException("Starting Prisc at login is not supported on this platform.");
+                    throw new PlatformNotSupportedException("Starting Prisc at login is only available in an installed copy of Prisc.");
 
                 if (OperatingSystem.IsWindows())
                     SetEnabledWindows(enabled);
@@ -103,14 +115,59 @@ namespace Prisc.UI
         /// <summary>Reconciles the OS state with the saved setting at startup — the setting is the
         /// source of truth, so this repairs a login item removed behind Prisc's back (or left behind
         /// by an install whose setting was later turned off). Rewrites rather than merely checking
-        /// presence when enabled, so an entry pointing at a stale executable path repairs itself.</summary>
+        /// presence when enabled, so an entry pointing at a stale executable path repairs itself.
+        /// Every build, supported or not, also removes <see cref="RemoveDebugLeftovers"/>.</summary>
         public static void Sync(bool enabled)
         {
+            RemoveDebugLeftovers();
+
             if (!IsSupported)
                 return;
 
             if (enabled || IsEnabled())
                 TrySetEnabled(enabled);
+        }
+
+        /// <summary>Deletes the login items earlier Debug builds registered (<see cref="DebugRunValueNames"/>
+        /// with their Task Manager startup state, <see cref="DebugLaunchAgentLabels"/>). None of
+        /// them is the installed copy's, so any build may. Never throws.</summary>
+        private static void RemoveDebugLeftovers()
+        {
+            try
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    foreach (var keyPath in new[] { RunKeyPath, StartupApprovedRunKeyPath })
+                    {
+                        using var key = Registry.CurrentUser.OpenSubKey(keyPath, true);
+                        foreach (var name in DebugRunValueNames)
+                        {
+                            if (key?.GetValue(name) == null)
+                                continue;
+
+                            key.DeleteValue(name, false);
+                            AppLog.Info("AutoStartManager: removed the " + name + " value under " + keyPath);
+                        }
+                    }
+                }
+                else if (OperatingSystem.IsMacOS())
+                {
+                    foreach (var label in DebugLaunchAgentLabels)
+                    {
+                        var path = GetLaunchAgentPath(label);
+                        if (!File.Exists(path))
+                            continue;
+
+                        File.Delete(path);
+                        AppLog.Info("AutoStartManager: deleted " + path);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("AutoStartManager: failed to remove Debug login items: " + ex);
+                SentryConfig.CaptureHandled(ex, "shellreg.remove-debug-autostart");
+            }
         }
 
         [SupportedOSPlatform("windows")]
@@ -174,9 +231,9 @@ namespace Prisc.UI
             File.WriteAllText(path, plist);
         }
 
-        private static string GetLaunchAgentPath() =>
+        private static string GetLaunchAgentPath(string label = LaunchAgentLabel) =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                "Library", "LaunchAgents", LaunchAgentLabel + ".plist");
+                "Library", "LaunchAgents", label + ".plist");
 
         /// <summary>The <c>.app</c> bundle to hand to <c>open -a</c>, found by walking up from the
         /// running executable (<c>Prisc.app/Contents/MacOS/Prisc.Ui</c>).</summary>
@@ -191,7 +248,7 @@ namespace Prisc.UI
                     return dir;
             }
 
-            // not running from a bundle (dev build) — launchd can exec the binary directly.
+            // not running from a bundle — launchd can exec the binary directly.
             return exePath;
         }
     }

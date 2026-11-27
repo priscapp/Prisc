@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Xunit;
 
 namespace Prisc.Shared.Tests
@@ -46,6 +46,33 @@ namespace Prisc.Shared.Tests
         {
             Assert.Empty(CliArgs.ExtractUploadPaths(null));
             Assert.Empty(CliArgs.ExtractUploadPaths(Array.Empty<string>()));
+        }
+
+        [Fact]
+        public void UploadVerbCommand_YieldsTheQuotedExecutable()
+        {
+            // the shape earlier builds registered; profile paths routinely contain spaces
+            var exe = @"C:\Users\Some One\AppData\Local\Prisc\current\Prisc.Ui.exe";
+            Assert.Equal(exe, CliArgs.ParseUploadVerbExecutable("\"" + exe + "\" upload \"%1\""));
+        }
+
+        [Fact]
+        public void UploadVerbCommand_AcceptsAnUnquotedPath()
+        {
+            Assert.Equal(@"C:\Prisc\Prisc.Ui.exe", CliArgs.ParseUploadVerbExecutable(@"C:\Prisc\Prisc.Ui.exe upload ""%1"""));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("\"C:\\Prisc\\Prisc.Ui.exe\"")]
+        [InlineData("\"C:\\Prisc\\Prisc.Ui.exe\" \"%1\"")]
+        [InlineData("\"C:\\Prisc\\Prisc.Ui.exe\" upload \"%1\" --other")]
+        [InlineData("\"C:\\Prisc\\Prisc.Ui.exe upload \"%1\"")]
+        [InlineData("\"\" upload \"%1\"")]
+        public void UploadVerbCommand_RejectsOtherCommands(string command)
+        {
+            Assert.Null(CliArgs.ParseUploadVerbExecutable(command));
         }
     }
 }

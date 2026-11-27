@@ -12,13 +12,14 @@ namespace Prisc.UI
     /// (<see cref="Prisc.Config.SettingsGeneral.RegisterExplorerContextMenu"/>, gated on uploads
     /// being on at all — see <see cref="Prisc.Config.SettingsRoot.ShouldRegisterExplorerContextMenu"/>).
     ///
-    /// Windows 11 only shows packaged apps in its compact right-click menu, so alongside the
-    /// legacy registry verb (<see cref="ExplorerContextMenuManager"/>, which Win11 files under
-    /// "Show more options") this registers a sparse MSIX package: an unpackaged manifest-only
-    /// package whose ExternalLocation points at the Velopack install root, declaring the
-    /// IExplorerCommand COM server in <c>prisc_shell_ext.dll</c>. Both registrations are driven by
-    /// the same setting; on Windows 10 and in dev builds this manager is simply unsupported and
-    /// every operation is a quiet no-op.
+    /// Windows 11 only shows packaged apps in its compact right-click menu, so this registers a
+    /// sparse MSIX package: an unpackaged manifest-only package whose ExternalLocation points at the
+    /// Velopack install root, declaring the IExplorerCommand COM server in <c>prisc_shell_ext.dll</c>.
+    /// This is the only kind of entry Prisc registers: Explorer lists a packaged command under
+    /// "Show more options" too, so the classic registry verb earlier builds wrote would only
+    /// duplicate it there (<see cref="ClassicContextMenuCleanup"/> removes those). On Windows 10
+    /// and in dev builds this manager is simply unsupported, every operation is a quiet no-op, and
+    /// there is no Explorer entry at all.
     ///
     /// Registration goes through <c>powershell.exe</c> (Add-AppxPackage/Get-AppxPackage): the
     /// plain net10.0 TFM has no WinRT projection for the PackageManager API, and shelling out
@@ -156,7 +157,7 @@ namespace Prisc.UI
                     return false;
 
                 // Win10, dev builds and loose builds quietly do nothing rather than error — the
-                // legacy registry verb already covers those machines.
+                // settings page hides the checkbox on those machines.
                 if (!IsSupported)
                     return false;
 

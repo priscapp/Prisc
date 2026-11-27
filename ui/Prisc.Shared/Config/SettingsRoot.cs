@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Text.Json.Serialization;
 
 namespace Prisc.Config
@@ -36,10 +36,10 @@ namespace Prisc.Config
         public SettingsUpload Uploads { get; set; } = new SettingsUpload();
 
         /// <summary>
-        /// Whether the "Upload with Prisc" shell entries (the Explorer verb and the Win11 sparse
-        /// package) should be registered right now.
+        /// Whether the "Upload with Prisc" shell entry (the Win11 sparse package) should be
+        /// registered right now.
         /// <see cref="SettingsGeneral.RegisterExplorerContextMenu"/> is the user's preference, but
-        /// the verb does nothing except start an upload, so with uploads off it would offer a
+        /// the entry does nothing except start an upload, so with uploads off it would offer a
         /// feature that is turned off — every other upload entry point disappears in that state,
         /// and this one has to as well.
         /// </summary>

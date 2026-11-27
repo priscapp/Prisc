@@ -300,7 +300,9 @@ namespace Prisc.UI.Pages
             if (!AutoStartManager.IsSupported)
             {
                 AutoStartCheck.IsEnabled = false;
-                AutoStartStatusText.Text = "Starting Prisc at login is not supported on this platform.";
+                AutoStartStatusText.Text = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+                    ? "Starting Prisc at login is only available in an installed copy of Prisc."
+                    : "Starting Prisc at login is not supported on this platform.";
                 AutoStartStatusText.IsVisible = true;
                 return;
             }

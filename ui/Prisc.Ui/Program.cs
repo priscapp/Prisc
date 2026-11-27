@@ -75,7 +75,6 @@ namespace Prisc
                     .OnAfterInstallFastCallback(_ =>
                     {
                         AutoStartManager.TrySetEnabled(true);
-                        ExplorerContextMenuManager.TrySetEnabled(true);
                         SparsePackageManager.TrySetEnabled(true);
                     })
                     // the sparse package embeds the app version, so every update has to re-register
@@ -85,7 +84,7 @@ namespace Prisc
                     // turned these off (a corrupt file falls back to the same defaults install uses).
                     .OnAfterUpdateFastCallback(_ =>
                     {
-                        // an update from the pre-rename app leaves its Run value and verbs behind
+                        // an update from the pre-rename app leaves its Run value behind
                         LegacyClowdShellCleanup.RunRegistryCleanup();
 
                         // also copies the pre-rename settings forward (SettingsService.Load())
@@ -97,9 +96,8 @@ namespace Prisc
 
                         // the shell entry also goes away when uploads are off, so the update has to
                         // ask the same combined question the running app does.
-                        var contextMenu = settings.ShouldRegisterExplorerContextMenu;
-                        ExplorerContextMenuManager.Sync(contextMenu);
-                        SparsePackageManager.Sync(contextMenu);
+                        ClassicContextMenuCleanup.Run();
+                        SparsePackageManager.Sync(settings.ShouldRegisterExplorerContextMenu);
 
                         // last: it spawns PowerShell, and the hook is killed after 15s, which must
                         // never cost the registrations above. Startup retries whatever it misses.
@@ -110,7 +108,7 @@ namespace Prisc
                     .OnBeforeUninstallFastCallback(_ =>
                     {
                         AutoStartManager.TrySetEnabled(false);
-                        ExplorerContextMenuManager.TrySetEnabled(false);
+                        ClassicContextMenuCleanup.Run();
                         SparsePackageManager.TrySetEnabled(false);
                         LegacyClowdShellCleanup.RunRegistryCleanup();
                         LegacyClowdShellCleanup.RunPackageCleanup();

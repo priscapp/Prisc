@@ -118,7 +118,7 @@
 
                         <!-- The shell entry only ever starts an upload, so it belongs to this page and is
                              torn down with it: the whole Body is hidden while uploads are off, and App
-                             unregisters the verb at the same time (SettingsRoot.ShouldRegisterExplorerContextMenu).
+                             unregisters the entry at the same time (SettingsRoot.ShouldRegisterExplorerContextMenu).
                              Bound in code-behind — the checkbox reads SettingsGeneral, not this page's
                              DataContext. -->
                         <StackPanel Classes="Setting">

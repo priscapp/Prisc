@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using Avalonia.Media;
@@ -138,7 +138,7 @@ namespace Prisc.Config
         /// Default for <see cref="RegisterAutoStart"/>.
         /// On Windows the Velopack install hook registers the login item at install time, so a fresh
         /// install is already auto-starting; elsewhere the user has to opt in. Debug builds are never
-        /// installed, so they don't default to registering their bin directory to run at login.
+        /// installed and cannot register a login item at all (AutoStartManager.IsSupported).
         /// </summary>
         public static bool DefaultRegisterAutoStart { get; } =
 #if DEBUG
@@ -157,8 +157,8 @@ namespace Prisc.Config
 
         /// <summary>
         /// Default for <see cref="RegisterExplorerContextMenu"/>. Windows-only, and never in debug
-        /// builds — which are not installed, so registering a verb pointing into a bin directory
-        /// would put a stale entry in the developer's own Explorer menu.
+        /// builds — which are not installed, so they cannot register the sparse package the entry
+        /// needs anyway.
         /// </summary>
         public static bool DefaultRegisterExplorerContextMenu { get; } =
 #if DEBUG

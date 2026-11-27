@@ -65,7 +65,7 @@ namespace Prisc.UI.Pages
         /// App drops the registration itself so the entry leaves Explorer too.
         /// </summary>
         /// <remarks>Same shape as the auto-start checkbox: the box writes the setting, App applies
-        /// it to the registry, and this reports back only when that failed.</remarks>
+        /// it (registers the sparse package), and this reports back only when that failed.</remarks>
         private void InitializeContextMenu()
         {
             // the setting still lives in SettingsGeneral (that is where it is persisted), so the
@@ -77,7 +77,7 @@ namespace Prisc.UI.Pages
                                       Mode = BindingMode.TwoWay,
                                   });
 
-            if (!ExplorerContextMenuManager.IsSupported)
+            if (!OperatingSystem.IsWindows())
             {
                 // macOS: the Finder service is declared in Info.plist and enabled by the OS by
                 // default (NSRequiredContext); its on/off switch is system-managed, so there is
@@ -89,16 +89,25 @@ namespace Prisc.UI.Pages
                 return;
             }
 
+            if (!SparsePackageManager.IsSupported)
+            {
+                // the entry is only ever the Win11 sparse package (the classic verb is gone, see
+                // ClassicContextMenuCleanup), which Windows 10 and loose or dev builds cannot have
+                ContextMenuCheck.IsVisible = false;
+                ContextMenuCaption.Text = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)
+                    ? "The 'Upload with Prisc' Explorer entry is only available in an installed copy of Prisc."
+                    : "The 'Upload with Prisc' Explorer entry needs Windows 11.";
+                return;
+            }
+
             AttachedToVisualTree += (s, e) =>
             {
-                ExplorerContextMenuManager.StateChanged += OnContextMenuStateChanged;
                 SparsePackageManager.StateChanged += OnContextMenuStateChanged;
                 ShowContextMenuCaption();
             };
 
             DetachedFromVisualTree += (s, e) =>
             {
-                ExplorerContextMenuManager.StateChanged -= OnContextMenuStateChanged;
                 SparsePackageManager.StateChanged -= OnContextMenuStateChanged;
             };
         }
@@ -124,28 +133,11 @@ namespace Prisc.UI.Pages
 
         private void ShowContextMenuCaption()
         {
-            // either half failing wins over any hint: a stale checkbox that silently does nothing
-            // is worse than no checkbox.
-            if ((ExplorerContextMenuManager.LastError ?? SparsePackageManager.LastError) is { } err)
-            {
-                ContextMenuCaption.Text = "Could not change the context menu setting: " + err;
-                return;
-            }
-
-            // on Win11 the sparse MSIX package puts the entry in the compact menu; LastKnownIsEnabled
-            // is the cached registration state (reading the real one shells out to PowerShell, which
-            // has no place on the UI thread) and StateChanged re-renders this when it settles.
-            if (SparsePackageManager.LastKnownIsEnabled)
-            {
-                ContextMenuCaption.Text = "Appears when you right-click a file or folder.";
-                return;
-            }
-
-            // Windows 11 reserves its compact menu for packaged apps and pushes classic verbs like
-            // this one into the overflow, so say where to actually look for it.
-            ContextMenuCaption.Text = OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)
-                ? "Right-click a file or folder and choose \"Show more options\" to find it."
-                : "Right-click a file or folder to find it.";
+            // a failed registration wins over the hint: a checkbox that silently does nothing is
+            // worse than no checkbox.
+            ContextMenuCaption.Text = SparsePackageManager.LastError is { } err
+                ? "Could not change the context menu setting: " + err
+                : "Appears when you right-click a file or folder.";
         }
 
         public Control HeaderContent => _transferBar;
