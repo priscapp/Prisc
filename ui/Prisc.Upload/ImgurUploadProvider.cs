@@ -36,7 +36,7 @@ namespace Prisc.Upload
                 { "type", "file" }
             };
 
-            var json = await SendFileAsFormData("https://api.imgur.com/3/upload", fileStream, "image", progress, uploadName, args, auth: auth);
+            var json = await SendFileAsFormData("https://api.imgur.com/3/upload", fileStream, "image", progress, uploadName, args, auth: auth, cancelToken: cancelToken);
             var parsed = JsonSerializer.Deserialize(json, UploadJsonContext.Default.ImgurApiResponse);
             if (!parsed.success)
                 throw new Exception("Failed to upload file: " + parsed.status);

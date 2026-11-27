@@ -135,6 +135,22 @@ namespace Prisc
         public virtual Task DeleteAsync(UploadDeleteInfo info, CancellationToken cancelToken)
             => throw new NotSupportedException($"{Name} does not support deleting uploads.");
 
+        /// <summary>Error bodies are shown to the user; a WAF / proxy error page is kilobytes of
+        /// inline css and svg, so an HTML body is reduced to its &lt;title&gt;.</summary>
+        public static string SummarizeErrorBody(string body)
+        {
+            if (String.IsNullOrWhiteSpace(body))
+                return "(empty response)";
+
+            var trimmed = body.TrimStart();
+            if (!trimmed.StartsWith("<", StringComparison.Ordinal))
+                return body.Length > 2000 ? body.Substring(0, 2000) + "…" : body;
+
+            var m = System.Text.RegularExpressions.Regex.Match(body, @"<title[^>]*>\s*(.*?)\s*</title>",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+            return m.Success ? $"(HTML error page: {System.Net.WebUtility.HtmlDecode(m.Groups[1].Value)})" : "(HTML error page)";
+        }
+
         protected HttpClient GetHttpClient(
             TimeSpan timeout, UploadProgressHandler progress = null, string accept = "application/json",
             AuthenticationHeaderValue auth = null)
@@ -164,7 +180,7 @@ namespace Prisc
         protected async Task<string> SendFileAsFormData(
             string url, Stream fileStream, string formName, UploadProgressHandler progress, string fileName = null,
             Dictionary<string, string> otherFields = null, HttpMethod method = null, string accept = "application/json",
-            TimeSpan? timeout = null, AuthenticationHeaderValue auth = null)
+            TimeSpan? timeout = null, AuthenticationHeaderValue auth = null, CancellationToken cancelToken = default)
         {
             method ??= HttpMethod.Post;
             otherFields ??= new Dictionary<string, string>();
@@ -192,18 +208,19 @@ namespace Prisc
             };
 
             using var http = GetHttpClient(timeout.Value, progress, accept, auth);
-            using var resp = await http.SendAsync(req);
-            var str = await resp.Content.ReadAsStringAsync();
+            using var resp = await http.SendAsync(req, cancelToken);
+            var str = await resp.Content.ReadAsStringAsync(cancelToken);
 
             if (!resp.IsSuccessStatusCode)
-                throw new Exception($"Send form data failed (error {resp.StatusCode}){Environment.NewLine}{str}");
+                throw new Exception($"Send form data failed (error {resp.StatusCode}){Environment.NewLine}{SummarizeErrorBody(str)}");
 
             return str;
         }
 
         protected async Task<string> SendFileAsContent(
             string url, Stream fileStream, UploadProgressHandler progress, HttpMethod method = null,
-            string accept = "application/json", TimeSpan? timeout = null, AuthenticationHeaderValue auth = null)
+            string accept = "application/json", TimeSpan? timeout = null, AuthenticationHeaderValue auth = null,
+            CancellationToken cancelToken = default)
         {
             method ??= HttpMethod.Post;
             timeout ??= TimeSpan.FromSeconds(100);
@@ -214,11 +231,11 @@ namespace Prisc
             };
 
             using var http = GetHttpClient(timeout.Value, progress, accept, auth);
-            using var resp = await http.SendAsync(req);
-            var str = await resp.Content.ReadAsStringAsync();
+            using var resp = await http.SendAsync(req, cancelToken);
+            var str = await resp.Content.ReadAsStringAsync(cancelToken);
 
             if (!resp.IsSuccessStatusCode)
-                throw new Exception($"Send form data failed (error {resp.StatusCode}){Environment.NewLine}{str}");
+                throw new Exception($"Send form data failed (error {resp.StatusCode}){Environment.NewLine}{SummarizeErrorBody(str)}");
 
             return str;
         }

@@ -51,7 +51,7 @@ namespace Prisc.Upload
         public override async Task<UploadResult> UploadAsync(Stream fileStream, UploadProgressHandler progress, string uploadName, CancellationToken cancelToken)
         {
             var url = ServerUrl.TrimEnd('/') + "/p";
-            var result = await SendFileAsContent(url + "/documents", fileStream, progress);
+            var result = await SendFileAsContent(url + "/documents", fileStream, progress, cancelToken: cancelToken);
             var resp = JsonSerializer.Deserialize(result, UploadJsonContext.Default.HasebinResponse);
 
             if (resp?.key == null)

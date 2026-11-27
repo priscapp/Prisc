@@ -57,7 +57,7 @@ namespace Prisc.Upload
 
             var bu = BaseUrl.TrimEnd('/', '\\');
             var ulu = bu + "/api/image/upload";
-            var json = await SendFileAsFormData(ulu, fileStream, "image", progress, uploadName, auth: auth);
+            var json = await SendFileAsFormData(ulu, fileStream, "image", progress, uploadName, auth: auth, cancelToken: cancelToken);
             var parsed = JsonSerializer.Deserialize(json, UploadJsonContext.Default.PicsurResponse);
             if (!parsed.success || parsed.data == null || parsed.data.id == null)
                 throw new Exception("Failed to upload file. " + (parsed?.data?.message ?? parsed.statusCode.ToString()));

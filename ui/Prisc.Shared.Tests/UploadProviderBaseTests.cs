@@ -48,6 +48,16 @@ namespace Prisc.Shared.Tests
             Assert.Equal(new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a }, provider.UploadedBytes[..8]);
         }
 
+        [Theory]
+        [InlineData("No file!", "No file!")]
+        [InlineData("", "(empty response)")]
+        [InlineData("<!doctype html><html><style>body{}</style><title>403 | Forbidden</title><svg/></html>", "(HTML error page: 403 | Forbidden)")]
+        [InlineData("<html><body>oops</body></html>", "(HTML error page)")]
+        public void SummarizeErrorBody_ReducesHtmlToTitle(string body, string expected)
+        {
+            Assert.Equal(expected, UploadProviderBase.SummarizeErrorBody(body));
+        }
+
         [Fact]
         public async Task TestAsync_MissingPublicUrl_Throws()
         {

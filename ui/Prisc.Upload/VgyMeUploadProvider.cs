@@ -36,7 +36,7 @@ namespace Prisc.Upload
                 { "userkey", UserKey }
             };
 
-            var resp = await SendFileAsFormData("https://vgy.me/upload", fileStream, "file", progress, uploadName, args);
+            var resp = await SendFileAsFormData("https://vgy.me/upload", fileStream, "file", progress, uploadName, args, cancelToken: cancelToken);
             var obj = JsonSerializer.Deserialize(resp, UploadJsonContext.Default.VgyResponse);
 
             return new UploadResult()
