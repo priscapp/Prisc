@@ -16,8 +16,9 @@ namespace Prisc.VideoSDK.Audio
     /// (enumeration is not free) and must be torn down by <see cref="IDisposable.Dispose"/>.
     /// <para>
     /// There is deliberately no volume on this interface. The device-level volume knobs are the
-    /// user's, not ours: NAudio's <c>WasapiOut.Volume</c> writes the endpoint's master scalar (the
-    /// Windows system volume) and even a per-session volume would move the app's slider in the
+    /// user's, not ours: NAudio's <c>WasapiPlayer.DeviceVolume</c> writes the endpoint's master
+    /// scalar (the Windows system volume) and even its per-session <c>Volume</c> would move the
+    /// app's slider in the
     /// volume mixer. Preview volume is a gain the sink applies to the samples instead, which is
     /// what every other player does.
     /// </para>

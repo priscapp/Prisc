@@ -1,12 +1,7 @@
 using System;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
-using NAudio.CoreAudioApi;
 using NAudio.Wave;
-
-// NAudio 3 marks WasapiOut [Obsolete] in favour of WasapiPlayer. The legacy class still ships and
-// its shared-mode path is unchanged, so it stays until playback is moved over deliberately.
-#pragma warning disable CS0618
 
 namespace Prisc.VideoSDK.Audio
 {
@@ -14,9 +9,10 @@ namespace Prisc.VideoSDK.Audio
     /// WASAPI shared-mode output. The device is created on the first <see cref="Play"/> because
     /// endpoint enumeration is not free.
     /// <para>
-    /// Nothing here touches <c>WasapiOut.Volume</c>: that property writes the endpoint's master
-    /// volume scalar, i.e. the Windows system volume, so a preview slider bound to it drags the
-    /// whole machine's volume with it. Attenuation is the sink's job (see
+    /// Nothing here touches the player's volume knobs: <c>WasapiPlayer.DeviceVolume</c> is the
+    /// endpoint's master scalar, i.e. the Windows system volume, so a preview slider bound to it
+    /// drags the whole machine's volume with it, and <c>Volume</c> is the session volume, which
+    /// moves the app's slider in the volume mixer. Attenuation is the sink's job (see
     /// <see cref="Playback.NAudioSink"/>).
     /// </para>
     /// </summary>
@@ -35,7 +31,7 @@ namespace Prisc.VideoSDK.Audio
         private WaveFormat _format;
         private AudioRenderCallback _render;
         private int _latencyMs;
-        private WasapiOut _device;
+        private WasapiPlayer _device;
         private bool _disposed;
 
         public void Initialize(int sampleRate, int channels, int latencyMs, AudioRenderCallback render)
@@ -45,8 +41,8 @@ namespace Prisc.VideoSDK.Audio
             _latencyMs = latencyMs;
         }
 
-        /// <summary>The requested latency: WasapiOut is constructed with it in shared mode and
-        /// honors it.</summary>
+        /// <summary>The requested latency: the player is built with it in shared mode and honors
+        /// it.</summary>
         public int ActualLatencyMs => _latencyMs;
 
         public void Play()
@@ -58,7 +54,12 @@ namespace Prisc.VideoSDK.Audio
 
             if (_device == null)
             {
-                _device = new WasapiOut(AudioClientShareMode.Shared, true, _latencyMs);
+                // The default render endpoint (Role.Console) with event sync, as WasapiOut had.
+                _device = new WasapiPlayerBuilder()
+                    .WithSharedMode()
+                    .WithEventSync()
+                    .WithLatency(_latencyMs)
+                    .Build();
                 _device.Init(new CallbackWaveProvider(this));
             }
 
