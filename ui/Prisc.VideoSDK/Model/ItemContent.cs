@@ -568,6 +568,13 @@ public sealed class CursorContent : InputOverlayContent
     /// what CURSORINFO reported frame by frame.</summary>
     public bool Debounce { get; set; } = true;
 
+    /// <summary>How much the recorded pointer path is smoothed, validated to 0..1: 0 (the
+    /// default, and the only behavior before the setting existed) draws the raw path, 1 the
+    /// heaviest smoothing. The path keeps time with the recording and is pinned to the raw
+    /// position around clicks and drags (<c>CursorSmoothing</c>), so it never lags the pixels it
+    /// points at nor misses what it clicks.</summary>
+    public double Smoothing { get; set; }
+
     /// <summary>One of <see cref="ClickAnimations"/>.</summary>
     public string ClickAnimation { get; set; } = "none";
 
@@ -611,6 +618,7 @@ public sealed class CursorContent : InputOverlayContent
         Variant = Variant,
         Size = Size,
         Debounce = Debounce,
+        Smoothing = Smoothing,
         ClickAnimation = ClickAnimation,
         ClickColor = ClickColor,
         FillOpacity = FillOpacity,

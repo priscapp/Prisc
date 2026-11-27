@@ -269,6 +269,8 @@ public sealed class Project
                     // negated comparisons so NaN fails the check rather than sailing through.
                     if (!(cursor.Size >= 0.25 && cursor.Size <= 5))
                         errors.Add($"Item {item.Id} has a cursor size {cursor.Size} outside 0.25..5.");
+                    if (!(cursor.Smoothing >= 0 && cursor.Smoothing <= 1))
+                        errors.Add($"Item {item.Id} has a cursor smoothing {cursor.Smoothing} outside 0..1.");
                     CheckHighlightFactor(errors, item.Id, "hold size", cursor.HoldSize);
                     CheckHighlightFactor(errors, item.Id, "click size", cursor.ClickSize);
                     CheckHighlightFactor(errors, item.Id, "animation speed", cursor.AnimationSpeed);

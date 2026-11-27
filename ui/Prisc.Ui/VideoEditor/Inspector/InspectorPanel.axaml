@@ -1993,6 +1993,23 @@
                         <CheckBox IsChecked="{Binding CursorDebounce, Mode=TwoWay}" Theme="{StaticResource InspectorCheckBox}" />
                     </DockPanel>
 
+                    <!--  the brush's streamline over the recorded path, run both ways so it keeps
+                          time with the recording and pinned back to the real pointer around
+                          clicks and drags (CursorSmoothing); 0% draws the path as recorded.  -->
+                    <DockPanel Classes="row">
+                        <Panel Classes="dot" DockPanel.Dock="Left">
+                            <controls:ResetDefaultButton CurrentValue="{Binding CursorSmoothing, Mode=TwoWay}" DefaultValue="0" />
+                        </Panel>
+                        <TextBlock Classes="label" Text="Cursor Smoothing" />
+                        <controls:ThemedSpinner
+                            DisplayScale="100"
+                            Max="1"
+                            Min="0"
+                            SpinAmount="0.05"
+                            Suffix="%"
+                            Value="{Binding CursorSmoothing, Mode=TwoWay}" />
+                    </DockPanel>
+
                     <DockPanel Margin="0,8,0,0">
                         <TextBlock Classes="section" Text="CURSOR" />
                         <Rectangle Classes="sectionRule" />

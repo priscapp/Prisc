@@ -278,11 +278,14 @@ namespace Prisc.VideoSDK.Composition
         /// <c>AnimationSpeed</c> scale the held dot, the sweep/radius and the clock respectively.
         /// Drawn beneath the glyph/sprite — callers invoke this first. The <c>press</c> mode draws
         /// nothing here: it is a warp of the screen pixels, drawn by <see cref="DrawPressWarp"/>
-        /// before this runs.
+        /// before this runs. <paramref name="pointerX"/>/<paramref name="pointerY"/> are where the
+        /// pointer is drawn (region-relative source px — the row's own position, or the smoothed
+        /// one); the release bursts draw at their events' raw positions, which the smoothing is
+        /// pinned to around every click.
         /// </summary>
         internal static void DrawClickAnimations(SKCanvas target, InputCapture capture,
-            in PictureMapping map, in InputFrame row, double sourceMs, double speed,
-            CursorContent cursor, double monitorScale, double opacity)
+            in PictureMapping map, in InputFrame row, double pointerX, double pointerY,
+            double sourceMs, double speed, CursorContent cursor, double monitorScale, double opacity)
         {
             if (cursor == null)
                 return;
@@ -307,7 +310,7 @@ namespace Prisc.VideoSDK.Composition
 
                 float radius = (float)(ClickHighlight.RingRadiusDip
                     * ClickHighlight.Factor(cursor.ClickSize) * scale * monitorScale * map.ScaleX);
-                var pos = map.Map(row.X - header.RegionX, row.Y - header.RegionY);
+                var pos = map.Map(pointerX, pointerY);
 
                 double fill = ClickHighlight.Clamp01(cursor.FillOpacity) * (color.Alpha / 255.0) * opacity;
                 if (fill > 0)
@@ -332,7 +335,7 @@ namespace Prisc.VideoSDK.Composition
                     * monitorScale * map.ScaleX);
                 double heldAlpha = ClickHighlight.MaxOpacity * (color.Alpha / 255.0) * opacity;
                 paint.Color = color.WithAlpha(FrameComposer.AlphaByte(heldAlpha));
-                target.DrawCircle(map.Map(row.X - header.RegionX, row.Y - header.RegionY),
+                target.DrawCircle(map.Map(pointerX, pointerY),
                     heldRadius, paint);
             }
 
@@ -396,12 +399,14 @@ half4 main(float2 p) {
         /// <paramref name="sourceHeight"/> are the stream dimensions <paramref name="map"/> was
         /// resolved against; <paramref name="screenImage"/> may be smaller (playback presents
         /// frames under a height cap) and is rescaled to fit the same mapping. <c>ClickSize</c>
-        /// scales the reach, <c>AnimationSpeed</c> the clock. No-op when nothing is pressed.
+        /// scales the reach, <c>AnimationSpeed</c> the clock. No-op when nothing is pressed. The
+        /// pinch centers on <paramref name="pointerX"/>/<paramref name="pointerY"/>, where the
+        /// pointer is drawn (region-relative source px).
         /// </summary>
         internal static void DrawPressWarp(SKCanvas target, InputCapture capture,
             in PictureMapping map, double sourceWidth, double sourceHeight, in InputFrame row,
-            double sourceMs, double speed, CursorContent cursor, double monitorScale,
-            double opacity, SKImage screenImage)
+            double pointerX, double pointerY, double sourceMs, double speed, CursorContent cursor,
+            double monitorScale, double opacity, SKImage screenImage)
         {
             if (cursor == null || screenImage == null || opacity <= 0)
                 return;
@@ -419,8 +424,7 @@ half4 main(float2 p) {
             if (amount01 <= 0.001)
                 return;
 
-            var header = capture.Header;
-            var center = map.Map(row.X - header.RegionX, row.Y - header.RegionY);
+            var center = map.Map(pointerX, pointerY);
             float radius = (float)(ClickHighlight.PressRadiusDip
                 * ClickHighlight.Factor(cursor.ClickSize) * monitorScale * map.ScaleX);
             if (radius <= 0)

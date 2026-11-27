@@ -654,6 +654,7 @@ namespace Prisc.UI.VideoEditor.Inspector
         private string _cursorVariant;
         private double _cursorSize = DefaultCursorSize;
         private bool _cursorDebounce = true;
+        private double _cursorSmoothing;
         private string _cursorClickAnimation = NoClickAnimation;
         private uint _cursorClickColor = DefaultCursorClickColor;
         private string _cursorClickColorHex = DefaultCursorClickColorHex;
@@ -2944,6 +2945,21 @@ namespace Prisc.UI.VideoEditor.Inspector
             }
         }
 
+        /// <summary>How much the drawn pointer path is smoothed, 0..1 (see
+        /// <see cref="CursorContent.Smoothing"/>): 0 draws the recorded path as is.</summary>
+        public double CursorSmoothing
+        {
+            get => _cursorSmoothing;
+            set
+            {
+                value = Clamp(value, 0, 1);
+                if (!Set(ref _cursorSmoothing, value) || _syncing)
+                    return;
+
+                EditCursor("sel:cursorsmoothing", c => c.Smoothing = value);
+            }
+        }
+
         /// <summary>What a mouse click draws, as one of <see cref="ClickAnimationOptions"/>.</summary>
         public NamedOption CursorClickAnimation
         {
@@ -3853,6 +3869,7 @@ namespace Prisc.UI.VideoEditor.Inspector
                     Set(ref _cursorVariant, cursor.Variant, nameof(CursorVariant));
                     Set(ref _cursorSize, cursor.Size, nameof(CursorSize));
                     Set(ref _cursorDebounce, cursor.Debounce, nameof(CursorDebounce));
+                    Set(ref _cursorSmoothing, cursor.Smoothing, nameof(CursorSmoothing));
                     Set(ref _cursorClickAnimation, cursor.ClickAnimation ?? DefaultClickAnimationOption.Value,
                         nameof(CursorClickAnimation));
                     Set(ref _cursorClickColor, cursor.ClickColor, nameof(CursorClickColor));

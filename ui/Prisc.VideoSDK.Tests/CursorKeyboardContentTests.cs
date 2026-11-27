@@ -342,6 +342,29 @@ namespace Prisc.VideoSDK.Tests
         }
 
         [Theory]
+        [InlineData(-0.01, false)]
+        [InlineData(1.01, false)]
+        [InlineData(Double.NaN, false)]
+        [InlineData(0.0, true)]
+        [InlineData(0.5, true)]
+        [InlineData(1.0, true)]
+        public void Validate_checks_the_cursor_smoothing_range(double smoothing, bool valid)
+        {
+            var project = OverlayProject(out _, out var cursorItem, out _);
+            ((CursorContent)cursorItem.Content).Smoothing = smoothing;
+
+            var errors = project.Validate();
+            Assert.Equal(!valid, errors.Any(e => e.Contains("cursor smoothing")));
+        }
+
+        [Fact]
+        public void Cursor_clone_carries_smoothing()
+        {
+            var cursor = new CursorContent { Smoothing = 0.4 };
+            Assert.Equal(0.4, ((CursorContent)cursor.Clone()).Smoothing);
+        }
+
+        [Theory]
         [InlineData(0.25)]
         [InlineData(1.0)]
         [InlineData(5.0)]

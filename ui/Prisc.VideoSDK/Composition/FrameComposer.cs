@@ -583,6 +583,12 @@ namespace Prisc.VideoSDK.Composition
             var header = capture.Header;
             double monitorScale = CursorCompose.MonitorScaleAt(header, row.X, row.Y);
             double cursorSize = cursor.Size > 0 ? cursor.Size : 1.0;
+            // where the pointer is drawn — the row's own position unless the item smooths the
+            // path — in the region-relative source px the mapping takes. Everything pinned to
+            // the pointer draws here; a release burst draws at its event's raw position, which
+            // the smoothing is pinned to around every click, so the two coincide.
+            var (smoothX, smoothY) = CursorSmoothing.PositionAt(capture, rowIndex, cursor.Smoothing);
+            double pointerX = smoothX - header.RegionX, pointerY = smoothY - header.RegionY;
             // the click highlights grow with the cursor: Size is "how big the pointer reads",
             // and a 3x cursor wearing a 1x ripple looks like the ripple shrank. HoldSize and
             // ClickSize stay relative multipliers on top of it.
@@ -606,12 +612,13 @@ namespace Prisc.VideoSDK.Composition
                         StreamLanes.LaneOf(lanes, screen.Id), out var screenFrame)
                     && screenFrame.Image != null)
                 {
-                    CursorCompose.DrawPressWarp(target, capture, map, imgW, imgH, row, sourceMs,
-                        speed, cursor, highlightScale, opacity, screenFrame.Image);
+                    CursorCompose.DrawPressWarp(target, capture, map, imgW, imgH, row,
+                        pointerX, pointerY, sourceMs, speed, cursor, highlightScale, opacity,
+                        screenFrame.Image);
                 }
 
-                CursorCompose.DrawClickAnimations(target, capture, map, row, sourceMs,
-                    speed, cursor, highlightScale, opacity);
+                CursorCompose.DrawClickAnimations(target, capture, map, row, pointerX, pointerY,
+                    sourceMs, speed, cursor, highlightScale, opacity);
 
                 if (string.Equals(cursor.Style, CursorAssets.NoneStyle, StringComparison.OrdinalIgnoreCase))
                 {
@@ -623,8 +630,7 @@ namespace Prisc.VideoSDK.Composition
                     if (row.SpriteId >= 0 && capture.TryGetSprite(row.SpriteId, out var sprite))
                     {
                         CursorCompose.DrawNativeSprite(target, sprite, map,
-                            row.X - header.RegionX, row.Y - header.RegionY,
-                            cursorSize, opacity);
+                            pointerX, pointerY, cursorSize, opacity);
                     }
                 }
                 else
@@ -637,7 +643,7 @@ namespace Prisc.VideoSDK.Composition
                     if (glyph != null)
                     {
                         double sizeSourcePx = cursorSize * CursorCompose.BaseCursorPx * monitorScale;
-                        var pos = map.Map(row.X - header.RegionX, row.Y - header.RegionY);
+                        var pos = map.Map(pointerX, pointerY);
                         CursorCompose.DrawGlyph(target, glyph, pos,
                             (float)(sizeSourcePx * map.ScaleX), item.Surround, opacity);
                     }

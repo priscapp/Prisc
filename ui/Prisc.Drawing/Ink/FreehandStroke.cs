@@ -38,7 +38,7 @@ namespace Prisc.Drawing.Ink
         internal const double RateOfPressureChange = 0.275;
 
         // time normalisation: pf's per-sample constants assume one 60 Hz frame per sample
-        internal const double RefFrameMs = 1000.0 / 60;
+        internal const double RefFrameMs = Prisc.Geometry2D.Streamline.RefFrameMs;
         internal const double MinDtMs = 1;
         internal const double MaxDtMs = 50;
 
@@ -98,15 +98,13 @@ namespace Prisc.Drawing.Ink
         [ThreadStatic] private static List<Point> _outline;
 
         /// <summary>
-        /// The streamline blend for a sample <paramref name="k"/> frames after the previous one.
-        /// pf blends 0.575 of the way to each 60 Hz sample; what that smoothing looks like on a
-        /// moving pointer is its lag, (1 − t)/t frames of motion behind a steady hand, so this is
-        /// the blend that keeps the same lag at any rate (t at one frame, k·t/(k·t + 1 − t) in
-        /// general). The exponential form 1 − (1 − t)^k matches step responses instead and
-        /// over-smooths fine input by half.
+        /// The streamline blend for a sample <paramref name="k"/> frames after the previous one:
+        /// pf blends 0.575 of the way to each 60 Hz sample, kept at the same lag at any rate by
+        /// the shared <see cref="Prisc.Geometry2D.Streamline.Blend"/> (which the video editor's
+        /// cursor smoothing uses too).
         /// </summary>
         internal static double StreamlineBlend(double k) =>
-            k * StreamlineT / (k * StreamlineT + 1 - StreamlineT);
+            Prisc.Geometry2D.Streamline.Blend(StreamlineT, k);
 
         /// <summary>Half the drawn width at a pressure: linear easing, so size·(0.25 + 0.5·p) — from
         /// 0.5·size at full speed to 1.5·size at rest.</summary>
