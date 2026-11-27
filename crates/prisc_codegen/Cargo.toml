@@ -36,4 +36,4 @@ csbindgen = "=1.9.8"
 # span-locations: the lint reports file:line.
 proc-macro2 = { version = "1", features = ["span-locations"] }
 quote = "1"
-syn = { version = "2", features = ["full", "extra-traits", "visit"] }
+syn = { version = "3", features = ["full", "extra-traits", "visit"] }

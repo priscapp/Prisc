@@ -4,6 +4,11 @@ using System.Runtime.Versioning;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
+// NAudio 3 marks WasapiCapture [Obsolete] in favour of WasapiRecorder. The legacy class still
+// ships and captures the same shared-mode mix format, so it stays until capture is moved over
+// deliberately.
+#pragma warning disable CS0618
+
 namespace Prisc.UI.Services
 {
     /// <summary>
