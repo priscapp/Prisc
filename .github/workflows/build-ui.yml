@@ -19,11 +19,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macos-15, not the recorder's macos-26: see build-rust.yml.
           - { rid: win-x64, os: windows-latest }
           - { rid: win-arm64, os: windows-latest }
-          - { rid: osx-x64, os: macos-15 }
-          - { rid: osx-arm64, os: macos-15 }
+          - { rid: osx-x64, os: csr-mac-arm64-sm }
+          - { rid: osx-arm64, os: csr-mac-arm64-sm }
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
