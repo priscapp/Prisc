@@ -189,6 +189,40 @@ namespace Prisc.VideoSDK.Playback
         /// straight through seams, which is what keeps preview audio sample-exact with render.</summary>
         internal int AudioRepositionCount => _pipelines?.MixWorker?.SourceRepositionCount ?? 0;
 
+        /// <summary>Test/diagnostic: the transport's state in one block, for a failing timing test
+        /// to print — which of the clock, the seek loop, the tick thread or a lane's threads is the
+        /// one that stopped.</summary>
+        internal string DescribeTransport()
+        {
+            var sb = new System.Text.StringBuilder();
+            var clock = _clock;
+            bool pending, loopActive, seamHop;
+            TimeSpan pendingPos;
+            lock (_seekSync)
+            {
+                pending = _hasPendingSeek;
+                loopActive = _seekLoopActive;
+                seamHop = _pendingSeamHop;
+                pendingPos = _pendingSeekPos;
+            }
+
+            bool lifecycleFree = Monitor.TryEnter(_lifecycleSync, 0);
+            if (lifecycleFree)
+                Monitor.Exit(_lifecycleSync);
+
+            sb.Append($"state={_state}, position={Position}, clockRunning={clock?.IsRunning}, clockPosition={clock?.Position}, ");
+            sb.Append($"tickAlive={_tickThread?.IsAlive}, seekLoopActive={loopActive}, seekTask={_seekTask?.Status}, ");
+            sb.Append($"pendingSeek={pending} (pos={pendingPos}, seamHop={seamHop}), skipSeekBusy={Volatile.Read(ref _skipSeekBusy)}, ");
+            sb.Append($"lifecycleLockFree={lifecycleFree}, lastSeekWasFast={_lastSeekWasFast}");
+            foreach (var pipe in _pipelines?.AllVideo ?? Array.Empty<VideoPipe>())
+            {
+                sb.Append($"\n  lane {pipe.Key.Lane}: seeks={Volatile.Read(ref pipe.SeekCount)}, activeOffset={Volatile.Read(ref pipe.ActiveOffsetTicks)}, ");
+                sb.Append($"{pipe.Demuxer.Describe()}, {pipe.Worker.Describe()}");
+            }
+
+            return sb.ToString();
+        }
+
         /// <summary>Test/diagnostic: container seeks performed by the video pipeline of a stream's
         /// lane for the current pipeline set, its matte pipe included.</summary>
         internal int VideoSeekCount(LaneKey key)
